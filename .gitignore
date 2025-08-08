@@ -2,3 +2,4 @@
 zig-out
 test
 test.in
+src/lexer/lexer.c
