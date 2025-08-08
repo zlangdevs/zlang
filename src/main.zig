@@ -3,6 +3,7 @@ const consts = @import("consts.zig");
 const errors = @import("errors.zig");
 const parser = @import("parser/parser.zig");
 const ast = @import("parser/ast.zig");
+const codegen = @import("codegen/llvm.zig");
 
 const allocator = std.heap.page_allocator;
 
@@ -65,6 +66,48 @@ pub fn main() !u8 {
     if (ast_root) |root| {
         defer root.destroy();
         ast.printASTTree(root);
+
+        // Generate LLVM IR and compile to executable
+        var code_generator = codegen.CodeGenerator.init(allocator) catch |err| {
+            const error_msg = switch (err) {
+                error.ModuleCreationFailed => "Failed to create LLVM module.",
+                error.BuilderCreationFailed => "Failed to create LLVM builder.",
+                error.OutOfMemory => "Out of memory during codegen initialization.",
+                else => "Unknown codegen initialization error.",
+            };
+            std.debug.print("Error initializing codegen: {s}\n", .{error_msg});
+            return 1;
+        };
+        defer code_generator.deinit();
+
+        code_generator.generateCode(root) catch |err| {
+            const error_msg = switch (err) {
+                error.FunctionCreationFailed => "Failed to create function.",
+                error.TypeMismatch => "Type mismatch in code generation.",
+                error.UndefinedFunction => "Undefined function called.",
+                error.UndefinedVariable => "Undefined variable used.",
+                error.OutOfMemory => "Out of memory during code generation.",
+                else => "Unknown code generation error.",
+            };
+            std.debug.print("Error generating code: {s}\n", .{error_msg});
+            return 1;
+        };
+
+        // Write LLVM IR to file
+        const ir_filename = "output.ll";
+        code_generator.writeToFile(ir_filename) catch |err| {
+            std.debug.print("Error writing LLVM IR to file: {}\n", .{err});
+            return 1;
+        };
+        std.debug.print("LLVM IR written to {s}\n", .{ir_filename});
+
+        // Compile to executable
+        const exe_filename = "output";
+        code_generator.compileToExecutable(exe_filename) catch |err| {
+            std.debug.print("Error compiling to executable: {}\n", .{err});
+            return 1;
+        };
+        std.debug.print("Executable compiled to {s}\n", .{exe_filename});
     } else {
         std.debug.print("No AST generated.\n", .{});
     }
