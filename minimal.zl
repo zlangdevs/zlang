@@ -1,0 +1,5 @@
+fun main() >> i32 {
+    i32 x = 42;
+    @printf("Hello: %d", x);
+    return x;
+}

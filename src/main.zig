@@ -1,7 +1,8 @@
 const std = @import("std");
 const consts = @import("consts.zig");
 const errors = @import("errors.zig");
-const tokenizer = @import("tokenizer.zig");
+const parser = @import("parser.zig");
+const ast = @import("ast.zig");
 
 const allocator = std.heap.page_allocator;
 
@@ -48,20 +49,23 @@ pub fn main() !void {
         std.debug.print("Error: {s}\n", .{error_msg});
         return;
     };
-    std.debug.print("Content of input file: {s}", .{input});
-    // for (args, 0..) |arg, i| {
-    //     std.debug.print("Arg {}: {s}\n", .{ i, arg });
-    // }
+    std.debug.print("Content of input file: {s}\n", .{input});
 
-    const tokens = tokenizer.tokenize(allocator, input) catch |err| {
+    const ast_root = parser.parse(allocator, input) catch |err| {
         const error_msg = switch (err) {
             error.LexerInitFailed => "Failed to initialize the lexer.",
             error.FileOpenFailed => "Failed to open file.",
+            error.ParseFailed => "Failed to parse input.",
             error.OutOfMemory => "Out of memory.",
         };
-        std.debug.print("Error tokenizing: .{s}\n", .{error_msg});
+        std.debug.print("Error parsing: {s}\n", .{error_msg});
         return;
     };
-    defer tokenizer.freeTokens(allocator, tokens);
-    tokenizer.printTokens(tokens);
+
+    if (ast_root) |root| {
+        defer root.destroy();
+        ast.printASTTree(root);
+    } else {
+        std.debug.print("No AST generated.\n", .{});
+    }
 }

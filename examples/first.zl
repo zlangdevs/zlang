@@ -4,7 +4,8 @@
 fun main() >> i32 {
     i32 a = 5; ?? - variable on stack
     ?? TODO: <i32> b = 5; ?? - variable on heap
-    @printf("%d". a);
+    @printf("%d", a);
+    return a;
 }
 ?? Types (Coming soon (when GTA VI will come out))
 

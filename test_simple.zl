@@ -1,0 +1,5 @@
+fun main() >> i32 {
+    i32 a = 5;
+    @printf("%d", a);
+    return a;
+}

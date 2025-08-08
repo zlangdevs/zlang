@@ -1,0 +1,29 @@
+fun add_numbers() >> i32 {
+    i32 a = 10;
+    i32 b = 5;
+    return a;
+}
+
+fun print_hello() >> void {
+    @printf("Hello World!");
+    @puts("This is a test");
+    return;
+}
+
+fun main() >> i32 {
+    i32 x = 42;
+    i32 y = 7;
+
+    @printf("Main function started");
+    print_hello();
+
+    i32 result = add_numbers();
+    @printf("Result: %d", result);
+
+    return result;
+}
+
+fun cleanup() >> void {
+    @printf("Cleanup function");
+    return;
+}

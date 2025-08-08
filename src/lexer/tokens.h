@@ -5,6 +5,8 @@ typedef enum {
     TOKEN_ELSE,
     TOKEN_FOR,
     TOKEN_FUN,
+    TOKEN_RETURN,
+    TOKEN_VOID,
     TOKEN_IDENTIFIER,
     TOKEN_NUMBER,
     TOKEN_PLUS,
@@ -20,6 +22,9 @@ typedef enum {
     TOKEN_LBRACKET,
     TOKEN_RBRACKET,
     TOKEN_RSHIFT,
+    TOKEN_AT,
+    TOKEN_COMMA,
+    TOKEN_STRING,
     TOKEN_EOF = 0
 } TokenType;
 

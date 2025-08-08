@@ -1,0 +1,28 @@
+fun helper() >> void {
+    @printf("Helper function called");
+    return;
+}
+
+fun get_number() >> i32 {
+    i32 value = 42;
+    @printf("Returning number: %d", value);
+    return value;
+}
+
+fun main() >> i32 {
+    i32 x = 10;
+    i32 y = 20;
+
+    @printf("Starting main function");
+    helper();
+
+    i32 result = get_number();
+    @printf("Got result: %d", result);
+
+    return result;
+}
+
+fun cleanup() >> void {
+    @printf("Cleanup complete");
+    return;
+}

@@ -26,6 +26,13 @@ pub const SyntaxError = error{
     InvalidExpression,
 };
 
+pub const ParseError = error{
+    ParseFailed,
+    LexerInitFailed,
+    FileOpenFailed,
+    OutOfMemory,
+};
+
 pub const GenericError = error{
     Unknown,
     NotImplemented,
