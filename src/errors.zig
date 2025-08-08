@@ -13,6 +13,12 @@ pub const WriteFileError = error{
     IOError,
 };
 
+pub const TokenizeError = error{
+    LexerInitFailed,
+    FileOpenFailed,
+    OutOfMemory,
+};
+
 pub const SyntaxError = error{
     InvalidToken,
     UnexpectedCharacter,
