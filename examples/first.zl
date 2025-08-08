@@ -2,12 +2,23 @@
 
 ?? function
 fun main() >> i32 {
-
+    i32 a = 5; ?? - variable on stack
+    ?? TODO: <i32> b = 5; ?? - variable on heap
+    @printf("%d". a);
 }
+?? Types (Coming soon (when GTA VI will come out))
+
+
+?? TODO: @puts() -- call from libc
+?? TODO: @("libname")some_func() -- call from libname
+?? TODO(?): @("lang")some_func() -- ffi
+?? TODO(?): @asm -- asm inline
+?? TODO(?): @asm("langname") -- asm inline of specific lang
 
 ?? short function
 ?? TODO: add also this syntax:   fun main() >> i32 = *code*;
 
-fun min(a: i32, b: i32) >> i32 =
-    return a;
-    !!
+?? experimental function syntax (Done !)
+??fun min(a: i32, b: i32) >> i32 =
+??    return a;
+??    !!
