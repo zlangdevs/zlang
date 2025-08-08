@@ -1,8 +1,8 @@
 const std = @import("std");
 const consts = @import("consts.zig");
 const errors = @import("errors.zig");
-const parser = @import("parser.zig");
-const ast = @import("ast.zig");
+const parser = @import("parser/parser.zig");
+const ast = @import("parser/ast.zig");
 
 const allocator = std.heap.page_allocator;
 
