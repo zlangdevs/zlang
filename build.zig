@@ -46,6 +46,7 @@ pub fn build(b: *std.Build) void {
 
     //exe.linkSystemLibrary("fl");
     exe.linkLibC();
+    exe.linkSystemLibrary("LLVM-20");
     exe.step.dependOn(&flex_cmd.step);
     exe.step.dependOn(&bison_cmd.step);
 
