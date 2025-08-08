@@ -13,7 +13,7 @@ pub fn read_file(file_name: []const u8) anyerror![]const u8 {
         }
         return errors.ReadFileError.AccessDenied;
     };
-    
+
     const file_stat = try cwd.statFile(file_name);
     if (file_stat.kind == .file) {
         const file = cwd.openFile(file_name, .{ .mode = .read_only }) catch {
@@ -27,8 +27,6 @@ pub fn read_file(file_name: []const u8) anyerror![]const u8 {
     }
     return "";
 }
-
-
 
 pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
@@ -44,8 +42,8 @@ pub fn main() !void {
             error.AccessDenied => "Error accessing file.",
             error.InvalidPath => "We don't support directories yet.",
             error.OutOfMemory => "",
-            error.IOError => "", // TODO: implement these errors 
-            else => ""
+            error.IOError => "", // TODO: implement these errors
+            else => "",
         };
         std.debug.print("Error: {s}\n", .{error_msg});
         return;
@@ -54,10 +52,14 @@ pub fn main() !void {
     // for (args, 0..) |arg, i| {
     //     std.debug.print("Arg {}: {s}\n", .{ i, arg });
     // }
-    
+
     const tokens = tokenizer.tokenize(allocator, input) catch |err| {
-        std.debug.print("Error tokenizing: {}\n", .{err});
-        // TODO: add Error in errors.zig for this and handle it
+        const error_msg = switch (err) {
+            error.LexerInitFailed => "Failed to initialize the lexer.",
+            error.FileOpenFailed => "Failed to open file.",
+            error.OutOfMemory => "Out of memory.",
+        };
+        std.debug.print("Error tokenizing: .{s}\n", .{error_msg});
         return;
     };
     defer tokenizer.freeTokens(allocator, tokens);
