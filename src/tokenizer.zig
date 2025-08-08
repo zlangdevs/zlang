@@ -1,5 +1,5 @@
 const std = @import("std");
-
+const errors = @import("errors.zig");
 extern fn zlang_lex_init(scanner: *?*anyopaque) c_int;
 extern fn zlang_lex_destroy(scanner: ?*anyopaque) c_int;
 extern fn zlang_lex(scanner: ?*anyopaque) c_int;
@@ -57,25 +57,19 @@ pub const Token = struct {
     }
 };
 
-pub const TokenizeError = error{
-    LexerInitFailed,
-    FileOpenFailed,
-    OutOfMemory,
-};
-
-pub fn tokenize(allocator: std.mem.Allocator, input: []const u8) TokenizeError!std.ArrayList(Token) {
+pub fn tokenize(allocator: std.mem.Allocator, input: []const u8) errors.TokenizeError!std.ArrayList(Token) {
     var tokens = std.ArrayList(Token).init(allocator);
     errdefer tokens.deinit();
     var scanner: ?*anyopaque = null;
     if (zlang_lex_init(&scanner) != 0) {
-        return TokenizeError.LexerInitFailed;
+        return errors.TokenizeError.LexerInitFailed;
     }
     defer _ = zlang_lex_destroy(scanner);
     const null_terminated_input = try allocator.dupeZ(u8, input);
     defer allocator.free(null_terminated_input);
     const file = fmemopen(null_terminated_input.ptr, input.len, "r");
     if (file == null) {
-        return TokenizeError.FileOpenFailed;
+        return errors.TokenizeError.FileOpenFailed;
     }
     defer _ = fclose(file);
     zlang_set_in(file, scanner);
