@@ -1,0 +1,13 @@
+?? for comments
+
+?? function
+fun main() >> i32 {
+
+}
+
+?? short function
+?? TODO: add also this syntax:   fun main() >> i32 = *code*;
+
+fun min(a: i32, b: i32) >> i32 =
+    return a;
+    !!
