@@ -29,12 +29,12 @@ pub fn read_file(file_name: []const u8) anyerror![]const u8 {
     return "";
 }
 
-pub fn main() !void {
+pub fn main() !u8 {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
     if (args.len < 2) {
         std.debug.print("Usage: zlang <path to file>", .{});
-        return;
+        return 1;
     }
     const input_file = args[1];
     const input = read_file(input_file) catch |err| {
@@ -47,7 +47,7 @@ pub fn main() !void {
             else => "",
         };
         std.debug.print("Error: {s}\n", .{error_msg});
-        return;
+        return 1;
     };
     std.debug.print("Content of input file: {s}\n", .{input});
 
@@ -59,7 +59,7 @@ pub fn main() !void {
             error.OutOfMemory => "Out of memory.",
         };
         std.debug.print("Error parsing: {s}\n", .{error_msg});
-        return;
+        return 1;
     };
 
     if (ast_root) |root| {
@@ -68,4 +68,6 @@ pub fn main() !void {
     } else {
         std.debug.print("No AST generated.\n", .{});
     }
+
+    return 0;
 }
