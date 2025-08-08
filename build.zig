@@ -8,11 +8,30 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-
+    
     const exe = b.addExecutable(.{
         .name = "lang",
         .root_module = exe_mod,
     });
+    
+    // generating and linking lexer
+    const flex_cmd = b.addSystemCommand(&[_][]const u8{
+        "flex", "-o", "src/lexer/lexer.c", "src/lexer/lexer.l"
+    });
+    exe.addCSourceFile(.{
+        .file = b.path("src/lexer/lexer.c"),
+        .flags = &[_][]const u8{
+            "-std=gnu99",
+            "-I./src/lexer",
+            "-D_GNU_SOURCE",
+            "-Wall",
+            "-Wno-unused-function",
+        },
+    });
+    //exe.linkSystemLibrary("fl");
+    exe.linkLibC();
+    exe.step.dependOn(&flex_cmd.step);
+    
     b.installArtifact(exe);
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
