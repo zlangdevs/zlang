@@ -14,14 +14,22 @@ const TokenType = enum(c_int) {
     if_token = 256,
     else_token = 257,
     for_token = 258,
-    identifier = 259,
-    number = 260,
-    plus = 261,
-    minus = 262,
-    assign = 263,
-    equal = 264,
-    newline = 265,
-    semicolon = 266,
+    fun_token = 259,
+    identifier = 260,
+    number = 261,
+    plus = 262,
+    minus = 263,
+    assign = 264,
+    equal = 265,
+    newline = 266,
+    semicolon = 267,
+    lbrace = 268,
+    rbrace = 269,
+    lparen = 270,
+    rparen = 271,
+    lbracket = 272,
+    rbracket = 273,
+    rshift = 274,
 
     pub fn toString(self: TokenType) []const u8 {
         return switch (self) {
@@ -29,6 +37,7 @@ const TokenType = enum(c_int) {
             .if_token => "IF",
             .else_token => "ELSE",
             .for_token => "FOR",
+            .fun_token => "FUN", 
             .identifier => "IDENTIFIER",
             .number => "NUMBER",
             .plus => "PLUS",
@@ -37,6 +46,13 @@ const TokenType = enum(c_int) {
             .equal => "EQUAL",
             .newline => "NEWLINE",
             .semicolon => "SEMICOLON",
+            .lbrace => "LBRACE",
+            .rbrace => "RBRACE",
+            .lparen => "LPAREN",
+            .rparen => "RPAREB",
+            .lbracket => "LBRACKET",
+            .rbracket => "RBRACKET",
+            .rshift => "RSHIFT"
         };
     }
 };
