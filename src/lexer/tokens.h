@@ -26,7 +26,7 @@ typedef enum {
 int zlang_lex_init(void **scanner);
 int zlang_lex_destroy(void *scanner);
 int zlang_lex(void *scanner);
-void zlang_set_in(FILE *file, void *scanner);
+//void zlang_set_in(FILE *file, void *scanner);
 char *zlang_get_text(void *scanner);
 
 #endif
