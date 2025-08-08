@@ -39,8 +39,7 @@ STRING   \"[^"]*\"
 "]"         { return TOKEN_RBRACKET; }
 "@"         { return TOKEN_AT; }
 ","         { return TOKEN_COMMA; }
-[ \t]+      { /* skip spaces */ }
+[ \t\n]+      { /* skip spaces */ }
 "??".*      { /* skip single-line comments */ }
-\n          { return TOKEN_NEWLINE; }
 ;           { return TOKEN_SEMICOLON; }
 %%

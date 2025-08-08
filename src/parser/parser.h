@@ -75,9 +75,8 @@ extern int yydebug;
     TOKEN_RBRACKET = 276,          /* TOKEN_RBRACKET  */
     TOKEN_RSHIFT = 277,            /* TOKEN_RSHIFT  */
     TOKEN_SEMICOLON = 278,         /* TOKEN_SEMICOLON  */
-    TOKEN_NEWLINE = 279,           /* TOKEN_NEWLINE  */
-    TOKEN_AT = 280,                /* TOKEN_AT  */
-    TOKEN_COMMA = 281              /* TOKEN_COMMA  */
+    TOKEN_AT = 279,                /* TOKEN_AT  */
+    TOKEN_COMMA = 280              /* TOKEN_COMMA  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -86,12 +85,12 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 33 "src/parser/parser.y"
+#line 37 "src/parser/parser.y"
 
     char* string;
     void* node;
 
-#line 95 "src/parser/parser.h"
+#line 94 "src/parser/parser.h"
 
 };
 typedef union YYSTYPE YYSTYPE;
