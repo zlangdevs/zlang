@@ -9,7 +9,7 @@ zig build
 echo "Running tests"
 echo "-------------------------------"
 
-for test_file in "$TEST_DIR"/*; do
+for test_file in "$TEST_DIR"/*.zl; do
   $APP "$test_file"
   if $APP "$test_file"; then
     echo "File $test_file passed!"

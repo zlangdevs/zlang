@@ -1,6 +1,6 @@
 const std = @import("std");
 const ast = @import("ast.zig");
-const errors = @import("errors.zig");
+const errors = @import("../errors.zig");
 
 var global_allocator: std.mem.Allocator = undefined;
 
