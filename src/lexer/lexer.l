@@ -1,5 +1,9 @@
 %{
-#include "tokens.h"
+#include "parser.h"
+#include <stdlib.h>
+#include <string.h>
+
+extern YYSTYPE yylval;
 %}
 
 %option noyywrap
@@ -9,6 +13,7 @@
 DIGIT    [0-9]
 LETTER   [a-zA-Z_]
 IDENT    {LETTER}({LETTER}|{DIGIT})*
+STRING   \"[^"]*\"
 
 %%
 
@@ -16,8 +21,11 @@ IDENT    {LETTER}({LETTER}|{DIGIT})*
 "else"      { return TOKEN_ELSE; }
 "for"       { return TOKEN_FOR; }
 "fun"       { return TOKEN_FUN; }
-{IDENT}     { return TOKEN_IDENTIFIER; }
-{DIGIT}+    { return TOKEN_NUMBER; }
+"return"    { return TOKEN_RETURN; }
+"void"      { return TOKEN_VOID; }
+{IDENT}     { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
+{DIGIT}+    { yylval.string = strdup(yytext); return TOKEN_NUMBER; }
+{STRING}    { yylval.string = strndup(yytext+1, yyleng-2); return TOKEN_STRING; }
 "+"         { return TOKEN_PLUS; }
 "-"         { return TOKEN_MINUS; }
 "="         { return TOKEN_ASSIGN; }
@@ -29,6 +37,8 @@ IDENT    {LETTER}({LETTER}|{DIGIT})*
 ")"         { return TOKEN_RPAREN; }
 "["         { return TOKEN_LBRACKET; }
 "]"         { return TOKEN_RBRACKET; }
+"@"         { return TOKEN_AT; }
+","         { return TOKEN_COMMA; }
 [ \t]+      { /* skip spaces */ }
 "??".*      { /* skip single-line comments */ }
 \n          { return TOKEN_NEWLINE; }
