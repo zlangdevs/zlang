@@ -24,5 +24,4 @@ IDENT    {LETTER}({LETTER}|{DIGIT})*
 [ \t]+      { /* skip spaces */ }
 \n          { return TOKEN_NEWLINE; }
 ;           { return TOKEN_SEMICOLON; }
-
 %%
