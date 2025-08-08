@@ -1,6 +1,7 @@
 const std = @import("std");
 const consts = @import("consts.zig");
 const errors = @import("errors.zig");
+const tokenizer = @import("tokenizer.zig");
 
 const allocator = std.heap.page_allocator;
 
@@ -50,7 +51,15 @@ pub fn main() !void {
         return;
     };
     std.debug.print("Content of input file: {s}", .{input});
-    for (args, 0..) |arg, i| {
-        std.debug.print("Arg {}: {s}\n", .{ i, arg });
-    }
+    // for (args, 0..) |arg, i| {
+    //     std.debug.print("Arg {}: {s}\n", .{ i, arg });
+    // }
+    
+    const tokens = tokenizer.tokenize(allocator, input) catch |err| {
+        std.debug.print("Error tokenizing: {}\n", .{err});
+        // TODO: add Error in errors.zig for this and handle it
+        return;
+    };
+    defer tokenizer.freeTokens(allocator, tokens);
+    tokenizer.printTokens(tokens);
 }
