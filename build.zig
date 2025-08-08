@@ -46,6 +46,10 @@ pub fn build(b: *std.Build) void {
 
     //exe.linkSystemLibrary("fl");
     exe.linkLibC();
+
+    // LLVM libraries will be added later when available
+    // For now, using mock implementation in compiler.zig
+
     exe.step.dependOn(&flex_cmd.step);
     exe.step.dependOn(&bison_cmd.step);
 
