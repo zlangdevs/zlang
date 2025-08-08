@@ -4,6 +4,7 @@ typedef enum {
     TOKEN_IF = 256,
     TOKEN_ELSE,
     TOKEN_FOR,
+    TOKEN_FUN,
     TOKEN_IDENTIFIER,
     TOKEN_NUMBER,
     TOKEN_PLUS,
@@ -12,6 +13,13 @@ typedef enum {
     TOKEN_EQUAL,
     TOKEN_NEWLINE,
     TOKEN_SEMICOLON,
+    TOKEN_LBRACE,
+    TOKEN_RBRACE,
+    TOKEN_LPAREN,
+    TOKEN_RPAREN,
+    TOKEN_LBRACKET,
+    TOKEN_RBRACKET,
+    TOKEN_RSHIFT,
     TOKEN_EOF = 0
 } TokenType;
 
