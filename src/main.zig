@@ -1,39 +1,55 @@
 const std = @import("std");
+const consts = @import("consts.zig");
+const errors = @import("errors.zig");
+
+const allocator = std.heap.page_allocator;
+
+pub fn read_file(file_name: []const u8) anyerror![]const u8 {
+    const cwd = std.fs.cwd();
+    cwd.access(file_name, .{}) catch |err| {
+        if (err == error.FileNotFound) {
+            return errors.ReadFileError.FileNotFound;
+        }
+        return errors.ReadFileError.AccessDenied;
+    };
+    
+    const file_stat = try cwd.statFile(file_name);
+    if (file_stat.kind == .file) {
+        const file = cwd.openFile(file_name, .{ .mode = .read_only }) catch {
+            return errors.ReadFileError.AccessDenied;
+        };
+        defer file.close();
+        const buffer = try file.readToEndAlloc(allocator, consts.MAX_BUFF_SIZE);
+        return buffer;
+    } else if (file_stat.kind == .directory) {
+        return errors.ReadFileError.InvalidPath;
+    }
+    return "";
+}
+
+
 
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
     if (args.len < 2) {
         std.debug.print("Usage: zlang <path to file>", .{});
         return;
     }
-    const cwd = std.fs.cwd();
-    cwd.access(args[1], .{}) catch |err| {
-        if (err == error.FileNotFound) {
-            std.debug.print("File or directory does not exist: {s}\n", .{args[1]});
-            return;
-        }
-        std.debug.print("Error accessing file: {}\n", .{err});
+    const input_file = args[1];
+    const input = read_file(input_file) catch |err| {
+        const error_msg = switch (err) {
+            error.FileNotFound => "Specified file does not exist or path is invalid.",
+            error.AccessDenied => "Error accessing file.",
+            error.InvalidPath => "We don't support directories yet.",
+            error.OutOfMemory => "",
+            error.IOError => "", // TODO: implement these errors 
+            else => ""
+        };
+        std.debug.print("Error: {s}\n", .{error_msg});
         return;
     };
-    const input_path = args[1];
-    const file_stat = try cwd.statFile(input_path);
-    if (file_stat.kind == .file) {
-        const file = cwd.openFile(input_path, .{ .mode = .read_only }) catch |err| {
-            std.debug.print("Error accessing file {s}: {}\n", .{ input_path, err });
-            return;
-        };
-        defer file.close();
-
-        const max_buffer_size = 1024 * 1024 * 1024;
-
-        const buffer = try file.readToEndAlloc(allocator, max_buffer_size);
-        defer allocator.free(buffer);
-        std.debug.print("Reading file:\n{s}\n", .{buffer});
-    } else if (file_stat.kind == .directory) {
-        std.debug.print("We don't yet support directories\n", .{});
-    }
+    std.debug.print("Content of input file: {s}", .{input});
     for (args, 0..) |arg, i| {
         std.debug.print("Arg {}: {s}\n", .{ i, arg });
     }
