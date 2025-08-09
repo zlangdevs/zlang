@@ -92,7 +92,7 @@ pub const CodeGenerator = struct {
         // Default to i32 for unknown types; consider logging a warning in production
         return c.LLVMInt32TypeInContext(self.context);
     }
-    
+
     fn declareLibcFunctions(self: *CodeGenerator) void {
         // Declare printf: i32 (i8*, ...)
         const i8_ptr_type = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
@@ -158,7 +158,7 @@ pub const CodeGenerator = struct {
 
                 // Allocate space on stack
                 const alloca = c.LLVMBuildAlloca(self.builder, var_type, decl.name.ptr);
-                
+
                 try self.variables.put(decl.name, VariableInfo{
                     .value = alloca,
                     .type_ref = var_type,
@@ -188,25 +188,25 @@ pub const CodeGenerator = struct {
 
     fn castToType(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef) c.LLVMValueRef {
         const value_type = c.LLVMTypeOf(value);
-        
+
         if (value_type == target_type) {
             return value;
         }
 
         const value_kind = c.LLVMGetTypeKind(value_type);
         const target_kind = c.LLVMGetTypeKind(target_type);
-        
+
         if (value_kind == c.LLVMIntegerTypeKind and target_kind == c.LLVMIntegerTypeKind) {
             const value_width = c.LLVMGetIntTypeWidth(value_type);
             const target_width = c.LLVMGetIntTypeWidth(target_type);
-            
+
             if (value_width > target_width) {
                 return c.LLVMBuildTrunc(self.builder, value, target_type, "trunc");
             } else if (value_width < target_width) {
                 return c.LLVMBuildSExt(self.builder, value, target_type, "sext");
             }
         }
-        
+
         return value;
     }
 
@@ -223,10 +223,39 @@ pub const CodeGenerator = struct {
                 return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
             },
             .string_literal => |str| {
-                const str_z = self.allocator.dupeZ(u8, str.value) catch return CodegenError.OutOfMemory;
-                defer self.allocator.free(str_z);
+                var transformed_string = std.ArrayList(u8).init(self.allocator);
+                defer transformed_string.deinit();
 
-                return c.LLVMBuildGlobalStringPtr(self.builder, str_z.ptr, "str");
+                var i: usize = 0;
+                while (i < str.value.len) : (i += 1) {
+                    if (str.value[i] == '\\') {
+                        i += 1;
+                        if (i < str.value.len) {
+                            switch (str.value[i]) {
+                                'n' => transformed_string.append('\n') catch return CodegenError.OutOfMemory,
+                                't' => transformed_string.append('\t') catch return CodegenError.OutOfMemory,
+                                'r' => transformed_string.append('\r') catch return CodegenError.OutOfMemory,
+                                // TODO: add more escape sequence
+                                else => {
+                                    transformed_string.append('\\') catch return CodegenError.OutOfMemory;
+                                    transformed_string.append(str.value[i]) catch return CodegenError.OutOfMemory;
+                                },
+                            }
+                        } else {
+                            transformed_string.append('\\') catch return CodegenError.OutOfMemory;
+                        }
+                    } else {
+                        transformed_string.append(str.value[i]) catch return CodegenError.OutOfMemory;
+                    }
+                }
+
+                transformed_string.append(0) catch return CodegenError.OutOfMemory;
+
+                return c.LLVMBuildGlobalStringPtr(
+                    self.builder,
+                    transformed_string.items.ptr,
+                    "str",
+                );
             },
             .function_call => |call| {
                 if (self.functions.get(call.name)) |func| {
@@ -235,17 +264,17 @@ pub const CodeGenerator = struct {
 
                     for (call.args.items) |arg| {
                         var arg_value = try self.generateExpression(arg);
-            
+
                         if (std.mem.eql(u8, call.name, "printf") and args.items.len > 0) {
                             const arg_type = c.LLVMTypeOf(arg_value);
                             const arg_kind = c.LLVMGetTypeKind(arg_type);
-                            
+
                             if (arg_kind == c.LLVMIntegerTypeKind) {
                                 const i32_type = c.LLVMInt32TypeInContext(self.context);
                                 arg_value = self.castToType(arg_value, i32_type);
                             }
                         }
-                        
+
                         try args.append(arg_value);
                     }
 
