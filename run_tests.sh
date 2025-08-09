@@ -10,13 +10,14 @@ echo "Running tests"
 echo "-------------------------------"
 
 for test_file in "$TEST_DIR"/*.zl; do
-  $APP "$test_file"
+  echo "Testing $test_file..."
   if $APP "$test_file"; then
     echo "File $test_file passed!"
   else
     echo "File $test_file failed!"
     ((FAILED++))
   fi
+  echo ""
 done
 
 echo "-------------------------------"

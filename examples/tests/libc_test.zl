@@ -1,0 +1,18 @@
+fun main() >> i32 {
+    @printf("=== Testing Dynamic Libc Functions ===\n");
+
+    @puts("Testing puts function");
+
+    i32 len = @strlen("test");
+    @printf("strlen('test') = %d\n", len);
+
+    i32 num = @atoi("123");
+    @printf("atoi('123') = %d\n", num);
+
+    i32 cmp = @strcmp("abc", "abc");
+    @printf("strcmp('abc', 'abc') = %d\n", cmp);
+
+    @printf("All libc function tests completed!\n");
+
+    return 0;
+}
