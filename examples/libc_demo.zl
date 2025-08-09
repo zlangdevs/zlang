@@ -1,0 +1,43 @@
+?? we need to implement pointers to use some libc functions
+
+fun test_scanf() >> void {
+    ?? Example of how scanf could be used
+    ?? (commented out to avoid blocking execution)
+    ?? @printf("Enter a number: ");
+    ?? i32 user_input = 0;
+    ?? @scanf("%d", user_input);
+    ?? @printf("You entered: %d\n", user_input);
+    return;
+}
+
+fun string_demo() >> void {
+    @printf("\n=== STRING OPERATIONS ===\n");
+
+    ?? char buffer[100];
+    ?? @strcpy(buffer, "Hello from Zlang!");
+    ?? @printf("Copied string: %s\n", buffer);
+
+    @printf("String operations demo completed\n");
+    return;
+}
+
+
+fun main() >> i32 {
+    @printf("=== ZLANG LIBC DEMO ===\n");
+    @puts("Testing various libc functions:");
+    i32 name_len = @strlen("Zlang");
+    @printf("Length of 'Zlang': %d\n", name_len);
+    i32 number = @atoi("42");
+    @printf("atoi('42') = %d\n", number);
+    @printf("Testing file operations...\n");
+    i32 cmp_result = @strcmp("hello", "world");
+    @printf("strcmp('hello', 'world') = %d\n", cmp_result);
+    @printf("Testing printf formats:\n");
+    @printf("Integer: %d\n", 123);
+    @printf("String: %s\n", "Hello, World!");
+    @printf("Character: %c\n", 65);
+    @printf("Demo completed successfully!\n");
+    test_scanf();
+    return 0;
+}
+
