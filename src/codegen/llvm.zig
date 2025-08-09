@@ -210,6 +210,36 @@ pub const CodeGenerator = struct {
         return value;
     }
 
+    pub fn parse_escape(self: *CodeGenerator, str: []const u8) CodegenError![]const u8 {
+        var transformed_string = std.ArrayList(u8).init(self.allocator);
+        var i: usize = 0;
+        while (i < str.len) : (i += 1) {
+            if (str[i] == '\\') {
+                i += 1;
+                if (i < str.len) {
+                    switch (str[i]) {
+                        'n' => transformed_string.append('\n') catch return CodegenError.OutOfMemory,
+                        't' => transformed_string.append('\t') catch return CodegenError.OutOfMemory,
+                        'r' => transformed_string.append('\r') catch return CodegenError.OutOfMemory,
+                        '\'' => transformed_string.append('\'') catch return CodegenError.OutOfMemory,
+                        '\"' => transformed_string.append('\"') catch return CodegenError.OutOfMemory,
+                        // TODO: add more escape sequence
+                        else => {
+                            transformed_string.append('\\') catch return CodegenError.OutOfMemory;
+                            transformed_string.append(str[i]) catch return CodegenError.OutOfMemory;
+                        },
+                    }
+                } else {
+                    transformed_string.append('\\') catch return CodegenError.OutOfMemory;
+                }
+            } else {
+                transformed_string.append(str[i]) catch return CodegenError.OutOfMemory;
+            }
+        }
+        try transformed_string.append(0);
+        return transformed_string.toOwnedSlice();
+    }
+
     fn generateExpression(self: *CodeGenerator, expr: *ast.Node) CodegenError!c.LLVMValueRef {
         switch (expr.data) {
             .identifier => |ident| {
@@ -223,37 +253,13 @@ pub const CodeGenerator = struct {
                 return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
             },
             .string_literal => |str| {
-                var transformed_string = std.ArrayList(u8).init(self.allocator);
-                defer transformed_string.deinit();
+                const parsed_str = try self.parse_escape(str.value);
 
-                var i: usize = 0;
-                while (i < str.value.len) : (i += 1) {
-                    if (str.value[i] == '\\') {
-                        i += 1;
-                        if (i < str.value.len) {
-                            switch (str.value[i]) {
-                                'n' => transformed_string.append('\n') catch return CodegenError.OutOfMemory,
-                                't' => transformed_string.append('\t') catch return CodegenError.OutOfMemory,
-                                'r' => transformed_string.append('\r') catch return CodegenError.OutOfMemory,
-                                // TODO: add more escape sequence
-                                else => {
-                                    transformed_string.append('\\') catch return CodegenError.OutOfMemory;
-                                    transformed_string.append(str.value[i]) catch return CodegenError.OutOfMemory;
-                                },
-                            }
-                        } else {
-                            transformed_string.append('\\') catch return CodegenError.OutOfMemory;
-                        }
-                    } else {
-                        transformed_string.append(str.value[i]) catch return CodegenError.OutOfMemory;
-                    }
-                }
-
-                transformed_string.append(0) catch return CodegenError.OutOfMemory;
+                defer self.allocator.free(parsed_str);
 
                 return c.LLVMBuildGlobalStringPtr(
                     self.builder,
-                    transformed_string.items.ptr,
+                    parsed_str.ptr,
                     "str",
                 );
             },
@@ -298,7 +304,6 @@ pub const CodeGenerator = struct {
             else => return CodegenError.TypeMismatch,
         }
     }
-
     pub fn writeToFile(self: *CodeGenerator, filename: []const u8) !void {
         const filename_z = try self.allocator.dupeZ(u8, filename);
         defer self.allocator.free(filename_z);
