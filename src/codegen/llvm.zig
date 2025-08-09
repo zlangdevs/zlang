@@ -1,15 +1,6 @@
 const std = @import("std");
 const ast = @import("../parser/ast.zig");
-
-pub const CodegenError = error{
-    ModuleCreationFailed,
-    BuilderCreationFailed,
-    FunctionCreationFailed,
-    TypeMismatch,
-    UndefinedFunction,
-    UndefinedVariable,
-    OutOfMemory,
-};
+const errors = @import("../errors.zig");
 
 const c = @cImport({
     @cInclude("llvm-c/Core.h");
@@ -29,26 +20,25 @@ pub const CodeGenerator = struct {
     variables: std.HashMap([]const u8, VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     current_function: ?c.LLVMValueRef,
 
-    // Структура для хранения информации о переменных
     const VariableInfo = struct {
         value: c.LLVMValueRef,
         type_ref: c.LLVMTypeRef,
     };
 
-    pub fn init(allocator: std.mem.Allocator) CodegenError!CodeGenerator {
+    pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
         // Initialize LLVM targets
         _ = c.LLVMInitializeNativeTarget();
         _ = c.LLVMInitializeNativeAsmPrinter();
         _ = c.LLVMInitializeNativeAsmParser();
 
         const context = c.LLVMContextCreate();
-        if (context == null) return CodegenError.ModuleCreationFailed;
+        if (context == null) return errors.CodegenError.ModuleCreationFailed;
 
         const module = c.LLVMModuleCreateWithNameInContext("zlang_module", context);
-        if (module == null) return CodegenError.ModuleCreationFailed;
+        if (module == null) return errors.CodegenError.ModuleCreationFailed;
 
         const builder = c.LLVMCreateBuilderInContext(context);
-        if (builder == null) return CodegenError.BuilderCreationFailed;
+        if (builder == null) return errors.CodegenError.BuilderCreationFailed;
 
         return CodeGenerator{
             .context = context,
@@ -108,7 +98,7 @@ pub const CodeGenerator = struct {
         self.functions.put("puts", puts_func) catch {};
     }
 
-    pub fn generateCode(self: *CodeGenerator, program: *ast.Node) CodegenError!void {
+    pub fn generateCode(self: *CodeGenerator, program: *ast.Node) errors.CodegenError!void {
         self.declareLibcFunctions();
 
         switch (program.data) {
@@ -117,17 +107,17 @@ pub const CodeGenerator = struct {
                     try self.generateFunction(func);
                 }
             },
-            else => return CodegenError.TypeMismatch,
+            else => return errors.CodegenError.TypeMismatch,
         }
     }
 
-    fn generateFunction(self: *CodeGenerator, func_node: *ast.Node) CodegenError!void {
+    fn generateFunction(self: *CodeGenerator, func_node: *ast.Node) errors.CodegenError!void {
         switch (func_node.data) {
             .function => |func| {
                 const return_type = self.getLLVMType(func.return_type);
                 const function_type = c.LLVMFunctionType(return_type, null, 0, 0);
 
-                const func_name_z = self.allocator.dupeZ(u8, func.name) catch return CodegenError.OutOfMemory;
+                const func_name_z = self.allocator.dupeZ(u8, func.name) catch return errors.CodegenError.OutOfMemory;
                 defer self.allocator.free(func_name_z);
 
                 const llvm_func = c.LLVMAddFunction(self.module, func_name_z.ptr, function_type);
@@ -147,11 +137,11 @@ pub const CodeGenerator = struct {
                     try self.generateStatement(stmt);
                 }
             },
-            else => return CodegenError.TypeMismatch,
+            else => return errors.CodegenError.TypeMismatch,
         }
     }
 
-    fn generateStatement(self: *CodeGenerator, stmt: *ast.Node) CodegenError!void {
+    fn generateStatement(self: *CodeGenerator, stmt: *ast.Node) errors.CodegenError!void {
         switch (stmt.data) {
             .var_decl => |decl| {
                 const var_type = self.getLLVMType(decl.type_name);
@@ -210,7 +200,7 @@ pub const CodeGenerator = struct {
         return value;
     }
 
-    pub fn parse_escape(self: *CodeGenerator, str: []const u8) CodegenError![]const u8 {
+    pub fn parse_escape(self: *CodeGenerator, str: []const u8) errors.CodegenError![]const u8 {
         var transformed_string = std.ArrayList(u8).init(self.allocator);
         var i: usize = 0;
         while (i < str.len) : (i += 1) {
@@ -218,35 +208,35 @@ pub const CodeGenerator = struct {
                 i += 1;
                 if (i < str.len) {
                     switch (str[i]) {
-                        'n' => transformed_string.append('\n') catch return CodegenError.OutOfMemory,
-                        't' => transformed_string.append('\t') catch return CodegenError.OutOfMemory,
-                        'r' => transformed_string.append('\r') catch return CodegenError.OutOfMemory,
-                        '\'' => transformed_string.append('\'') catch return CodegenError.OutOfMemory,
-                        '\"' => transformed_string.append('\"') catch return CodegenError.OutOfMemory,
+                        'n' => transformed_string.append('\n') catch return errors.CodegenError.OutOfMemory,
+                        't' => transformed_string.append('\t') catch return errors.CodegenError.OutOfMemory,
+                        'r' => transformed_string.append('\r') catch return errors.CodegenError.OutOfMemory,
+                        '\'' => transformed_string.append('\'') catch return errors.CodegenError.OutOfMemory,
+                        '\"' => transformed_string.append('\"') catch return errors.CodegenError.OutOfMemory,
                         // TODO: add more escape sequence
                         else => {
-                            transformed_string.append('\\') catch return CodegenError.OutOfMemory;
-                            transformed_string.append(str[i]) catch return CodegenError.OutOfMemory;
+                            transformed_string.append('\\') catch return errors.CodegenError.OutOfMemory;
+                            transformed_string.append(str[i]) catch return errors.CodegenError.OutOfMemory;
                         },
                     }
                 } else {
-                    transformed_string.append('\\') catch return CodegenError.OutOfMemory;
+                    transformed_string.append('\\') catch return errors.CodegenError.OutOfMemory;
                 }
             } else {
-                transformed_string.append(str[i]) catch return CodegenError.OutOfMemory;
+                transformed_string.append(str[i]) catch return errors.CodegenError.OutOfMemory;
             }
         }
         try transformed_string.append(0);
         return transformed_string.toOwnedSlice();
     }
 
-    fn generateExpression(self: *CodeGenerator, expr: *ast.Node) CodegenError!c.LLVMValueRef {
+    fn generateExpression(self: *CodeGenerator, expr: *ast.Node) errors.CodegenError!c.LLVMValueRef {
         switch (expr.data) {
             .identifier => |ident| {
                 if (self.variables.get(ident.name)) |var_info| {
                     return c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load");
                 }
-                return CodegenError.UndefinedVariable;
+                return errors.CodegenError.UndefinedVariable;
             },
             .number_literal => |num| {
                 const value = std.fmt.parseInt(i32, num.value, 10) catch 0;
@@ -290,7 +280,7 @@ pub const CodeGenerator = struct {
                     const is_void = c.LLVMGetTypeKind(return_type) == c.LLVMVoidTypeKind;
 
                     const call_name = if (is_void) "" else call.name;
-                    const call_name_z = self.allocator.dupeZ(u8, call_name) catch return CodegenError.OutOfMemory;
+                    const call_name_z = self.allocator.dupeZ(u8, call_name) catch return errors.CodegenError.OutOfMemory;
                     defer self.allocator.free(call_name_z);
 
                     if (args.items.len > 0) {
@@ -299,9 +289,9 @@ pub const CodeGenerator = struct {
                         return c.LLVMBuildCall2(self.builder, func_type, func, null, 0, call_name_z.ptr);
                     }
                 }
-                return CodegenError.UndefinedFunction;
+                return errors.CodegenError.UndefinedFunction;
             },
-            else => return CodegenError.TypeMismatch,
+            else => return errors.CodegenError.TypeMismatch,
         }
     }
     pub fn writeToFile(self: *CodeGenerator, filename: []const u8) !void {

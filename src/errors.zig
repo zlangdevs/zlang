@@ -33,6 +33,23 @@ pub const ParseError = error{
     OutOfMemory,
 };
 
+pub const CodegenError = error{
+    ModuleCreationFailed,
+    BuilderCreationFailed,
+    FunctionCreationFailed,
+    TypeMismatch,
+    UndefinedFunction,
+    UndefinedVariable,
+    OutOfMemory,
+};
+
+
+pub const CLIError = error {
+    NoInputPath,
+    NoOutputPath,
+    InvalidArgument
+};
+
 pub const GenericError = error{
     Unknown,
     NotImplemented,
