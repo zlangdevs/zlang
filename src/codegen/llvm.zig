@@ -27,7 +27,7 @@ const LibcType = enum {
     long_type,
     double_type,
 };
-s
+
 const LIBC_FUNCTIONS = std.StaticStringMap(LibcFunctionSignature).initComptime(.{
     .{ "printf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type}, .is_varargs = true } },
     .{ "puts", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type} } },
