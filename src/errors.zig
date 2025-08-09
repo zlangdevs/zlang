@@ -43,10 +43,10 @@ pub const CodegenError = error{
     OutOfMemory,
 };
 
-
 pub const CLIError = error {
     NoInputPath,
     NoOutputPath,
+    NoArch,
     InvalidArgument
 };
 
