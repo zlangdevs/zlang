@@ -26,8 +26,14 @@ pub const CodeGenerator = struct {
     builder: c.LLVMBuilderRef,
     allocator: std.mem.Allocator,
     functions: std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
-    variables: std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    variables: std.HashMap([]const u8, VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     current_function: ?c.LLVMValueRef,
+
+    // Структура для хранения информации о переменных
+    const VariableInfo = struct {
+        value: c.LLVMValueRef,
+        type_ref: c.LLVMTypeRef,
+    };
 
     pub fn init(allocator: std.mem.Allocator) CodegenError!CodeGenerator {
         // Initialize LLVM targets
@@ -50,7 +56,7 @@ pub const CodeGenerator = struct {
             .builder = builder,
             .allocator = allocator,
             .functions = std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
-            .variables = std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .variables = std.HashMap([]const u8, VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .current_function = null,
         };
     }
@@ -64,25 +70,29 @@ pub const CodeGenerator = struct {
     }
 
     fn getLLVMType(self: *CodeGenerator, type_name: []const u8) c.LLVMTypeRef {
-        if (std.mem.eql(u8, type_name, "i32")) {
-            return c.LLVMInt32TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "i8")) {
+        if (std.mem.eql(u8, type_name, "i8")) {
             return c.LLVMInt8TypeInContext(self.context);
+        } else if (std.mem.eql(u8, type_name, "i16")) {
+            return c.LLVMInt16TypeInContext(self.context);
+        } else if (std.mem.eql(u8, type_name, "i32")) {
+            return c.LLVMInt32TypeInContext(self.context);
         } else if (std.mem.eql(u8, type_name, "i64")) {
             return c.LLVMInt64TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "u32")) {
-            return c.LLVMInt32TypeInContext(self.context);
         } else if (std.mem.eql(u8, type_name, "u8")) {
             return c.LLVMInt8TypeInContext(self.context);
+        } else if (std.mem.eql(u8, type_name, "u16")) {
+            return c.LLVMInt16TypeInContext(self.context);
+        } else if (std.mem.eql(u8, type_name, "u32")) {
+            return c.LLVMInt32TypeInContext(self.context);
         } else if (std.mem.eql(u8, type_name, "u64")) {
             return c.LLVMInt64TypeInContext(self.context);
         } else if (std.mem.eql(u8, type_name, "void")) {
             return c.LLVMVoidTypeInContext(self.context);
         }
-        // Default to i32 for unknown types
+        // Default to i32 for unknown types; consider logging a warning in production
         return c.LLVMInt32TypeInContext(self.context);
     }
-
+    
     fn declareLibcFunctions(self: *CodeGenerator) void {
         // Declare printf: i32 (i8*, ...)
         const i8_ptr_type = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
@@ -148,12 +158,17 @@ pub const CodeGenerator = struct {
 
                 // Allocate space on stack
                 const alloca = c.LLVMBuildAlloca(self.builder, var_type, decl.name.ptr);
-                try self.variables.put(decl.name, alloca);
+                
+                try self.variables.put(decl.name, VariableInfo{
+                    .value = alloca,
+                    .type_ref = var_type,
+                });
 
                 // Generate initializer if present
                 if (decl.initializer) |initializer| {
                     const init_value = try self.generateExpression(initializer);
-                    _ = c.LLVMBuildStore(self.builder, init_value, alloca);
+                    const casted_value = self.castToType(init_value, var_type);
+                    _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                 }
             },
             .function_call => {
@@ -171,11 +186,35 @@ pub const CodeGenerator = struct {
         }
     }
 
+    fn castToType(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef) c.LLVMValueRef {
+        const value_type = c.LLVMTypeOf(value);
+        
+        if (value_type == target_type) {
+            return value;
+        }
+
+        const value_kind = c.LLVMGetTypeKind(value_type);
+        const target_kind = c.LLVMGetTypeKind(target_type);
+        
+        if (value_kind == c.LLVMIntegerTypeKind and target_kind == c.LLVMIntegerTypeKind) {
+            const value_width = c.LLVMGetIntTypeWidth(value_type);
+            const target_width = c.LLVMGetIntTypeWidth(target_type);
+            
+            if (value_width > target_width) {
+                return c.LLVMBuildTrunc(self.builder, value, target_type, "trunc");
+            } else if (value_width < target_width) {
+                return c.LLVMBuildSExt(self.builder, value, target_type, "sext");
+            }
+        }
+        
+        return value;
+    }
+
     fn generateExpression(self: *CodeGenerator, expr: *ast.Node) CodegenError!c.LLVMValueRef {
         switch (expr.data) {
             .identifier => |ident| {
-                if (self.variables.get(ident.name)) |var_ptr| {
-                    return c.LLVMBuildLoad2(self.builder, c.LLVMInt32TypeInContext(self.context), var_ptr, "load");
+                if (self.variables.get(ident.name)) |var_info| {
+                    return c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load");
                 }
                 return CodegenError.UndefinedVariable;
             },
@@ -191,12 +230,22 @@ pub const CodeGenerator = struct {
             },
             .function_call => |call| {
                 if (self.functions.get(call.name)) |func| {
-                    // Prepare arguments
                     var args = std.ArrayList(c.LLVMValueRef).init(self.allocator);
                     defer args.deinit();
 
                     for (call.args.items) |arg| {
-                        const arg_value = try self.generateExpression(arg);
+                        var arg_value = try self.generateExpression(arg);
+            
+                        if (std.mem.eql(u8, call.name, "printf") and args.items.len > 0) {
+                            const arg_type = c.LLVMTypeOf(arg_value);
+                            const arg_kind = c.LLVMGetTypeKind(arg_type);
+                            
+                            if (arg_kind == c.LLVMIntegerTypeKind) {
+                                const i32_type = c.LLVMInt32TypeInContext(self.context);
+                                arg_value = self.castToType(arg_value, i32_type);
+                            }
+                        }
+                        
                         try args.append(arg_value);
                     }
 
