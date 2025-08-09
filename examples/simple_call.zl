@@ -1,5 +1,5 @@
 fun helper() >> void {
-    @printf("Hello from helper\t");
+    @printf("Hello from "helper'");
     return;
 }
 
