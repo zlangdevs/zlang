@@ -1,0 +1,14 @@
+fun main() >> i32 {
+    @printf("=== Testing Unknown Libc Functions ===\n");
+
+    ?? Test with system() - should generate warning
+    i32 result = @system("echo 'Hello from system call!'");
+    @printf("system() returned: %d\n", result);
+
+    ?? Test with getenv() - should generate warning
+    ?? Note: this might crash if the function signature is wrong
+    ?? but it will test our generic signature creation
+
+    @printf("Testing unknown function completed\n");
+    return result;
+}

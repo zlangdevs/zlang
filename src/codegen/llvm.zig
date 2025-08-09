@@ -11,6 +11,47 @@ const c = @cImport({
     @cInclude("llvm-c/ExecutionEngine.h");
 });
 
+// Signature information for libc functions
+const LibcFunctionSignature = struct {
+    return_type: LibcType,
+    param_types: []const LibcType,
+    is_varargs: bool = false,
+};
+
+const LibcType = enum {
+    void_type,
+    int_type,
+    char_ptr_type,
+    size_t_type,
+    file_ptr_type,
+    long_type,
+    double_type,
+};
+s
+const LIBC_FUNCTIONS = std.StaticStringMap(LibcFunctionSignature).initComptime(.{
+    .{ "printf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type}, .is_varargs = true } },
+    .{ "puts", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type} } },
+    .{ "scanf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type}, .is_varargs = true } },
+    .{ "fprintf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{ .file_ptr_type, .char_ptr_type }, .is_varargs = true } },
+    .{ "sprintf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type }, .is_varargs = true } },
+    .{ "snprintf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{ .char_ptr_type, .size_t_type, .char_ptr_type }, .is_varargs = true } },
+    .{ "malloc", LibcFunctionSignature{ .return_type = .char_ptr_type, .param_types = &[_]LibcType{.size_t_type} } },
+    .{ "free", LibcFunctionSignature{ .return_type = .void_type, .param_types = &[_]LibcType{.char_ptr_type} } },
+    .{ "strlen", LibcFunctionSignature{ .return_type = .size_t_type, .param_types = &[_]LibcType{.char_ptr_type} } },
+    .{ "strcpy", LibcFunctionSignature{ .return_type = .char_ptr_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type } } },
+    .{ "strcmp", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type } } },
+    .{ "memset", LibcFunctionSignature{ .return_type = .char_ptr_type, .param_types = &[_]LibcType{ .char_ptr_type, .int_type, .size_t_type } } },
+    .{ "memcpy", LibcFunctionSignature{ .return_type = .char_ptr_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type, .size_t_type } } },
+    .{ "exit", LibcFunctionSignature{ .return_type = .void_type, .param_types = &[_]LibcType{.int_type} } },
+    .{ "atoi", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type} } },
+    .{ "atol", LibcFunctionSignature{ .return_type = .long_type, .param_types = &[_]LibcType{.char_ptr_type} } },
+    .{ "fopen", LibcFunctionSignature{ .return_type = .file_ptr_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type } } },
+    .{ "fclose", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.file_ptr_type} } },
+    .{ "fread", LibcFunctionSignature{ .return_type = .size_t_type, .param_types = &[_]LibcType{ .char_ptr_type, .size_t_type, .size_t_type, .file_ptr_type } } },
+    .{ "fwrite", LibcFunctionSignature{ .return_type = .size_t_type, .param_types = &[_]LibcType{ .char_ptr_type, .size_t_type, .size_t_type, .file_ptr_type } } },
+    .{ "system", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type} } },
+});
+
 pub const CodeGenerator = struct {
     context: c.LLVMContextRef,
     module: c.LLVMModuleRef,
@@ -79,27 +120,83 @@ pub const CodeGenerator = struct {
         } else if (std.mem.eql(u8, type_name, "void")) {
             return c.LLVMVoidTypeInContext(self.context);
         }
-        // Default to i32 for unknown types; consider logging a warning in production
+        // Default to i32 for unknown types
         return c.LLVMInt32TypeInContext(self.context);
     }
 
-    fn declareLibcFunctions(self: *CodeGenerator) void {
-        // Declare printf: i32 (i8*, ...)
-        const i8_ptr_type = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
-        var printf_args = [_]c.LLVMTypeRef{i8_ptr_type};
-        const printf_type = c.LLVMFunctionType(c.LLVMInt32TypeInContext(self.context), &printf_args[0], 1, 1); // varargs = true
-        const printf_func = c.LLVMAddFunction(self.module, "printf", printf_type);
-        self.functions.put("printf", printf_func) catch {};
+    fn libcTypeToLLVM(self: *CodeGenerator, libc_type: LibcType) c.LLVMTypeRef {
+        return switch (libc_type) {
+            .void_type => c.LLVMVoidTypeInContext(self.context),
+            .int_type => c.LLVMInt32TypeInContext(self.context),
+            .char_ptr_type => c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0),
+            .size_t_type => c.LLVMInt64TypeInContext(self.context), // Assuming 64-bit system
+            .file_ptr_type => c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0), // FILE* as i8*
+            .long_type => c.LLVMInt64TypeInContext(self.context),
+            .double_type => c.LLVMDoubleTypeInContext(self.context),
+        };
+    }
 
-        // Declare puts: i32 (i8*)
-        var puts_args = [_]c.LLVMTypeRef{i8_ptr_type};
-        const puts_type = c.LLVMFunctionType(c.LLVMInt32TypeInContext(self.context), &puts_args[0], 1, 0);
-        const puts_func = c.LLVMAddFunction(self.module, "puts", puts_type);
-        self.functions.put("puts", puts_func) catch {};
+    fn declareLibcFunction(self: *CodeGenerator, func_name: []const u8) !c.LLVMValueRef {
+        // Check if function is already declared
+        if (self.functions.get(func_name)) |existing| {
+            return existing;
+        }
+
+        // Try to get signature from database
+        if (LIBC_FUNCTIONS.get(func_name)) |signature| {
+            return self.createFunctionFromSignature(func_name, signature);
+        }
+
+        // If not in database, create a generic function signature
+        // Default: int function(...) - varargs function returning int
+        return self.createGenericLibcFunction(func_name);
+    }
+
+    fn createFunctionFromSignature(self: *CodeGenerator, func_name: []const u8, signature: LibcFunctionSignature) !c.LLVMValueRef {
+        const return_type = self.libcTypeToLLVM(signature.return_type);
+
+        var param_types = std.ArrayList(c.LLVMTypeRef).init(self.allocator);
+        defer param_types.deinit();
+
+        for (signature.param_types) |param_type| {
+            try param_types.append(self.libcTypeToLLVM(param_type));
+        }
+
+        const function_type = if (param_types.items.len > 0)
+            c.LLVMFunctionType(return_type, param_types.items.ptr, @intCast(param_types.items.len), if (signature.is_varargs) 1 else 0)
+        else
+            c.LLVMFunctionType(return_type, null, 0, if (signature.is_varargs) 1 else 0);
+
+        const func_name_z = try self.allocator.dupeZ(u8, func_name);
+        defer self.allocator.free(func_name_z);
+
+        const llvm_func = c.LLVMAddFunction(self.module, func_name_z.ptr, function_type);
+        try self.functions.put(try self.allocator.dupe(u8, func_name), llvm_func);
+
+        return llvm_func;
+    }
+
+    fn createGenericLibcFunction(self: *CodeGenerator, func_name: []const u8) !c.LLVMValueRef {
+        // Create a generic varargs function: int function(...)
+        const i8_ptr_type = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+        var generic_args = [_]c.LLVMTypeRef{i8_ptr_type}; // At least one parameter for varargs
+        const function_type = c.LLVMFunctionType(c.LLVMInt32TypeInContext(self.context), // return int
+            &generic_args[0], 1, 1 // varargs = true
+        );
+
+        const func_name_z = try self.allocator.dupeZ(u8, func_name);
+        defer self.allocator.free(func_name_z);
+
+        const llvm_func = c.LLVMAddFunction(self.module, func_name_z.ptr, function_type);
+        try self.functions.put(try self.allocator.dupe(u8, func_name), llvm_func);
+
+        std.debug.print("Warning: Creating generic signature for unknown libc function: {s}\n", .{func_name});
+
+        return llvm_func;
     }
 
     pub fn generateCode(self: *CodeGenerator, program: *ast.Node) errors.CodegenError!void {
-        self.declareLibcFunctions();
+        // No longer need to pre-declare functions - they'll be declared on demand
 
         switch (program.data) {
             .program => |prog| {
@@ -230,6 +327,29 @@ pub const CodeGenerator = struct {
         return transformed_string.toOwnedSlice();
     }
 
+    fn prepareArgumentForLibcCall(self: *CodeGenerator, arg_value: c.LLVMValueRef, func_name: []const u8, arg_index: usize) c.LLVMValueRef {
+        // Special handling for known functions that need specific argument types
+        if (std.mem.eql(u8, func_name, "printf") or
+            std.mem.eql(u8, func_name, "sprintf") or
+            std.mem.eql(u8, func_name, "snprintf") or
+            std.mem.eql(u8, func_name, "fprintf"))
+        {
+
+            // For printf family functions, ensure integer arguments are i32
+            if (arg_index > 0) { // Skip format string
+                const arg_type = c.LLVMTypeOf(arg_value);
+                const arg_kind = c.LLVMGetTypeKind(arg_type);
+
+                if (arg_kind == c.LLVMIntegerTypeKind) {
+                    const i32_type = c.LLVMInt32TypeInContext(self.context);
+                    return self.castToType(arg_value, i32_type);
+                }
+            }
+        }
+
+        return arg_value;
+    }
+
     fn generateExpression(self: *CodeGenerator, expr: *ast.Node) errors.CodegenError!c.LLVMValueRef {
         switch (expr.data) {
             .identifier => |ident| {
@@ -244,7 +364,6 @@ pub const CodeGenerator = struct {
             },
             .string_literal => |str| {
                 const parsed_str = try self.parse_escape(str.value);
-
                 defer self.allocator.free(parsed_str);
 
                 return c.LLVMBuildGlobalStringPtr(
@@ -254,46 +373,45 @@ pub const CodeGenerator = struct {
                 );
             },
             .function_call => |call| {
-                if (self.functions.get(call.name)) |func| {
-                    var args = std.ArrayList(c.LLVMValueRef).init(self.allocator);
-                    defer args.deinit();
+                // For libc functions, declare them dynamically
+                const func = if (call.is_libc)
+                    try self.declareLibcFunction(call.name)
+                else
+                    self.functions.get(call.name) orelse return errors.CodegenError.UndefinedFunction;
 
-                    for (call.args.items) |arg| {
-                        var arg_value = try self.generateExpression(arg);
+                var args = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+                defer args.deinit();
 
-                        if (std.mem.eql(u8, call.name, "printf") and args.items.len > 0) {
-                            const arg_type = c.LLVMTypeOf(arg_value);
-                            const arg_kind = c.LLVMGetTypeKind(arg_type);
+                for (call.args.items, 0..) |arg, i| {
+                    var arg_value = try self.generateExpression(arg);
 
-                            if (arg_kind == c.LLVMIntegerTypeKind) {
-                                const i32_type = c.LLVMInt32TypeInContext(self.context);
-                                arg_value = self.castToType(arg_value, i32_type);
-                            }
-                        }
-
-                        try args.append(arg_value);
+                    // Apply argument preparation for libc calls
+                    if (call.is_libc) {
+                        arg_value = self.prepareArgumentForLibcCall(arg_value, call.name, i);
                     }
 
-                    // Check if function returns void
-                    const func_type = c.LLVMGlobalGetValueType(func);
-                    const return_type = c.LLVMGetReturnType(func_type);
-                    const is_void = c.LLVMGetTypeKind(return_type) == c.LLVMVoidTypeKind;
-
-                    const call_name = if (is_void) "" else call.name;
-                    const call_name_z = self.allocator.dupeZ(u8, call_name) catch return errors.CodegenError.OutOfMemory;
-                    defer self.allocator.free(call_name_z);
-
-                    if (args.items.len > 0) {
-                        return c.LLVMBuildCall2(self.builder, func_type, func, args.items.ptr, @as(c_uint, @intCast(args.items.len)), call_name_z.ptr);
-                    } else {
-                        return c.LLVMBuildCall2(self.builder, func_type, func, null, 0, call_name_z.ptr);
-                    }
+                    try args.append(arg_value);
                 }
-                return errors.CodegenError.UndefinedFunction;
+
+                // Check if function returns void
+                const func_type = c.LLVMGlobalGetValueType(func);
+                const return_type = c.LLVMGetReturnType(func_type);
+                const is_void = c.LLVMGetTypeKind(return_type) == c.LLVMVoidTypeKind;
+
+                const call_name = if (is_void) "" else call.name;
+                const call_name_z = self.allocator.dupeZ(u8, call_name) catch return errors.CodegenError.OutOfMemory;
+                defer self.allocator.free(call_name_z);
+
+                if (args.items.len > 0) {
+                    return c.LLVMBuildCall2(self.builder, func_type, func, args.items.ptr, @as(c_uint, @intCast(args.items.len)), call_name_z.ptr);
+                } else {
+                    return c.LLVMBuildCall2(self.builder, func_type, func, null, 0, call_name_z.ptr);
+                }
             },
             else => return errors.CodegenError.TypeMismatch,
         }
     }
+
     pub fn writeToFile(self: *CodeGenerator, filename: []const u8) !void {
         const filename_z = try self.allocator.dupeZ(u8, filename);
         defer self.allocator.free(filename_z);
@@ -324,14 +442,15 @@ pub const CodeGenerator = struct {
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
-        const clang_args = if (std.mem.eql(u8, arch, "")) 
+        const clang_args = if (std.mem.eql(u8, arch, ""))
             &[_][]const u8{
                 "clang",
                 temp_ir_file,
                 "-o",
                 output_filename,
                 "-lc",
-        } else blk: {
+            }
+        else blk: {
             const march_flag: []const u8 = try std.fmt.allocPrint(self.allocator, "--target={s}", .{arch});
             break :blk &[_][]const u8{
                 "clang",
@@ -342,7 +461,7 @@ pub const CodeGenerator = struct {
                 march_flag,
             };
         };
-            
+
         // Execute clang
         var child = std.process.Child.init(clang_args, arena_alloc);
         child.stdout_behavior = .Pipe;
