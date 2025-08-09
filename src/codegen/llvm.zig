@@ -310,7 +310,7 @@ pub const CodeGenerator = struct {
         }
     }
 
-    pub fn compileToExecutable(self: *CodeGenerator, output_filename: []const u8) !void {
+    pub fn compileToExecutable(self: *CodeGenerator, output_filename: []const u8, arch: []const u8) !void {
         // First write LLVM IR to temporary file
         const temp_ir_file = "temp_output.ll";
         try self.writeToFile(temp_ir_file);
@@ -324,16 +324,27 @@ pub const CodeGenerator = struct {
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
-        const clang_args = [_][]const u8{
-            "clang",
-            temp_ir_file,
-            "-o",
-            output_filename,
-            "-lc", // Link with libc
+        const clang_args = if (std.mem.eql(u8, arch, "")) 
+            &[_][]const u8{
+                "clang",
+                temp_ir_file,
+                "-o",
+                output_filename,
+                "-lc",
+        } else blk: {
+            const march_flag: []const u8 = try std.fmt.allocPrint(self.allocator, "--target={s}", .{arch});
+            break :blk &[_][]const u8{
+                "clang",
+                temp_ir_file,
+                "-o",
+                output_filename,
+                "-lc",
+                march_flag,
+            };
         };
-
+            
         // Execute clang
-        var child = std.process.Child.init(&clang_args, arena_alloc);
+        var child = std.process.Child.init(clang_args, arena_alloc);
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
 
