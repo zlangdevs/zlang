@@ -13,7 +13,7 @@ extern YYSTYPE yylval;
 DIGIT    [0-9]
 LETTER   [a-zA-Z_]
 IDENT    {LETTER}({LETTER}|{DIGIT})*
-STRING   \"[^"]*\"
+STRING   \"([^"\\]|\\.)*\"
 
 %%
 
