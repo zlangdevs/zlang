@@ -1,11 +1,11 @@
 fun helper() >> void {
-    @printf("Hello from helper ");
+    @printf("Hello from helper\t");
     return;
 }
 
 fun main() >> i32 {
-    @printf("Starting main \n");
+    @printf("Starting main \t");
     helper();
-    @printf("Called helper n");
+    @printf("Called helper\t");
     return 0;
 }
