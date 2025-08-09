@@ -156,7 +156,10 @@ pub fn main() !u8 {
         };
 
         // Write LLVM IR to file
-        const ir_filename = "output.ll";
+        const exe_filename = if (ctx.output_path.len == 0) consts.DEFAULT_OUTPUT_NAME
+            else ctx.output_path;
+        const ir_filename = try std.fmt.allocPrint(allocator, "{s}.ll", .{exe_filename});
+        defer allocator.free(ir_filename);
         code_generator.writeToFile(ir_filename) catch |err| {
             std.debug.print("Error writing LLVM IR to file: {}\n", .{err});
             return 1;
@@ -164,12 +167,15 @@ pub fn main() !u8 {
         std.debug.print("LLVM IR written to {s}\n", .{ir_filename});
 
         // Compile to executable
-        const exe_filename = "output";
         code_generator.compileToExecutable(exe_filename) catch |err| {
             std.debug.print("Error compiling to executable: {}\n", .{err});
             return 1;
         };
         std.debug.print("Executable compiled to {s}\n", .{exe_filename});
+        if (!ctx.keepll) {
+            const cwd = std.fs.cwd();
+            try cwd.deleteFile(ir_filename);
+        }
     } else {
         std.debug.print("No AST generated.\n", .{});
     }
