@@ -30,14 +30,76 @@ pub fn read_file(file_name: []const u8) anyerror![]const u8 {
     return "";
 }
 
+const Context = struct {
+    input_path: []const u8,
+    output_path: []const u8,
+    keepll: bool = false,
+    
+    pub fn print(self: *const Context) void {
+        std.debug.print("========Compilation context=======\n", .{});
+        std.debug.print("Input path: {s}\n", .{self.input_path});
+        std.debug.print("Output path: {s}\n", .{self.output_path});
+        std.debug.print("Keep ll: {s}\n", .{ if (self.keepll) "yes" else "no" });
+        std.debug.print("==================================\n", .{});
+    }
+};
+
+
+
+fn parseArgs(alloc: std.mem.Allocator, args: [][:0] u8) anyerror!Context {
+    _ = alloc;
+    var context = Context{
+        .input_path = "",
+        .output_path = "",
+        .keepll = false,
+    };
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        switch (args[i][0]) {
+            '-' => {
+                const flag = args[i];
+                if (std.mem.eql(u8, flag, "-keepll")) {
+                    context.keepll = true;
+                } else if (std.mem.eql(u8, flag, "-o")) {
+                    i += 1;
+                    if (i >= args.len) return errors.CLIError.NoOutputPath;
+                    context.output_path = args[i];
+                } else {
+                    return errors.CLIError.InvalidArgument;
+                }
+            },
+            else => {
+                if (context.input_path.len == 0) {
+                    context.input_path = args[i];
+                }
+            },
+        }
+    }
+    
+    return if (context.input_path.len == 0) 
+        errors.CLIError.NoInputPath
+    else context;
+}
+
 pub fn main() !u8 {
     const args = try std.process.argsAlloc(allocator);
+    const ctx = parseArgs(allocator, args) catch |err| {
+        const error_msg = switch(err) {
+            errors.CLIError.NoInputPath => "No input path specified",
+            errors.CLIError.NoOutputPath => "No output path specified after -o",
+            errors.CLIError.InvalidArgument => "Unrecognized argument",
+            else => "Unknown error while parsing arguments"
+        };
+        std.debug.print("Error: {s}\n", .{error_msg});
+        return 1;
+    };
+    ctx.print();
     defer std.process.argsFree(allocator, args);
     if (args.len < 2) {
         std.debug.print("Usage: zlang <path to file>", .{});
         return 1;
     }
-    const input_file = args[1];
+    const input_file = ctx.input_path;
     const input = read_file(input_file) catch |err| {
         const error_msg = switch (err) {
             error.FileNotFound => "Specified file does not exist or path is invalid.",
