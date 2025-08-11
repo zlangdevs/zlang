@@ -379,27 +379,25 @@ pub const CodeGenerator = struct {
     // New function to generate expressions with type context
     fn generateExpressionWithContext(self: *CodeGenerator, expr: *ast.Node, expected_type: ?[]const u8) errors.CodegenError!c.LLVMValueRef {
         switch (expr.data) {
-            .number_literal => |num| {
-                // Check if it's a floating-point number
-                if (std.mem.indexOf(u8, num.value, ".") != null) {
-                    const float_val = std.fmt.parseFloat(f64, num.value) catch 0.0;
-                    
-                    // If we have context about expected type, create the appropriate LLVM type
-                    if (expected_type) |type_name| {
-                        if (std.mem.eql(u8, type_name, "f32")) {
-                            return c.LLVMConstReal(c.LLVMFloatTypeInContext(self.context), float_val);
-                        } else if (std.mem.eql(u8, type_name, "f64")) {
-                            return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
-                        }
+            .float_literal => |float| {
+                const float_val = std.fmt.parseFloat(f64, float.value) catch 0.0;
+
+                // If we have context about expected type, create the appropriate LLVM type
+                if (expected_type) |type_name| {
+                    if (std.mem.eql(u8, type_name, "f32")) {
+                        return c.LLVMConstReal(c.LLVMFloatTypeInContext(self.context), float_val);
+                    } else if (std.mem.eql(u8, type_name, "f64")) {
+                        return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
                     }
-                    
-                    // Default to double if no specific context
-                    return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
-                } else {
-                    // Integer literal
-                    const value = std.fmt.parseInt(i32, num.value, 10) catch 0;
-                    return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
                 }
+
+                // Default to double if no specific context
+                return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
+            },
+            .number_literal => |num| {
+                // Integer literal
+                const value = std.fmt.parseInt(i32, num.value, 10) catch 0;
+                return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
             },
             else => return self.generateExpression(expr),
         }
