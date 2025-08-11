@@ -14,6 +14,7 @@ DIGIT    [0-9]
 LETTER   [a-zA-Z_]
 IDENT    {LETTER}({LETTER}|{DIGIT})*
 STRING   \"([^"\\]|\\.)*\"
+FLOAT    {DIGIT}+\.{DIGIT}+
 
 %%
 
@@ -24,6 +25,7 @@ STRING   \"([^"\\]|\\.)*\"
 "return"    { return TOKEN_RETURN; }
 "void"      { return TOKEN_VOID; }
 {IDENT}     { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
+{FLOAT}     { yylval.string = strdup(yytext); return TOKEN_NUMBER; }
 {DIGIT}+    { yylval.string = strdup(yytext); return TOKEN_NUMBER; }
 {STRING}    { yylval.string = strndup(yytext+1, yyleng-2); return TOKEN_STRING; }
 "+"         { return TOKEN_PLUS; }

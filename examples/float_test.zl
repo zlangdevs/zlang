@@ -1,0 +1,7 @@
+fun main() >> i32 {
+    f32 a = 3.14;
+    f64 b = 2.718281828459045;
+    @printf("f32 value: %f\n", a);
+    @printf("f64 value: %f\n", b);
+    return 0;
+}
