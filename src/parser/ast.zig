@@ -7,6 +7,7 @@ pub const NodeType = enum {
     function_call,
     return_stmt,
     identifier,
+    float_literal,
     number_literal,
     string_literal,
 };
@@ -17,6 +18,10 @@ pub const Type = struct {
 
 pub const Identifier = struct {
     name: []const u8,
+};
+
+pub const FloatLiteral = struct {
+    value: []const u8,
 };
 
 pub const NumberLiteral = struct {
@@ -60,6 +65,7 @@ pub const NodeData = union(NodeType) {
     function_call: FunctionCall,
     return_stmt: ReturnStmt,
     identifier: Identifier,
+    float_literal: FloatLiteral,
     number_literal: NumberLiteral,
     string_literal: StringLiteral,
 };
@@ -173,6 +179,9 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         },
         .identifier => |ident| {
             std.debug.print("🔤 Identifier: \x1b[36m{s}\x1b[0m\n", .{ident.name});
+        },
+        .float_literal => |float| {
+            std.debug.print("🔢 Float: \x1b[31m{s}\x1b[0m\n", .{float.value});
         },
         .number_literal => |num| {
             std.debug.print("🔢 Number: \x1b[31m{s}\x1b[0m\n", .{num.value});
