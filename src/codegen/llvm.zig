@@ -117,10 +117,13 @@ pub const CodeGenerator = struct {
             return c.LLVMInt32TypeInContext(self.context);
         } else if (std.mem.eql(u8, type_name, "u64")) {
             return c.LLVMInt64TypeInContext(self.context);
+        } else if (std.mem.eql(u8, type_name, "f32")) {
+            return c.LLVMFloatTypeInContext(self.context);
+        } else if (std.mem.eql(u8, type_name, "f64")) {
+            return c.LLVMDoubleTypeInContext(self.context);
         } else if (std.mem.eql(u8, type_name, "void")) {
             return c.LLVMVoidTypeInContext(self.context);
         }
-        // Default to i32 for unknown types
         return c.LLVMInt32TypeInContext(self.context);
     }
 
@@ -137,18 +140,12 @@ pub const CodeGenerator = struct {
     }
 
     fn declareLibcFunction(self: *CodeGenerator, func_name: []const u8) !c.LLVMValueRef {
-        // Check if function is already declared
         if (self.functions.get(func_name)) |existing| {
             return existing;
         }
-
-        // Try to get signature from database
         if (LIBC_FUNCTIONS.get(func_name)) |signature| {
             return self.createFunctionFromSignature(func_name, signature);
         }
-
-        // If not in database, create a generic function signature
-        // Default: int function(...) - varargs function returning int
         return self.createGenericLibcFunction(func_name);
     }
 
@@ -253,7 +250,7 @@ pub const CodeGenerator = struct {
 
                 // Generate initializer if present
                 if (decl.initializer) |initializer| {
-                    const init_value = try self.generateExpression(initializer);
+                    const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
                     const casted_value = self.castToType(init_value, var_type);
                     _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                 }
@@ -292,6 +289,31 @@ pub const CodeGenerator = struct {
             } else if (value_width < target_width) {
                 return c.LLVMBuildSExt(self.builder, value, target_type, "sext");
             }
+        } else if (value_kind == c.LLVMFloatTypeKind and target_kind == c.LLVMFloatTypeKind) {
+            // Both are floats, no conversion needed
+            return value;
+        } else if (value_kind == c.LLVMDoubleTypeKind and target_kind == c.LLVMDoubleTypeKind) {
+            // Both are doubles, no conversion needed
+            return value;
+        } else if ((value_kind == c.LLVMFloatTypeKind and target_kind == c.LLVMDoubleTypeKind) or
+            (value_kind == c.LLVMDoubleTypeKind and target_kind == c.LLVMFloatTypeKind))
+        {
+            // Float to double or double to float conversion
+            if (value_kind == c.LLVMFloatTypeKind) {
+                return c.LLVMBuildFPExt(self.builder, value, target_type, "fpext");
+            } else {
+                return c.LLVMBuildFPTrunc(self.builder, value, target_type, "fptrunc");
+            }
+        } else if ((value_kind == c.LLVMIntegerTypeKind and
+            (target_kind == c.LLVMFloatTypeKind or target_kind == c.LLVMDoubleTypeKind)))
+        {
+            // Integer to float conversion
+            return c.LLVMBuildSIToFP(self.builder, value, target_type, "sitofp");
+        } else if (((value_kind == c.LLVMFloatTypeKind or value_kind == c.LLVMDoubleTypeKind) and
+            target_kind == c.LLVMIntegerTypeKind))
+        {
+            // Float to integer conversion
+            return c.LLVMBuildFPToSI(self.builder, value, target_type, "fptosi");
         }
 
         return value;
@@ -334,8 +356,8 @@ pub const CodeGenerator = struct {
             std.mem.eql(u8, func_name, "snprintf") or
             std.mem.eql(u8, func_name, "fprintf"))
         {
-
             // For printf family functions, ensure integer arguments are i32
+            // and float arguments are promoted to double for varargs
             if (arg_index > 0) { // Skip format string
                 const arg_type = c.LLVMTypeOf(arg_value);
                 const arg_kind = c.LLVMGetTypeKind(arg_type);
@@ -343,11 +365,44 @@ pub const CodeGenerator = struct {
                 if (arg_kind == c.LLVMIntegerTypeKind) {
                     const i32_type = c.LLVMInt32TypeInContext(self.context);
                     return self.castToType(arg_value, i32_type);
+                } else if (arg_kind == c.LLVMFloatTypeKind) {
+                    // Float arguments must be promoted to double for varargs
+                    const double_type = c.LLVMDoubleTypeInContext(self.context);
+                    return c.LLVMBuildFPExt(self.builder, arg_value, double_type, "fpext");
                 }
             }
         }
 
         return arg_value;
+    }
+
+    // New function to generate expressions with type context
+    fn generateExpressionWithContext(self: *CodeGenerator, expr: *ast.Node, expected_type: ?[]const u8) errors.CodegenError!c.LLVMValueRef {
+        switch (expr.data) {
+            .number_literal => |num| {
+                // Check if it's a floating-point number
+                if (std.mem.indexOf(u8, num.value, ".") != null) {
+                    const float_val = std.fmt.parseFloat(f64, num.value) catch 0.0;
+                    
+                    // If we have context about expected type, create the appropriate LLVM type
+                    if (expected_type) |type_name| {
+                        if (std.mem.eql(u8, type_name, "f32")) {
+                            return c.LLVMConstReal(c.LLVMFloatTypeInContext(self.context), float_val);
+                        } else if (std.mem.eql(u8, type_name, "f64")) {
+                            return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
+                        }
+                    }
+                    
+                    // Default to double if no specific context
+                    return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
+                } else {
+                    // Integer literal
+                    const value = std.fmt.parseInt(i32, num.value, 10) catch 0;
+                    return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
+                }
+            },
+            else => return self.generateExpression(expr),
+        }
     }
 
     fn generateExpression(self: *CodeGenerator, expr: *ast.Node) errors.CodegenError!c.LLVMValueRef {
@@ -359,8 +414,16 @@ pub const CodeGenerator = struct {
                 return errors.CodegenError.UndefinedVariable;
             },
             .number_literal => |num| {
-                const value = std.fmt.parseInt(i32, num.value, 10) catch 0;
-                return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
+                // Check if it's a floating-point number
+                if (std.mem.indexOf(u8, num.value, ".") != null) {
+                    // Floating-point literal - default to double without context
+                    const float_val = std.fmt.parseFloat(f64, num.value) catch 0.0;
+                    return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
+                } else {
+                    // Integer literal
+                    const value = std.fmt.parseInt(i32, num.value, 10) catch 0;
+                    return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
+                }
             },
             .string_literal => |str| {
                 const parsed_str = try self.parse_escape(str.value);
