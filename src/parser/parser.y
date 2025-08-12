@@ -46,7 +46,6 @@ void* ast_root = NULL;
 
 /* plain tokens (declared before the grammar) */
 %token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID
-%token TOKEN_TRUE TOKEN_FALSE TOKEN_BOOL
 %token TOKEN_PLUS TOKEN_MINUS TOKEN_ASSIGN TOKEN_EQUAL
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT
@@ -104,7 +103,6 @@ function_name:
 type_name:
     TOKEN_IDENTIFIER { $$ = strdup($1); }
   | TOKEN_VOID        { $$ = strdup("void"); }
-  | TOKEN_BOOL        { $$ = strdup("bool"); }
 ;
 
 /* statement list (zero or more statements) */
@@ -184,8 +182,6 @@ expression:
         $$ = zig_create_string_literal($1);
         free($1);
     }
-  | TOKEN_TRUE                  { $$ = zig_create_bool_literal(1); }
-  | TOKEN_FALSE                 { $$ = zig_create_bool_literal(0); }
 ;
 
 /* string literal wrapper */
