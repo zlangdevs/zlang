@@ -286,20 +286,20 @@ pub const CodeGenerator = struct {
         }
     }
 
-    fn castToType(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef) c.LLVMValueRef {
+    pub fn castToType(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef) c.LLVMValueRef {
         const value_type = c.LLVMTypeOf(value);
-
+    
         if (value_type == target_type) {
             return value;
         }
-
+    
         const value_kind = c.LLVMGetTypeKind(value_type);
         const target_kind = c.LLVMGetTypeKind(target_type);
-
+    
         if (value_kind == c.LLVMIntegerTypeKind and target_kind == c.LLVMIntegerTypeKind) {
             const value_width = c.LLVMGetIntTypeWidth(value_type);
             const target_width = c.LLVMGetIntTypeWidth(target_type);
-
+    
             if (value_width > target_width) {
                 return c.LLVMBuildTrunc(self.builder, value, target_type, "trunc");
             } else if (value_width < target_width) {
@@ -309,33 +309,23 @@ pub const CodeGenerator = struct {
                     return c.LLVMBuildSExt(self.builder, value, target_type, "sext");
                 }
             }
-        } else if (value_kind == c.LLVMFloatTypeKind and target_kind == c.LLVMFloatTypeKind) {
-            // Both are floats, no conversion needed
-            return value;
-        } else if (value_kind == c.LLVMDoubleTypeKind and target_kind == c.LLVMDoubleTypeKind) {
-            // Both are doubles, no conversion needed
-            return value;
-        } else if ((value_kind == c.LLVMFloatTypeKind and target_kind == c.LLVMDoubleTypeKind) or
-            (value_kind == c.LLVMDoubleTypeKind and target_kind == c.LLVMFloatTypeKind))
-        {
-            // Float to double or double to float conversion
-            if (value_kind == c.LLVMFloatTypeKind) {
+        } else if ((value_kind == c.LLVMFloatTypeKind and (target_kind == c.LLVMDoubleTypeKind or target_kind == c.LLVMHalfTypeKind)) or
+                   (value_kind == c.LLVMDoubleTypeKind and (target_kind == c.LLVMFloatTypeKind or target_kind == c.LLVMHalfTypeKind)) or
+                   (value_kind == c.LLVMHalfTypeKind and (target_kind == c.LLVMFloatTypeKind or target_kind == c.LLVMDoubleTypeKind))) {
+            if ((value_kind == c.LLVMFloatTypeKind or value_kind == c.LLVMHalfTypeKind) and
+                (target_kind == c.LLVMDoubleTypeKind or (target_kind == c.LLVMFloatTypeKind and value_kind == c.LLVMHalfTypeKind))) {
                 return c.LLVMBuildFPExt(self.builder, value, target_type, "fpext");
             } else {
                 return c.LLVMBuildFPTrunc(self.builder, value, target_type, "fptrunc");
             }
         } else if ((value_kind == c.LLVMIntegerTypeKind and
-            (target_kind == c.LLVMFloatTypeKind or target_kind == c.LLVMDoubleTypeKind)))
-        {
-            // Integer to float conversion
+                   (target_kind == c.LLVMFloatTypeKind or target_kind == c.LLVMDoubleTypeKind or target_kind == c.LLVMHalfTypeKind))) {
             return c.LLVMBuildSIToFP(self.builder, value, target_type, "sitofp");
-        } else if (((value_kind == c.LLVMFloatTypeKind or value_kind == c.LLVMDoubleTypeKind) and
-            target_kind == c.LLVMIntegerTypeKind))
-        {
-            // Float to integer conversion
+        } else if ((value_kind == c.LLVMFloatTypeKind or value_kind == c.LLVMDoubleTypeKind or value_kind == c.LLVMHalfTypeKind) and
+                   target_kind == c.LLVMIntegerTypeKind) {
             return c.LLVMBuildFPToSI(self.builder, value, target_type, "fptosi");
         }
-
+    
         return value;
     }
 
