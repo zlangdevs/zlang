@@ -123,6 +123,8 @@ pub const CodeGenerator = struct {
             return c.LLVMDoubleTypeInContext(self.context);
         } else if (std.mem.eql(u8, type_name, "void")) {
             return c.LLVMVoidTypeInContext(self.context);
+        } else if (std.mem.eql(u8, type_name, "bool")) {
+            return c.LLVMInt1TypeInContext(self.context);
         }
         return c.LLVMInt32TypeInContext(self.context);
     }
@@ -287,7 +289,11 @@ pub const CodeGenerator = struct {
             if (value_width > target_width) {
                 return c.LLVMBuildTrunc(self.builder, value, target_type, "trunc");
             } else if (value_width < target_width) {
-                return c.LLVMBuildSExt(self.builder, value, target_type, "sext");
+                if (value_width == 1) {
+                    return c.LLVMBuildZExt(self.builder, value, target_type, "zext");
+                } else {
+                    return c.LLVMBuildSExt(self.builder, value, target_type, "sext");
+                }
             }
         } else if (value_kind == c.LLVMFloatTypeKind and target_kind == c.LLVMFloatTypeKind) {
             // Both are floats, no conversion needed
@@ -422,6 +428,9 @@ pub const CodeGenerator = struct {
                     const value = std.fmt.parseInt(i32, num.value, 10) catch 0;
                     return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
                 }
+            },
+            .bool_literal => |bool_val| {
+                return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), if (bool_val.value) 1 else 0, 0);
             },
             .string_literal => |str| {
                 const parsed_str = try self.parse_escape(str.value);

@@ -10,6 +10,7 @@ pub const NodeType = enum {
     float_literal,
     number_literal,
     string_literal,
+    bool_literal,
 };
 
 pub const Type = struct {
@@ -30,6 +31,10 @@ pub const NumberLiteral = struct {
 
 pub const StringLiteral = struct {
     value: []const u8,
+};
+
+pub const BoolLiteral = struct {
+    value: bool,
 };
 
 pub const VarDecl = struct {
@@ -68,6 +73,7 @@ pub const NodeData = union(NodeType) {
     float_literal: FloatLiteral,
     number_literal: NumberLiteral,
     string_literal: StringLiteral,
+    bool_literal: BoolLiteral,
 };
 
 pub const Node = struct {
@@ -188,6 +194,9 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         },
         .string_literal => |str| {
             std.debug.print("💬 String: \x1b[32m\"{s}\"\x1b[0m\n", .{str.value});
+        },
+        .bool_literal => |bool_val| {
+            std.debug.print("✅ Boolean: \x1b[35m{s}\x1b[0m\n", .{if (bool_val.value) "true" else "false"});
         },
     }
 }
