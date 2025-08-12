@@ -117,6 +117,8 @@ pub const CodeGenerator = struct {
             return c.LLVMInt32TypeInContext(self.context);
         } else if (std.mem.eql(u8, type_name, "u64")) {
             return c.LLVMInt64TypeInContext(self.context);
+        } else if (std.mem.eql(u8, type_name, "f16")) {
+            return c.LLVMHalfTypeInContext(self.context);
         } else if (std.mem.eql(u8, type_name, "f32")) {
             return c.LLVMFloatTypeInContext(self.context);
         } else if (std.mem.eql(u8, type_name, "f64")) {
@@ -402,7 +404,9 @@ pub const CodeGenerator = struct {
 
                 // If we have context about expected type, create the appropriate LLVM type
                 if (expected_type) |type_name| {
-                    if (std.mem.eql(u8, type_name, "f32")) {
+                    if (std.mem.eql(u8, type_name, "f16")) {
+                        return c.LLVMConstReal(c.LLVMHalfTypeInContext(self.context), float_val);
+                    } else if (std.mem.eql(u8, type_name, "f32")) {
                         return c.LLVMConstReal(c.LLVMFloatTypeInContext(self.context), float_val);
                     } else if (std.mem.eql(u8, type_name, "f64")) {
                         return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
