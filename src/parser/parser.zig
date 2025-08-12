@@ -184,6 +184,17 @@ export fn zig_create_string_literal(value_ptr: [*c]const u8) ?*anyopaque {
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_bool_literal(value: c_int) ?*anyopaque {
+    const bool_data = ast.NodeData{
+        .bool_literal = ast.BoolLiteral{
+            .value = value != 0,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, bool_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_create_stmt_list() ?*anyopaque {
     const node_list = global_allocator.create(NodeList) catch return null;
     node_list.* = NodeList.init(global_allocator);

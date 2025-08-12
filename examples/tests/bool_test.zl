@@ -1,0 +1,7 @@
+fun main() >> i32 {
+    bool flag = true;
+    bool another_flag = false;
+    @printf("flag: %d\n", flag);
+    @printf("another_flag: %d\n", another_flag);
+    return 0;
+}
