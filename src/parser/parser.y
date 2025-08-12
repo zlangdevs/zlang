@@ -102,7 +102,6 @@ function_name:
 
 type_name:
     TOKEN_IDENTIFIER { $$ = strdup($1); }
-  | TOKEN_VOID        { $$ = strdup("void"); }
 ;
 
 /* statement list (zero or more statements) */

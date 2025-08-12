@@ -240,6 +240,18 @@ pub const CodeGenerator = struct {
     fn generateStatement(self: *CodeGenerator, stmt: *ast.Node) errors.CodegenError!void {
         switch (stmt.data) {
             .var_decl => |decl| {
+                if (std.mem.eql(u8, decl.type_name, "void")) {
+                    if (decl.initializer != null) {
+                        std.debug.print("Error: void variables cannot be initialized with a value\n", .{});
+                        return errors.CodegenError.TypeMismatch;
+                    }
+                    try self.variables.put(decl.name, VariableInfo{
+                        .value = undefined,
+                        .type_ref = c.LLVMVoidTypeInContext(self.context),
+                    });
+                    return;
+                }
+
                 const var_type = self.getLLVMType(decl.type_name);
 
                 // Allocate space on stack
@@ -412,6 +424,10 @@ pub const CodeGenerator = struct {
                     return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 0, 0);
                 }
                 if (self.variables.get(ident.name)) |var_info| {
+                    if (c.LLVMGetTypeKind(var_info.type_ref) == c.LLVMVoidTypeKind) {
+                        std.debug.print("Error: cannot use void variable '{s}' as a value\n", .{ident.name});
+                        return errors.CodegenError.TypeMismatch;
+                    }
                     return c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load");
                 }
                 return errors.CodegenError.UndefinedVariable;
