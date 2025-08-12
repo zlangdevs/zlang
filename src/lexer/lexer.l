@@ -24,9 +24,6 @@ FLOAT    {DIGIT}+\.{DIGIT}+
 "fun"       { return TOKEN_FUN; }
 "return"    { return TOKEN_RETURN; }
 "void"      { return TOKEN_VOID; }
-"true"      { return TOKEN_TRUE; }
-"false"     { return TOKEN_FALSE; }
-"bool"      { return TOKEN_BOOL; }
 {IDENT}     { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
 {FLOAT}     { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
 {DIGIT}+    { yylval.string = strdup(yytext); return TOKEN_NUMBER; }

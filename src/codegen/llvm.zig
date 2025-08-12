@@ -405,6 +405,17 @@ pub const CodeGenerator = struct {
                 const value = std.fmt.parseInt(i32, num.value, 10) catch 0;
                 return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
             },
+            .identifier => |ident| {
+                if (std.mem.eql(u8, ident.name, "true")) {
+                    return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 1, 0);
+                } else if (std.mem.eql(u8, ident.name, "false")) {
+                    return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 0, 0);
+                }
+                if (self.variables.get(ident.name)) |var_info| {
+                    return c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load");
+                }
+                return errors.CodegenError.UndefinedVariable;
+            },
             else => return self.generateExpression(expr),
         }
     }
@@ -412,6 +423,12 @@ pub const CodeGenerator = struct {
     fn generateExpression(self: *CodeGenerator, expr: *ast.Node) errors.CodegenError!c.LLVMValueRef {
         switch (expr.data) {
             .identifier => |ident| {
+                if (std.mem.eql(u8, ident.name, "true")) {
+                    return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 1, 0);
+                } else if (std.mem.eql(u8, ident.name, "false")) {
+                    return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 0, 0);
+                }
+                
                 if (self.variables.get(ident.name)) |var_info| {
                     return c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load");
                 }
