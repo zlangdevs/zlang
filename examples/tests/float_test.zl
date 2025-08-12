@@ -2,8 +2,11 @@ fun main() >> i32 {
     f16 a = 1.0;
     f32 b = 3.14;
     f64 c = 2.718281828459045;
-    @printf("f16 value: %f\n", a);
+    f32 a_casted = a;
+    f32 c_casted = c;
+    @printf("f16 value: %f\n", a_casted);
     @printf("f32 value: %f\n", b);
     @printf("f64 value: %f\n", c);
+    @printf("f32 value: %f\n", c_casted);
     return 0;
 }
