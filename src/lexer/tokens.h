@@ -8,6 +8,7 @@ typedef enum {
     TOKEN_RETURN,
     TOKEN_VOID,
     TOKEN_IDENTIFIER,
+    TOKEN_FLOAT,
     TOKEN_NUMBER,
     TOKEN_PLUS,
     TOKEN_MINUS,
