@@ -23,7 +23,6 @@ FLOAT    {DIGIT}+\.{DIGIT}+
 "for"       { return TOKEN_FOR; }
 "fun"       { return TOKEN_FUN; }
 "return"    { return TOKEN_RETURN; }
-"void"      { return TOKEN_VOID; }
 {IDENT}     { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
 {FLOAT}     { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
 {DIGIT}+    { yylval.string = strdup(yytext); return TOKEN_NUMBER; }

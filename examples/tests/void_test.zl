@@ -1,0 +1,4 @@
+fun main() >> void {
+    void a;
+    return;
+}
