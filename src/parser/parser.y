@@ -14,6 +14,7 @@ extern void* zig_create_var_decl(const char* type_name, const char* name, void* 
 extern void* zig_create_function_call(const char* name, int is_libc, void* args);
 extern void* zig_create_return_stmt(void* expression);
 extern void* zig_create_identifier(const char* name);
+extern void* zig_create_float_literal(const char* value);
 extern void* zig_create_number_literal(const char* value);
 extern void* zig_create_string_literal(const char* value);
 extern void* zig_create_stmt_list(void);
@@ -40,7 +41,7 @@ void* ast_root = NULL;
 }
 
 /* tokens with semantic values */
-%token <string> TOKEN_IDENTIFIER TOKEN_NUMBER TOKEN_STRING
+%token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING
 
 /* plain tokens (declared before the grammar) */
 %token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID
@@ -174,6 +175,7 @@ arguments:
 expression:
     function_call                { $$ = $1; }
   | TOKEN_IDENTIFIER            { $$ = zig_create_identifier($1); }
+  | TOKEN_FLOAT                 { $$ = zig_create_float_literal($1); }
   | TOKEN_NUMBER                { $$ = zig_create_number_literal($1); }
   | string_literal              {
         $$ = zig_create_string_literal($1);
