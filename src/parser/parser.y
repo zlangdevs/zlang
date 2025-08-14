@@ -13,6 +13,7 @@ extern void* zig_create_function(const char* name, const char* return_type, void
 extern void* zig_create_var_decl(const char* type_name, const char* name, void* initializer);
 extern void* zig_create_function_call(const char* name, int is_libc, void* args);
 extern void* zig_create_return_stmt(void* expression);
+extern void* zig_create_assignment(const char* name, void* value);
 extern void* zig_create_identifier(const char* name);
 extern void* zig_create_float_literal(const char* value);
 extern void* zig_create_number_literal(const char* value);
@@ -53,7 +54,7 @@ void* ast_root = NULL;
 
 /* nonterminals with types */
 %type <node> program function_list function statement_list statement
-%type <node> var_declaration function_call return_statement
+%type <node> var_declaration function_call return_statement assignment
 %type <node> expression argument_list arguments
 %type <string> type_name function_name string_literal
 
@@ -116,8 +117,15 @@ statement_list:
 /* statements end with semicolons */
 statement:
     var_declaration TOKEN_SEMICOLON { $$ = $1; }
+  | assignment TOKEN_SEMICOLON {$$ = $1; }
   | function_call TOKEN_SEMICOLON    { $$ = $1; }
   | return_statement TOKEN_SEMICOLON{ $$ = $1; }
+;
+
+assignment:
+    TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
+        $$ = zig_create_assignment($1, $3);
+    }
 ;
 
 /* var decl: type name (= expr)? */

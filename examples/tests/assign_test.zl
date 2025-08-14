@@ -1,0 +1,7 @@
+fun main()>>i32 {
+    i32 var = 0;
+    @printf("var = %d\n", var);
+    var = 5;
+    @printf("var = %d\n", var);
+    return 0;
+}
