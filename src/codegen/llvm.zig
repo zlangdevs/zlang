@@ -525,23 +525,52 @@ pub const CodeGenerator = struct {
     fn generateBinaryOp(self: *CodeGenerator, binary_op: ast.BinaryOp) errors.CodegenError!c.LLVMValueRef {
         const lhs_value = try self.generateExpression(binary_op.lhs);
         const rhs_value = try self.generateExpression(binary_op.rhs);
+    
         const lhs_type = c.LLVMTypeOf(lhs_value);
         const rhs_type = c.LLVMTypeOf(rhs_value);
-        const is_lhs_float = c.LLVMGetTypeKind(lhs_type) == c.LLVMFloatTypeKind or
-                             c.LLVMGetTypeKind(lhs_type) == c.LLVMDoubleTypeKind;
-        const is_rhs_float = c.LLVMGetTypeKind(rhs_type) == c.LLVMFloatTypeKind or
-                             c.LLVMGetTypeKind(rhs_type) == c.LLVMDoubleTypeKind;
-        const is_float_op = is_lhs_float or is_rhs_float;
-        const result_type = if (is_float_op) c.LLVMDoubleTypeInContext(self.context) else lhs_type;
     
+        const lhs_kind = c.LLVMGetTypeKind(lhs_type);
+        const rhs_kind = c.LLVMGetTypeKind(rhs_type);
+    
+        const is_lhs_float = lhs_kind == c.LLVMFloatTypeKind or
+                             lhs_kind == c.LLVMDoubleTypeKind or
+                             lhs_kind == c.LLVMHalfTypeKind;
+        const is_rhs_float = rhs_kind == c.LLVMFloatTypeKind or
+                             rhs_kind == c.LLVMDoubleTypeKind or
+                             rhs_kind == c.LLVMHalfTypeKind;
+    
+        const is_float_op = is_lhs_float or is_rhs_float;
+        var result_type: c.LLVMTypeRef = undefined;
+        if (is_float_op) {
+            if (lhs_kind == c.LLVMDoubleTypeKind or rhs_kind == c.LLVMDoubleTypeKind) {
+                result_type = c.LLVMDoubleTypeInContext(self.context);
+            } else if (lhs_kind == c.LLVMFloatTypeKind or rhs_kind == c.LLVMFloatTypeKind) {
+                result_type = c.LLVMFloatTypeInContext(self.context);
+            } else {
+                result_type = c.LLVMFloatTypeInContext(self.context);
+            }
+        } else {
+            result_type = lhs_type;
+        }
+        
         var casted_lhs = lhs_value;
         var casted_rhs = rhs_value;
-    
-        if (is_float_op and !is_lhs_float) {
-            casted_lhs = c.LLVMBuildSIToFP(self.builder, lhs_value, result_type, "sitofp");
-        }
-        if (is_float_op and !is_rhs_float) {
-            casted_rhs = c.LLVMBuildSIToFP(self.builder, rhs_value, result_type, "sitofp");
+        
+        if (is_float_op) {
+            if (lhs_kind == c.LLVMIntegerTypeKind) {
+                casted_lhs = c.LLVMBuildSIToFP(self.builder, lhs_value, result_type, "sitofp_lhs");
+            } else if (lhs_kind == c.LLVMHalfTypeKind and result_type != lhs_type) {
+                casted_lhs = c.LLVMBuildFPExt(self.builder, lhs_value, result_type, "fpext_lhs");
+            } else if (lhs_kind == c.LLVMFloatTypeKind and c.LLVMGetTypeKind(result_type) == c.LLVMDoubleTypeKind) {
+                casted_lhs = c.LLVMBuildFPExt(self.builder, lhs_value, result_type, "fpext_lhs");
+            }
+            if (rhs_kind == c.LLVMIntegerTypeKind) {
+                casted_rhs = c.LLVMBuildSIToFP(self.builder, rhs_value, result_type, "sitofp_rhs");
+            } else if (rhs_kind == c.LLVMHalfTypeKind and result_type != rhs_type) {
+                casted_rhs = c.LLVMBuildFPExt(self.builder, rhs_value, result_type, "fpext_rhs");
+            } else if (rhs_kind == c.LLVMFloatTypeKind and c.LLVMGetTypeKind(result_type) == c.LLVMDoubleTypeKind) {
+                casted_rhs = c.LLVMBuildFPExt(self.builder, rhs_value, result_type, "fpext_rhs");
+            }
         }
     
         return switch (binary_op.op) {

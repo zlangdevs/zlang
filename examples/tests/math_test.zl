@@ -19,5 +19,8 @@ fun main() >> i32 {
     f64 f3 = f1 * f2;
     @printf("%f + %f = %f\n", f1, f2, f1+f2);
     @printf("%f * %f = %f\n", f1, f2, f3);
+    f16 f16_ = 1.2;
+    f64 f64_ = 2.1;
+    @printf("f64 + f16 test (should be 3.3): %.1f\n", f64_+f16_);
     return 0;
 }
