@@ -1,7 +1,7 @@
 #!/bin/bash
 
 TEST_DIR="./examples/tests"
-APP="./zig-out/bin/lang"
+APP="./zig-out/bin/zlang"
 FAILED=0
 
 zig build
