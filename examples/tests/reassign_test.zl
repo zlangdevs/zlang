@@ -3,5 +3,8 @@ fun main()>>i32 {
     @printf("var = %d\n", var);
     var = 5;
     @printf("var = %d\n", var);
+    f32 float_val = 14.88;
+    var = float_val;
+    @printf("var = %d\n", var);
     return 0;
 }

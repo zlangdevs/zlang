@@ -248,6 +248,10 @@ pub const CodeGenerator = struct {
                 _ = c.LLVMBuildStore(self.builder, casted_value, var_info.value);
             },
             .var_decl => |decl| {
+                if (self.variables.contains(decl.name)) {
+                    std.debug.print("Error: variable '{s}' is already declared\n", .{decl.name});
+                    return errors.CodegenError.RedeclaredVariable;
+                }
                 if (std.mem.eql(u8, decl.type_name, "void")) {
                     if (decl.initializer != null) {
                         std.debug.print("Error: void variables cannot be initialized with a value\n", .{});
