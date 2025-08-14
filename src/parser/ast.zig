@@ -3,6 +3,7 @@ const std = @import("std");
 pub const NodeType = enum {
     program,
     function,
+    assignment,
     var_decl,
     function_call,
     return_stmt,
@@ -37,6 +38,11 @@ pub const BoolLiteral = struct {
     value: bool,
 };
 
+pub const Assignment = struct {
+    name: []const u8,
+    value: *Node,
+};
+
 pub const VarDecl = struct {
     type_name: []const u8,
     name: []const u8,
@@ -66,6 +72,7 @@ pub const Program = struct {
 pub const NodeData = union(NodeType) {
     program: Program,
     function: Function,
+    assignment: Assignment,
     var_decl: VarDecl,
     function_call: FunctionCall,
     return_stmt: ReturnStmt,
@@ -157,6 +164,10 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
                 const is_stmt_last = i == func.body.items.len - 1;
                 printAST(stmt, indent + 1, is_stmt_last, false);
             }
+        },
+        .assignment => |as| {
+            std.debug.print("➡️  Assignment: \x1b[36m{s}\x1b[0m =\n", .{as.name});
+            printAST(as.value, indent + 1, true, false);
         },
         .var_decl => |decl| {
             if (decl.initializer) |init| {
