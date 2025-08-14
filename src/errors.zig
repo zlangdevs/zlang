@@ -41,6 +41,7 @@ pub const CodegenError = error{
     UndefinedFunction,
     UndefinedVariable,
     OutOfMemory,
+    RedeclaredVariable,
 };
 
 pub const CLIError = error {

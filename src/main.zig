@@ -157,6 +157,7 @@ pub fn main() !u8 {
                 error.UndefinedFunction => "Undefined function called.",
                 error.UndefinedVariable => "Undefined variable used.",
                 error.OutOfMemory => "Out of memory during code generation.",
+                error.RedeclaredVariable => "Variable reinitialization",
                 else => "Unknown code generation error.",
             };
             std.debug.print("Error generating code: {s}\n", .{error_msg});
