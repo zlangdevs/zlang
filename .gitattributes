@@ -1,1 +1,3 @@
-*.zl linguist-language=Zlang
+*.zl linguist-language=zlang
+*.zl linguist-detectable=true
+*.zl linguist-documentation=false
