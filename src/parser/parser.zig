@@ -66,6 +66,25 @@ export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_assignment(name_ptr: [*c]const u8, value_ptr: ?*anyopaque) ?*anyopaque {
+    const name = std.mem.span(name_ptr);
+    const name_copy = global_allocator.dupe(u8, name) catch return null;
+    var value: ?*ast.Node = null;
+    if (value_ptr) |ptr| {
+        value = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
+    } else {
+        return null;
+    }
+    const assignment_data = ast.NodeData{
+        .assignment = ast.Assignment{
+            .name = name_copy,
+            .value = value.?,
+        },
+    };
+    const node = ast.Node.create(global_allocator, assignment_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_create_var_decl(type_name_ptr: [*c]const u8, name_ptr: [*c]const u8, initializer_ptr: ?*anyopaque) ?*anyopaque {
     const type_name = std.mem.span(type_name_ptr);
     const name = std.mem.span(name_ptr);

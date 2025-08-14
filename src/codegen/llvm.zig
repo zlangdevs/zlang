@@ -241,6 +241,12 @@ pub const CodeGenerator = struct {
 
     fn generateStatement(self: *CodeGenerator, stmt: *ast.Node) errors.CodegenError!void {
         switch (stmt.data) {
+            .assignment => |as| {
+                const var_info = self.variables.get(as.name) orelse return errors.CodegenError.UndefinedVariable;
+                const value = try self.generateExpression(as.value);
+                const casted_value = self.castToType(value, var_info.type_ref);
+                _ = c.LLVMBuildStore(self.builder, casted_value, var_info.value);
+            },
             .var_decl => |decl| {
                 if (std.mem.eql(u8, decl.type_name, "void")) {
                     if (decl.initializer != null) {
