@@ -49,7 +49,6 @@ const TokenType = enum(c_int) {
             .minus => "MINUS",
             .assign => "ASSIGN",
             .equal => "EQUAL",
-            //.newline => "NEWLINE",
             .semicolon => "SEMICOLON",
             .lbrace => "LBRACE",
             .rbrace => "RBRACE",
