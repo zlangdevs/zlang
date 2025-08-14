@@ -12,6 +12,13 @@ pub const NodeType = enum {
     number_literal,
     string_literal,
     bool_literal,
+    binary_op,
+};
+
+pub const BinaryOp = struct {
+    op: u8,
+    lhs: *Node,
+    rhs: *Node,
 };
 
 pub const Type = struct {
@@ -81,6 +88,7 @@ pub const NodeData = union(NodeType) {
     number_literal: NumberLiteral,
     string_literal: StringLiteral,
     bool_literal: BoolLiteral,
+    binary_op: BinaryOp,
 };
 
 pub const Node = struct {
@@ -193,6 +201,11 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             } else {
                 std.debug.print("↩️  Return (void)\n", .{});
             }
+        },
+        .binary_op => |binary_op| {
+            std.debug.print("🧮 BinaryOp: \x1b[35m{c}\x1b[0m\n", .{binary_op.op});
+            printAST(binary_op.lhs, indent + 1, false, false);
+            printAST(binary_op.rhs, indent + 1, true, false);
         },
         .identifier => |ident| {
             std.debug.print("🔤 Identifier: \x1b[36m{s}\x1b[0m\n", .{ident.name});

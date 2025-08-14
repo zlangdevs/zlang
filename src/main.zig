@@ -156,6 +156,7 @@ pub fn main() !u8 {
                 error.TypeMismatch => "Type mismatch in code generation.",
                 error.UndefinedFunction => "Undefined function called.",
                 error.UndefinedVariable => "Undefined variable used.",
+                error.UnsupportedOperation => "Unsopported operator used",
                 error.OutOfMemory => "Out of memory during code generation.",
                 error.RedeclaredVariable => "Variable reinitialization",
                 else => "Unknown code generation error.",

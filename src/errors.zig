@@ -40,6 +40,7 @@ pub const CodegenError = error{
     TypeMismatch,
     UndefinedFunction,
     UndefinedVariable,
+    UnsupportedOperation,
     OutOfMemory,
     RedeclaredVariable,
 };

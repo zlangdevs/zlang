@@ -479,6 +479,9 @@ pub const CodeGenerator = struct {
                     "str",
                 );
             },
+            .binary_op => |b| {
+                return self.generateBinaryOp(b);
+            },
             .function_call => |call| {
                 // For libc functions, declare them dynamically
                 const func = if (call.is_libc)
@@ -517,6 +520,20 @@ pub const CodeGenerator = struct {
             },
             else => return errors.CodegenError.TypeMismatch,
         }
+    }
+    
+    fn generateBinaryOp(self: *CodeGenerator, binary_op: ast.BinaryOp) errors.CodegenError!c.LLVMValueRef {
+        const lhs_value = try self.generateExpression(binary_op.lhs);
+        const rhs_value = try self.generateExpression(binary_op.rhs);
+        // Here should be complex logic, but it works for now
+        // const result_type = c.LLVMTypeOf(lhs_value);
+        return switch (binary_op.op) {
+            '+' => c.LLVMBuildAdd(self.builder, lhs_value, rhs_value, "add"),
+            '-' => c.LLVMBuildSub(self.builder, lhs_value, rhs_value, "sub"),
+            '*' => c.LLVMBuildMul(self.builder, lhs_value, rhs_value, "mul"),
+            '/' => c.LLVMBuildSDiv(self.builder, lhs_value, rhs_value, "sdiv"),
+            else => return errors.CodegenError.UnsupportedOperation,
+        };
     }
 
     pub fn writeToFile(self: *CodeGenerator, filename: []const u8) !void {
