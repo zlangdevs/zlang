@@ -525,13 +525,42 @@ pub const CodeGenerator = struct {
     fn generateBinaryOp(self: *CodeGenerator, binary_op: ast.BinaryOp) errors.CodegenError!c.LLVMValueRef {
         const lhs_value = try self.generateExpression(binary_op.lhs);
         const rhs_value = try self.generateExpression(binary_op.rhs);
-        // Here should be complex logic, but it works for now
-        // const result_type = c.LLVMTypeOf(lhs_value);
+        const lhs_type = c.LLVMTypeOf(lhs_value);
+        const rhs_type = c.LLVMTypeOf(rhs_value);
+        const is_lhs_float = c.LLVMGetTypeKind(lhs_type) == c.LLVMFloatTypeKind or
+                             c.LLVMGetTypeKind(lhs_type) == c.LLVMDoubleTypeKind;
+        const is_rhs_float = c.LLVMGetTypeKind(rhs_type) == c.LLVMFloatTypeKind or
+                             c.LLVMGetTypeKind(rhs_type) == c.LLVMDoubleTypeKind;
+        const is_float_op = is_lhs_float or is_rhs_float;
+        const result_type = if (is_float_op) c.LLVMDoubleTypeInContext(self.context) else lhs_type;
+    
+        var casted_lhs = lhs_value;
+        var casted_rhs = rhs_value;
+    
+        if (is_float_op and !is_lhs_float) {
+            casted_lhs = c.LLVMBuildSIToFP(self.builder, lhs_value, result_type, "sitofp");
+        }
+        if (is_float_op and !is_rhs_float) {
+            casted_rhs = c.LLVMBuildSIToFP(self.builder, rhs_value, result_type, "sitofp");
+        }
+    
         return switch (binary_op.op) {
-            '+' => c.LLVMBuildAdd(self.builder, lhs_value, rhs_value, "add"),
-            '-' => c.LLVMBuildSub(self.builder, lhs_value, rhs_value, "sub"),
-            '*' => c.LLVMBuildMul(self.builder, lhs_value, rhs_value, "mul"),
-            '/' => c.LLVMBuildSDiv(self.builder, lhs_value, rhs_value, "sdiv"),
+            '+' => if (is_float_op)
+                c.LLVMBuildFAdd(self.builder, casted_lhs, casted_rhs, "fadd")
+            else
+                c.LLVMBuildAdd(self.builder, casted_lhs, casted_rhs, "add"),
+            '-' => if (is_float_op)
+                c.LLVMBuildFSub(self.builder, casted_lhs, casted_rhs, "fsub")
+            else
+                c.LLVMBuildSub(self.builder, casted_lhs, casted_rhs, "sub"),
+            '*' => if (is_float_op)
+                c.LLVMBuildFMul(self.builder, casted_lhs, casted_rhs, "fmul")
+            else
+                c.LLVMBuildMul(self.builder, casted_lhs, casted_rhs, "mul"),
+            '/' => if (is_float_op)
+                c.LLVMBuildFDiv(self.builder, casted_lhs, casted_rhs, "fdiv")
+            else
+                c.LLVMBuildSDiv(self.builder, casted_lhs, casted_rhs, "sdiv"),
             else => return errors.CodegenError.UnsupportedOperation,
         };
     }

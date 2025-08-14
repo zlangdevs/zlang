@@ -14,5 +14,10 @@ fun main() >> i32 {
     a = a + a;
     @printf("250 +250 = %d\n", a);
     @printf("2 * 2 = %d", 2*2);
+    f32 f1 = 3.14;
+    f32 f2 = 14.88;
+    f64 f3 = f1 * f2;
+    @printf("%f + %f = %f\n", f1, f2, f1+f2);
+    @printf("%f * %f = %f\n", f1, f2, f3);
     return 0;
 }
