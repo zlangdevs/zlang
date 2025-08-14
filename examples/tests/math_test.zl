@@ -1,0 +1,18 @@
+fun main() >> i32 {
+    i32 a = 250;
+    i32 b = 50;
+    i32 sum = a + b;
+    @printf("%d + %d = %d\n", a, b, sum);
+    i32 dif = a - b;
+    @printf("%d - %d = %d\n", a, b, dif);
+    i32 mul = a * b;
+    @printf("%d * %d = %d\n", a, b, mul);
+    i32 div = a / b;
+    @printf("%d / %d = %d\n", a, b, div);
+    i32 br_ = (a+50) / b;
+    @printf("(%d+50) / %d = %d\n", a, b, br_);
+    a = a + a;
+    @printf("250 +250 = %d\n", a);
+    @printf("2 * 2 = %d", 2*2);
+    return 0;
+}
