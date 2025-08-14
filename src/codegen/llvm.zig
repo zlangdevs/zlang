@@ -11,7 +11,6 @@ const c = @cImport({
     @cInclude("llvm-c/ExecutionEngine.h");
 });
 
-// Signature information for libc functions
 const LibcFunctionSignature = struct {
     return_type: LibcType,
     param_types: []const LibcType,
@@ -67,7 +66,6 @@ pub const CodeGenerator = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
-        // Initialize LLVM targets
         _ = c.LLVMInitializeNativeTarget();
         _ = c.LLVMInitializeNativeAsmPrinter();
         _ = c.LLVMInitializeNativeAsmParser();
@@ -136,8 +134,8 @@ pub const CodeGenerator = struct {
             .void_type => c.LLVMVoidTypeInContext(self.context),
             .int_type => c.LLVMInt32TypeInContext(self.context),
             .char_ptr_type => c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0),
-            .size_t_type => c.LLVMInt64TypeInContext(self.context), // Assuming 64-bit system
-            .file_ptr_type => c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0), // FILE* as i8*
+            .size_t_type => c.LLVMInt64TypeInContext(self.context),
+            .file_ptr_type => c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0),
             .long_type => c.LLVMInt64TypeInContext(self.context),
             .double_type => c.LLVMDoubleTypeInContext(self.context),
         };
@@ -178,12 +176,9 @@ pub const CodeGenerator = struct {
     }
 
     fn createGenericLibcFunction(self: *CodeGenerator, func_name: []const u8) !c.LLVMValueRef {
-        // Create a generic varargs function: int function(...)
         const i8_ptr_type = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
-        var generic_args = [_]c.LLVMTypeRef{i8_ptr_type}; // At least one parameter for varargs
-        const function_type = c.LLVMFunctionType(c.LLVMInt32TypeInContext(self.context), // return int
-            &generic_args[0], 1, 1 // varargs = true
-        );
+        var generic_args = [_]c.LLVMTypeRef{i8_ptr_type};
+        const function_type = c.LLVMFunctionType(c.LLVMInt32TypeInContext(self.context), &generic_args[0], 1, 1);
 
         const func_name_z = try self.allocator.dupeZ(u8, func_name);
         defer self.allocator.free(func_name_z);
@@ -197,8 +192,6 @@ pub const CodeGenerator = struct {
     }
 
     pub fn generateCode(self: *CodeGenerator, program: *ast.Node) errors.CodegenError!void {
-        // No longer need to pre-declare functions - they'll be declared on demand
-
         switch (program.data) {
             .program => |prog| {
                 for (prog.functions.items) |func| {
@@ -223,14 +216,11 @@ pub const CodeGenerator = struct {
 
                 self.current_function = llvm_func;
 
-                // Create entry basic block
                 const entry_block = c.LLVMAppendBasicBlockInContext(self.context, llvm_func, "entry");
                 c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
 
-                // Clear variables for new function scope
                 self.variables.clearRetainingCapacity();
 
-                // Generate function body
                 for (func.body.items) |stmt| {
                     try self.generateStatement(stmt);
                 }
@@ -266,7 +256,6 @@ pub const CodeGenerator = struct {
 
                 const var_type = self.getLLVMType(decl.type_name);
 
-                // Allocate space on stack
                 const alloca = c.LLVMBuildAlloca(self.builder, var_type, decl.name.ptr);
 
                 try self.variables.put(decl.name, VariableInfo{
@@ -274,7 +263,6 @@ pub const CodeGenerator = struct {
                     .type_ref = var_type,
                 });
 
-                // Generate initializer if present
                 if (decl.initializer) |initializer| {
                     const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
                     const casted_value = self.castToType(init_value, var_type);
@@ -352,7 +340,6 @@ pub const CodeGenerator = struct {
                         'r' => transformed_string.append('\r') catch return errors.CodegenError.OutOfMemory,
                         '\'' => transformed_string.append('\'') catch return errors.CodegenError.OutOfMemory,
                         '\"' => transformed_string.append('\"') catch return errors.CodegenError.OutOfMemory,
-                        // TODO: add more escape sequence
                         else => {
                             transformed_string.append('\\') catch return errors.CodegenError.OutOfMemory;
                             transformed_string.append(str[i]) catch return errors.CodegenError.OutOfMemory;
@@ -370,23 +357,19 @@ pub const CodeGenerator = struct {
     }
 
     fn prepareArgumentForLibcCall(self: *CodeGenerator, arg_value: c.LLVMValueRef, func_name: []const u8, arg_index: usize) c.LLVMValueRef {
-        // Special handling for known functions that need specific argument types
         if (std.mem.eql(u8, func_name, "printf") or
             std.mem.eql(u8, func_name, "sprintf") or
             std.mem.eql(u8, func_name, "snprintf") or
             std.mem.eql(u8, func_name, "fprintf"))
         {
-            // For printf family functions, ensure integer arguments are i32
-            // and float arguments are promoted to double for varargs
-            if (arg_index > 0) { // Skip format string
+            if (arg_index > 0) {
                 const arg_type = c.LLVMTypeOf(arg_value);
                 const arg_kind = c.LLVMGetTypeKind(arg_type);
 
                 if (arg_kind == c.LLVMIntegerTypeKind) {
                     const i32_type = c.LLVMInt32TypeInContext(self.context);
                     return self.castToType(arg_value, i32_type);
-                } else if (arg_kind == c.LLVMFloatTypeKind) {
-                    // Float arguments must be promoted to double for varargs
+                } else if (arg_kind == c.LLVMFloatTypeKind or arg_kind == c.LLVMHalfTypeKind) {
                     const double_type = c.LLVMDoubleTypeInContext(self.context);
                     return c.LLVMBuildFPExt(self.builder, arg_value, double_type, "fpext");
                 }
@@ -396,13 +379,11 @@ pub const CodeGenerator = struct {
         return arg_value;
     }
 
-    // New function to generate expressions with type context
     fn generateExpressionWithContext(self: *CodeGenerator, expr: *ast.Node, expected_type: ?[]const u8) errors.CodegenError!c.LLVMValueRef {
         switch (expr.data) {
             .float_literal => |float| {
                 const float_val = std.fmt.parseFloat(f64, float.value) catch 0.0;
 
-                // If we have context about expected type, create the appropriate LLVM type
                 if (expected_type) |type_name| {
                     if (std.mem.eql(u8, type_name, "f16")) {
                         return c.LLVMConstReal(c.LLVMHalfTypeInContext(self.context), float_val);
@@ -413,13 +394,27 @@ pub const CodeGenerator = struct {
                     }
                 }
 
-                // Default to double if no specific context
                 return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
             },
             .number_literal => |num| {
-                // Integer literal
-                const value = std.fmt.parseInt(i32, num.value, 10) catch 0;
-                return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
+                if (std.mem.indexOf(u8, num.value, ".") != null) {
+                    const float_val = std.fmt.parseFloat(f64, num.value) catch 0.0;
+
+                    if (expected_type) |type_name| {
+                        if (std.mem.eql(u8, type_name, "f16")) {
+                            return c.LLVMConstReal(c.LLVMHalfTypeInContext(self.context), float_val);
+                        } else if (std.mem.eql(u8, type_name, "f32")) {
+                            return c.LLVMConstReal(c.LLVMFloatTypeInContext(self.context), float_val);
+                        } else if (std.mem.eql(u8, type_name, "f64")) {
+                            return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
+                        }
+                    }
+
+                    return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
+                } else {
+                    const value = std.fmt.parseInt(i32, num.value, 10) catch 0;
+                    return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
+                }
             },
             .identifier => |ident| {
                 if (std.mem.eql(u8, ident.name, "true")) {
@@ -454,14 +449,15 @@ pub const CodeGenerator = struct {
                 }
                 return errors.CodegenError.UndefinedVariable;
             },
+            .float_literal => |float| {
+                const float_val = std.fmt.parseFloat(f64, float.value) catch 0.0;
+                return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
+            },
             .number_literal => |num| {
-                // Check if it's a floating-point number
                 if (std.mem.indexOf(u8, num.value, ".") != null) {
-                    // Floating-point literal - default to double without context
                     const float_val = std.fmt.parseFloat(f64, num.value) catch 0.0;
                     return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
                 } else {
-                    // Integer literal
                     const value = std.fmt.parseInt(i32, num.value, 10) catch 0;
                     return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
                 }
@@ -483,7 +479,6 @@ pub const CodeGenerator = struct {
                 return self.generateBinaryOp(b);
             },
             .function_call => |call| {
-                // For libc functions, declare them dynamically
                 const func = if (call.is_libc)
                     try self.declareLibcFunction(call.name)
                 else
@@ -495,7 +490,6 @@ pub const CodeGenerator = struct {
                 for (call.args.items, 0..) |arg, i| {
                     var arg_value = try self.generateExpression(arg);
 
-                    // Apply argument preparation for libc calls
                     if (call.is_libc) {
                         arg_value = self.prepareArgumentForLibcCall(arg_value, call.name, i);
                     }
@@ -503,7 +497,6 @@ pub const CodeGenerator = struct {
                     try args.append(arg_value);
                 }
 
-                // Check if function returns void
                 const func_type = c.LLVMGlobalGetValueType(func);
                 const return_type = c.LLVMGetReturnType(func_type);
                 const is_void = c.LLVMGetTypeKind(return_type) == c.LLVMVoidTypeKind;
@@ -531,6 +524,13 @@ pub const CodeGenerator = struct {
     
         const lhs_kind = c.LLVMGetTypeKind(lhs_type);
         const rhs_kind = c.LLVMGetTypeKind(rhs_type);
+    
+        if (lhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(lhs_type) == 1) {
+            return errors.CodegenError.TypeMismatch;
+        }
+        if (rhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(rhs_type) == 1) {
+            return errors.CodegenError.TypeMismatch;
+        }
     
         const is_lhs_float = lhs_kind == c.LLVMFloatTypeKind or
                              lhs_kind == c.LLVMDoubleTypeKind or
@@ -611,15 +611,12 @@ pub const CodeGenerator = struct {
     }
 
     pub fn compileToExecutable(self: *CodeGenerator, output_filename: []const u8, arch: []const u8) !void {
-        // First write LLVM IR to temporary file
         const temp_ir_file = "temp_output.ll";
         try self.writeToFile(temp_ir_file);
 
-        // Use system clang to compile LLVM IR to executable
         const output_filename_z = try self.allocator.dupeZ(u8, output_filename);
         defer self.allocator.free(output_filename_z);
 
-        // Prepare clang command
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
@@ -644,7 +641,6 @@ pub const CodeGenerator = struct {
             };
         };
 
-        // Execute clang
         var child = std.process.Child.init(clang_args, arena_alloc);
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
@@ -652,7 +648,6 @@ pub const CodeGenerator = struct {
         try child.spawn();
         const result = try child.wait();
 
-        // Clean up temp file
         std.fs.cwd().deleteFile(temp_ir_file) catch {};
 
         if (result != .Exited or result.Exited != 0) {
