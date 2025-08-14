@@ -13,6 +13,7 @@ extern void* zig_create_function(const char* name, const char* return_type, void
 extern void* zig_create_var_decl(const char* type_name, const char* name, void* initializer);
 extern void* zig_create_function_call(const char* name, int is_libc, void* args);
 extern void* zig_create_return_stmt(void* expression);
+extern void* zig_create_binary_op(char op, void* lhs, void* rhs);
 extern void* zig_create_assignment(const char* name, void* value);
 extern void* zig_create_identifier(const char* name);
 extern void* zig_create_float_literal(const char* value);
@@ -47,15 +48,20 @@ void* ast_root = NULL;
 
 /* plain tokens (declared before the grammar) */
 %token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID
-%token TOKEN_PLUS TOKEN_MINUS TOKEN_ASSIGN TOKEN_EQUAL
+%token TOKEN_ASSIGN TOKEN_EQUAL
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT
-%token TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA
+%token TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE
+
+/* Operator precedence and associativity */
+%left TOKEN_PLUS TOKEN_MINUS
+%left TOKEN_MULTIPLY TOKEN_DIVIDE
+%nonassoc TOKEN_EQUAL
 
 /* nonterminals with types */
 %type <node> program function_list function statement_list statement
 %type <node> var_declaration function_call return_statement assignment
-%type <node> expression argument_list arguments
+%type <node> expression term factor argument_list arguments
 %type <string> type_name function_name string_literal
 
 %start program
@@ -175,20 +181,25 @@ arguments:
     }
 ;
 
-/* expressions:
-   - allow function_call as an expression (important for RHS of var_decl)
-   - then identifiers, numbers, strings
-   (You can later extend with binary/unary ops, parens, etc.)
-*/
 expression:
-    function_call                { $$ = $1; }
-  | TOKEN_IDENTIFIER            { $$ = zig_create_identifier($1); }
-  | TOKEN_FLOAT                 { $$ = zig_create_float_literal($1); }
-  | TOKEN_NUMBER                { $$ = zig_create_number_literal($1); }
-  | string_literal              {
-        $$ = zig_create_string_literal($1);
-        free($1);
-    }
+    term { $$ = $1; }
+  | expression TOKEN_PLUS term { $$ = zig_create_binary_op('+', $1, $3); }
+  | expression TOKEN_MINUS term { $$ = zig_create_binary_op('-', $1, $3); }
+;
+
+term:
+    factor { $$ = $1; }
+  | term TOKEN_MULTIPLY factor { $$ = zig_create_binary_op('*', $1, $3); }
+  | term TOKEN_DIVIDE factor { $$ = zig_create_binary_op('/', $1, $3); }
+;
+
+factor:
+    TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
+  | TOKEN_FLOAT      { $$ = zig_create_float_literal($1); }
+  | TOKEN_NUMBER     { $$ = zig_create_number_literal($1); }
+  | string_literal   { $$ = zig_create_string_literal($1); free($1); }
+  | function_call    { $$ = $1; }
+  | TOKEN_LPAREN expression TOKEN_RPAREN { $$ = $2; }
 ;
 
 /* string literal wrapper */
