@@ -1,4 +1,3 @@
-/* parser.y */
 %{
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +21,7 @@ extern void* zig_create_string_literal(const char* value);
 extern void* zig_create_bool_literal(int value);
 extern void* zig_create_stmt_list(void);
 extern void* zig_create_arg_list(void);
+extern void* zig_create_brainfuck(const char* code); /* New function for Brainfuck */
 extern void zig_add_to_program(void* program, void* function);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
@@ -44,7 +44,7 @@ void* ast_root = NULL;
 }
 
 /* tokens with semantic values */
-%token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING
+%token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING TOKEN_BRAINFUCK
 
 /* plain tokens (declared before the grammar) */
 %token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID
@@ -60,7 +60,7 @@ void* ast_root = NULL;
 
 /* nonterminals with types */
 %type <node> program function_list function statement_list statement
-%type <node> var_declaration function_call return_statement assignment
+%type <node> var_declaration function_call return_statement assignment brainfuck_statement
 %type <node> expression term factor argument_list arguments
 %type <string> type_name function_name string_literal
 
@@ -123,9 +123,18 @@ statement_list:
 /* statements end with semicolons */
 statement:
     var_declaration TOKEN_SEMICOLON { $$ = $1; }
-  | assignment TOKEN_SEMICOLON {$$ = $1; }
-  | function_call TOKEN_SEMICOLON    { $$ = $1; }
-  | return_statement TOKEN_SEMICOLON{ $$ = $1; }
+  | assignment TOKEN_SEMICOLON { $$ = $1; }
+  | function_call TOKEN_SEMICOLON { $$ = $1; }
+  | return_statement TOKEN_SEMICOLON { $$ = $1; }
+  | brainfuck_statement TOKEN_SEMICOLON { $$ = $1; } /* New rule for Brainfuck */
+;
+
+/* Brainfuck statement: brainfuck { code } */
+brainfuck_statement:
+    TOKEN_BRAINFUCK {
+        $$ = zig_create_brainfuck($1);
+        free($1); /* Free the string allocated by the lexer */
+    }
 ;
 
 assignment:
@@ -160,7 +169,7 @@ function_call:
 /* return with optional expression */
 return_statement:
     TOKEN_RETURN expression { $$ = zig_create_return_stmt($2); }
-  | TOKEN_RETURN           { $$ = zig_create_return_stmt(NULL); }
+  | TOKEN_RETURN { $$ = zig_create_return_stmt(NULL); }
 ;
 
 /* argument list (empty or comma-separated) */
@@ -195,10 +204,10 @@ term:
 
 factor:
     TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
-  | TOKEN_FLOAT      { $$ = zig_create_float_literal($1); }
-  | TOKEN_NUMBER     { $$ = zig_create_number_literal($1); }
-  | string_literal   { $$ = zig_create_string_literal($1); free($1); }
-  | function_call    { $$ = $1; }
+  | TOKEN_FLOAT { $$ = zig_create_float_literal($1); }
+  | TOKEN_NUMBER { $$ = zig_create_number_literal($1); }
+  | string_literal { $$ = zig_create_string_literal($1); free($1); }
+  | function_call { $$ = $1; }
   | TOKEN_LPAREN expression TOKEN_RPAREN { $$ = $2; }
 ;
 

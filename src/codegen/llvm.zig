@@ -280,6 +280,9 @@ pub const CodeGenerator = struct {
                     _ = c.LLVMBuildRetVoid(self.builder);
                 }
             },
+            .brainfuck => |bf| {
+                _ = try self.generateBrainfuck(bf);
+            },
             else => {},
         }
     }
@@ -592,6 +595,16 @@ pub const CodeGenerator = struct {
                 c.LLVMBuildSDiv(self.builder, casted_lhs, casted_rhs, "sdiv"),
             else => return errors.CodegenError.UnsupportedOperation,
         };
+    }
+    
+    fn generateBrainfuck(self: *CodeGenerator, bf: ast.Brainfuck) !c.LLVMValueRef {
+        const code_z = try self.allocator.dupeZ(u8, bf.code);
+        defer self.allocator.free(code_z);
+        const string_ptr = c.LLVMBuildGlobalStringPtr(self.builder, code_z.ptr, "bf_str");
+        const puts_func = try self.declareLibcFunction("puts");
+        const puts_type = c.LLVMGlobalGetValueType(puts_func);
+        var args = [_]c.LLVMValueRef{string_ptr};
+        return c.LLVMBuildCall2(self.builder, puts_type, puts_func, &args[0], 1, "");
     }
 
     pub fn writeToFile(self: *CodeGenerator, filename: []const u8) !void {

@@ -274,6 +274,21 @@ export fn zig_add_to_arg_list(list_ptr: ?*anyopaque, arg_ptr: ?*anyopaque) void 
     node_list.items.append(arg_node) catch return;
 }
 
+export fn zig_create_brainfuck(code_ptr: [*c]const u8) ?*anyopaque {
+    const code = std.mem.span(code_ptr);
+    const code_copy = global_allocator.dupe(u8, code) catch return null;
+    const brainfuck_data = ast.NodeData{
+        .brainfuck = ast.Brainfuck{
+            .code = code_copy,
+        },
+    };
+    const node = ast.Node.create(global_allocator, brainfuck_data) catch {
+        global_allocator.free(code_copy);
+        return null;
+    };
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!?*ast.Node {
     global_allocator = allocator;
     ast_root = null;
