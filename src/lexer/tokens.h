@@ -26,6 +26,7 @@ typedef enum {
     TOKEN_AT,
     TOKEN_COMMA,
     TOKEN_STRING,
+    TOKEN_BRAINFUCK,
     TOKEN_EOF = 0
 } TokenType;
 

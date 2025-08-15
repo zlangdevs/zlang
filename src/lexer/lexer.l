@@ -10,6 +10,8 @@ extern YYSTYPE yylval;
 %option reentrant
 %option prefix="zlang_"
 
+%x BRAINFUCK
+
 DIGIT    [0-9]
 LETTER   [a-zA-Z_]
 IDENT    {LETTER}({LETTER}|{DIGIT})*
@@ -23,6 +25,7 @@ FLOAT    {DIGIT}+\.{DIGIT}+
 "for"       { return TOKEN_FOR; }
 "fun"       { return TOKEN_FUN; }
 "return"    { return TOKEN_RETURN; }
+"brainfuck"[ \t\n]*"{" { BEGIN(BRAINFUCK); yylval.string = strdup(""); }
 {IDENT}     { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
 {FLOAT}     { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
 {DIGIT}+    { yylval.string = strdup(yytext); return TOKEN_NUMBER; }
@@ -45,4 +48,10 @@ FLOAT    {DIGIT}+\.{DIGIT}+
 [ \t\n]+    { /* skip spaces */ }
 "??".*      { /* skip single-line comments */ }
 ;           { return TOKEN_SEMICOLON; }
+<BRAINFUCK>[^{}]+ { yylval.string = realloc(yylval.string, strlen(yylval.string) + yyleng + 1);
+                    strcat(yylval.string, yytext); }
+<BRAINFUCK>"{"    { yylval.string = realloc(yylval.string, strlen(yylval.string) + 2);
+                    strcat(yylval.string, "{"); }
+<BRAINFUCK>"}"    { BEGIN(INITIAL); return TOKEN_BRAINFUCK; }
+
 %%

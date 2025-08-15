@@ -1,0 +1,13 @@
+fun main() >> i32 {
+    i32 a = 100;
+    i8 b = 4;
+    brainfuck {
+        ?cell_size 8?
+        ?cell_signed false?
+        ?len 100?
+        ?load a 0?
+        ?load b 4?
+        >>>>[-<->]
+    };
+    return 0;
+}

@@ -13,6 +13,7 @@ pub const NodeType = enum {
     string_literal,
     bool_literal,
     binary_op,
+    brainfuck,
 };
 
 pub const BinaryOp = struct {
@@ -76,6 +77,10 @@ pub const Program = struct {
     functions: std.ArrayList(*Node),
 };
 
+pub const Brainfuck = struct {
+    code: []const u8,
+};
+
 pub const NodeData = union(NodeType) {
     program: Program,
     function: Function,
@@ -89,6 +94,7 @@ pub const NodeData = union(NodeType) {
     string_literal: StringLiteral,
     bool_literal: BoolLiteral,
     binary_op: BinaryOp,
+    brainfuck: Brainfuck,
 };
 
 pub const Node = struct {
@@ -206,6 +212,34 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             std.debug.print("🧮 BinaryOp: \x1b[35m{c}\x1b[0m\n", .{binary_op.op});
             printAST(binary_op.lhs, indent + 1, false, false);
             printAST(binary_op.rhs, indent + 1, true, false);
+        },
+        .brainfuck => |bf| {
+            std.debug.print("🧠 Brainfuck:\n", .{});
+            var lines = std.mem.splitScalar(u8, bf.code, '\n');
+            var line_list = std.ArrayList([]const u8).init(std.heap.page_allocator);
+            defer line_list.deinit();
+            while (lines.next()) |line| {
+                const trimmed = std.mem.trim(u8, line, " \t\r");
+                if (trimmed.len > 0) {
+                    line_list.append(trimmed) catch continue;
+                }
+            }
+            for (line_list.items, 0..) |line, i| {
+                const is_line_last = i == line_list.items.len - 1;
+                printIndent(indent + 1, is_line_last, false);
+                if (std.mem.startsWith(u8, line, "?") and std.mem.endsWith(u8, line, "?")) {
+                    const content = line[1..line.len-1];
+                    if (std.mem.indexOf(u8, content, " ")) |space_idx| {
+                        const key = content[0..space_idx];
+                        const value = content[space_idx+1..];
+                        std.debug.print("\x1b[90m{s}: {s}\x1b[0m\n", .{key, value});
+                    } else {
+                        std.debug.print("\x1b[90m{s}\x1b[0m\n", .{content});
+                    }
+                } else {
+                    std.debug.print("\x1b[35m{s}\x1b[0m\n", .{line});
+                }
+            }
         },
         .identifier => |ident| {
             std.debug.print("🔤 Identifier: \x1b[36m{s}\x1b[0m\n", .{ident.name});
