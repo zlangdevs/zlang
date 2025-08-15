@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../parser/ast.zig");
 const errors = @import("../errors.zig");
+const bfck = @import("bf.zig");
 
 const c = @cImport({
     @cInclude("llvm-c/Core.h");
@@ -598,9 +599,14 @@ pub const CodeGenerator = struct {
     }
     
     fn generateBrainfuck(self: *CodeGenerator, bf: ast.Brainfuck) !c.LLVMValueRef {
-        const code_z = try self.allocator.dupeZ(u8, bf.code);
-        defer self.allocator.free(code_z);
-        const string_ptr = c.LLVMBuildGlobalStringPtr(self.builder, code_z.ptr, "bf_str");
+        const code = try self.allocator.dupeZ(u8, bf.code);
+        const ctx = bfck.ParseBfContext(self.allocator, code);
+        ctx.print();
+        const mem_size = ctx.len * @divTrunc(ctx.cell_size, 8);
+        std.debug.print("Bytes to be allocated: {}\n", .{mem_size});
+        std.debug.print("Code: {s}\n", .{ctx.code});
+        defer self.allocator.free(code);
+        const string_ptr = c.LLVMBuildGlobalStringPtr(self.builder, code.ptr, "bf_str");
         const puts_func = try self.declareLibcFunction("puts");
         const puts_type = c.LLVMGlobalGetValueType(puts_func);
         var args = [_]c.LLVMValueRef{string_ptr};
