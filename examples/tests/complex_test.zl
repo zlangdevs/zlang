@@ -1,18 +1,19 @@
 fun add_numbers() >> i32 {
     i32 a = 10;
     i32 b = 5;
-    return a;
+    return a + b;
 }
 
 fun print_hello() >> void {
     @printf("Hello World!");
     @puts("This is a test");
+    @system("echo 'test of echo'");
     return;
 }
 
 fun main() >> i32 {
     i32 x = 42;
-    i32 y = 7;
+    i8  y = 7;
 
     @printf("Main function started");
     print_hello();
