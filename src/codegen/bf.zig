@@ -11,7 +11,7 @@ const BrainfuckContext = struct {
     len: i32 = 100,
     requests: std.ArrayList(BfLoadRequest),
     code: []const u8,
-    
+
     pub fn print(self: *const BrainfuckContext) void {
         const stdout = std.io.getStdOut().writer();
         stdout.print("🧠 Brainfuck Context 🧠\n", .{}) catch return;
@@ -23,7 +23,7 @@ const BrainfuckContext = struct {
         if (self.requests.items.len > 0) {
             stdout.print("\n📦 Load requests:\n", .{}) catch return;
             for (self.requests.items) |req| {
-                stdout.print("  - 🏷️ '{s}' at index {d}\n", .{req.var_name, req.load_idx}) catch return;
+                stdout.print("  - 🏷️ '{s}' at index {d}\n", .{ req.var_name, req.load_idx }) catch return;
             }
         } else {
             stdout.print("\n📦 No load requests\n", .{}) catch return;
@@ -43,11 +43,13 @@ pub fn ParseBfContext(allocator: std.mem.Allocator, input: []const u8) Brainfuck
         .requests = std.ArrayList(BfLoadRequest).init(allocator),
         .code = "",
     };
-    var lines = std.mem.splitSequence(u8, input, "\n");
-    var current_pos: usize = 0;
-    while (lines.next()) |line| {
-        const line_start = current_pos;
-        current_pos += line.len + 1;
+    var search_pos: usize = 0;
+    while (search_pos < input.len) {
+        const line_start = search_pos;
+        const newline_pos = std.mem.indexOfScalar(u8, input[line_start..], '\n');
+        const line_end = if (newline_pos) |pos| line_start + pos else input.len;
+        const line = input[line_start..line_end];
+        search_pos = line_end + 1;
         const trimmed = std.mem.trim(u8, line, " \t\r");
         if (trimmed.len == 0) continue;
         if (trimmed[0] != '?') {

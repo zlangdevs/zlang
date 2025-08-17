@@ -1,0 +1,52 @@
+fun bf_i16() >> i16 {
+    i16 res = 256;
+    brainfuck {
+        ?load res 0?
+        ?cell_size 16?
+        ->+
+    };
+    return res;
+}
+
+fun bf_subzero() >> i16 {
+    i16 res = 0;
+    brainfuck{
+        ?load res 0?
+        >-
+    };
+    return res;
+}
+
+fun bf_sign() >> i8 {
+    i8 res = 0;
+    brainfuck {
+        ?load res 0?
+        ---
+    };
+    return res;
+}
+
+fun bf_hello() >> void {
+    brainfuck{>++++++++[<+++++++++>-]<.+++++++++++++++++++++++++++++.+++++++..+++.[-]>++++[<+++++++++++>-]<.------------.[-]>+++[<+++++++++++++++++++++++++++
+    ++>-]<.++++++++++++++++++++++++.+++.------.--------.[-]>+++[<+++++++++++>-]<.-----------------------.[-]};return;
+}
+
+fun bf_u32() >> u32 {
+    u32 res = 0;
+    brainfuck{
+        ?cell_size 32?
+        ?load res 0?
+        -
+    };
+    return res;
+}
+
+fun main() >> i32 {
+    @printf("i16 test (should be 255): %d\n", bf_i16());
+    @printf("subzero test (should be 255): %d\n", bf_subzero());
+    @printf("sign test (should be -3): %d\n", bf_sign());
+    @printf("u32 test (should be дохуя): %u\n", bf_u32());
+    @printf("brainfuck hello world:\n");
+    bf_hello();
+    return 0;
+}
