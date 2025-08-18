@@ -2,7 +2,6 @@
 #include "parser.h"
 #include <stdlib.h>
 #include <string.h>
-
 extern YYSTYPE yylval;
 %}
 
@@ -16,7 +15,12 @@ DIGIT    [0-9]
 LETTER   [a-zA-Z_]
 IDENT    {LETTER}({LETTER}|{DIGIT})*
 STRING   \"([^"\\]|\\.)*\"
-FLOAT    {DIGIT}+\.{DIGIT}+
+INTEGER  -?{DIGIT}+
+FLOAT_BASIC  -?{DIGIT}+\.{DIGIT}+
+EXPONENT [eE][+-]?{DIGIT}+
+FLOAT_EXP_INT  -?{DIGIT}+{EXPONENT}
+FLOAT_EXP_DOT  -?{DIGIT}+\.{DIGIT}+{EXPONENT}
+FLOAT_DOT  -?\.{DIGIT}+{EXPONENT}?
 
 %%
 
@@ -27,8 +31,11 @@ FLOAT    {DIGIT}+\.{DIGIT}+
 "return"    { return TOKEN_RETURN; }
 "brainfuck"[ \t\n]*"{" { BEGIN(BRAINFUCK); yylval.string = strdup(""); }
 {IDENT}     { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
-{FLOAT}     { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
-{DIGIT}+    { yylval.string = strdup(yytext); return TOKEN_NUMBER; }
+{FLOAT_EXP_DOT}  { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
+{FLOAT_EXP_INT}  { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
+{FLOAT_DOT}      { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
+{FLOAT_BASIC}    { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
+{INTEGER}        { yylval.string = strdup(yytext); return TOKEN_NUMBER; }
 {STRING}    { yylval.string = strndup(yytext+1, yyleng-2); return TOKEN_STRING; }
 "*"         { return TOKEN_MULTIPLY; }
 "/"         { return TOKEN_DIVIDE; }
@@ -45,13 +52,19 @@ FLOAT    {DIGIT}+\.{DIGIT}+
 "]"         { return TOKEN_RBRACKET; }
 "@"         { return TOKEN_AT; }
 ","         { return TOKEN_COMMA; }
+";"         { return TOKEN_SEMICOLON; }
 [ \t\n]+    { /* skip spaces */ }
 "??".*      { /* skip single-line comments */ }
-;           { return TOKEN_SEMICOLON; }
-<BRAINFUCK>[^{}]+ { yylval.string = realloc(yylval.string, strlen(yylval.string) + yyleng + 1);
-                    strcat(yylval.string, yytext); }
-<BRAINFUCK>"{"    { yylval.string = realloc(yylval.string, strlen(yylval.string) + 2);
-                    strcat(yylval.string, "{"); }
-<BRAINFUCK>"}"    { BEGIN(INITIAL); return TOKEN_BRAINFUCK; }
-
+<BRAINFUCK>[^{}]+ { 
+    yylval.string = realloc(yylval.string, strlen(yylval.string) + yyleng + 1);
+    strcat(yylval.string, yytext); 
+}
+<BRAINFUCK>"{"    { 
+    yylval.string = realloc(yylval.string, strlen(yylval.string) + 2);
+    strcat(yylval.string, "{"); 
+}
+<BRAINFUCK>"}"    { 
+    BEGIN(INITIAL); 
+    return TOKEN_BRAINFUCK; 
+}
 %%
