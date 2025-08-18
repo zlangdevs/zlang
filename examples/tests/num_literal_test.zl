@@ -1,0 +1,11 @@
+fun main() >> i32 {
+    i32 simple  = 2;
+    i32 exp_pos = 2e2;
+    f32 exp_neg = 2e-2;
+    
+    @printf("%d\n", simple);
+    @printf("%d\n", exp_pos);
+    @printf("%f\n", exp_neg);
+    
+    return 0;
+}
