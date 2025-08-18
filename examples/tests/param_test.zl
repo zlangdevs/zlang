@@ -1,0 +1,46 @@
+fun sum(a: i32, b: i32) >> i32 {
+    return a + b;
+}
+
+fun change_val(n: i32) >> i32 { ?? in fact not change val, lol
+    n = 3;
+    return 0;
+}
+
+fun sub_bytes(n: u16) >> u16 {
+    brainfuck{
+        ?load n 0?
+        [->-<]
+    };
+    return n;
+}
+
+fun none(n:u16)>>u16{return n;}
+
+fun lot_of_args(a: i32, b: i32, c: i32, d: i32,
+                e: i32, f: i32, g: i32, h: i32,
+                i: i32, j: i32, k: i32, l: i32,
+                m: i32, n: i32, o: i32, p: i32,
+                q: i32, r: i32, s: i32, t: i32
+                ) >> i32 {
+    i32 sum = a + b + c + d + e + f +
+              g + h + i + j + k + l +
+              m + n + o + p + q + r +
+              s + t;
+    return sum;
+}
+
+fun main() >> i32 {
+    i32 five = 5;
+    @printf("%d\n", sum(2, five));
+    change_val(five); ?? should not change value
+    @printf("%d\n", five);
+    u16 one = 1;
+    ?? for some reason if use just 1 as literal autocast doesn't work
+    @printf("%d\n", sub_bytes(260));
+    @printf("%d\n", none(none(none(none(none(none(none(none(none(none(none(none(none(one))))))))))))));
+    @printf("%d\n", 
+        lot_of_args(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+    );
+    return 0;
+}
