@@ -25,6 +25,7 @@ typedef enum {
     TOKEN_RSHIFT,
     TOKEN_AT,
     TOKEN_COMMA,
+    TOKEN_COLON,
     TOKEN_STRING,
     TOKEN_BRAINFUCK,
     TOKEN_EOF = 0

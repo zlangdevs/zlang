@@ -208,9 +208,17 @@ pub const CodeGenerator = struct {
     fn generateFunction(self: *CodeGenerator, func_node: *ast.Node) errors.CodegenError!void {
         switch (func_node.data) {
             .function => |func| {
+                var param_types = std.ArrayList(c.LLVMTypeRef).init(self.allocator);
+                defer param_types.deinit();
+                for (func.parameters.items) |param| {
+                    try param_types.append(self.getLLVMType(param.type_name));
+                }
                 const return_type = self.getLLVMType(func.return_type);
-                const function_type = c.LLVMFunctionType(return_type, null, 0, 0);
-
+                const function_type = if (param_types.items.len > 0)
+                    c.LLVMFunctionType(return_type, param_types.items.ptr, @intCast(param_types.items.len), 0)
+                else
+                    c.LLVMFunctionType(return_type, null, 0, 0);
+    
                 const func_name_z = self.allocator.dupeZ(u8, func.name) catch return errors.CodegenError.OutOfMemory;
                 defer self.allocator.free(func_name_z);
 
@@ -221,9 +229,22 @@ pub const CodeGenerator = struct {
 
                 const entry_block = c.LLVMAppendBasicBlockInContext(self.context, llvm_func, "entry");
                 c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
-
+    
                 self.variables.clearRetainingCapacity();
-
+    
+                // Add parameters as local variables
+                for (func.parameters.items, 0..) |param, i| {
+                    const param_value = c.LLVMGetParam(llvm_func, @intCast(i));
+                    const param_type = self.getLLVMType(param.type_name);
+                    const alloca = c.LLVMBuildAlloca(self.builder, param_type, param.name.ptr);
+                    _ = c.LLVMBuildStore(self.builder, param_value, alloca);
+                    
+                    try self.variables.put(param.name, VariableInfo{
+                        .value = alloca,
+                        .type_ref = param_type,
+                    });
+                }
+    
                 for (func.body.items) |stmt| {
                     try self.generateStatement(stmt);
                 }

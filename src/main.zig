@@ -120,7 +120,7 @@ pub fn main() !u8 {
         std.debug.print("Error: {s}\n", .{error_msg});
         return 1;
     };
-    std.debug.print("Content of input file: {s}\n", .{input});
+    std.debug.print("Content of input file:\n{s}\n", .{input});
 
     const ast_root = parser.parse(allocator, input) catch |err| {
         const error_msg = switch (err) {

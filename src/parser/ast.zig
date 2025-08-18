@@ -73,9 +73,15 @@ pub const ReturnStmt = struct {
     expression: ?*Node,
 };
 
+pub const Parameter = struct {
+    name: []const u8,
+    type_name: []const u8,
+};
+
 pub const Function = struct {
     name: []const u8,
     return_type: []const u8,
+    parameters: std.ArrayList(Parameter),
     body: std.ArrayList(*Node),
 };
 
@@ -183,7 +189,16 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             }
         },
         .function => |func| {
-            std.debug.print("⚡ Function: \x1b[32m{s}\x1b[0m -> \x1b[33m{s}\x1b[0m ({} statement{s})\n", .{ func.name, func.return_type, func.body.items.len, if (func.body.items.len == 1) @as([]const u8, "") else "s" });
+            if (func.parameters.items.len > 0) {
+                std.debug.print("⚡ Function: \x1b[32m{s}\x1b[0m(", .{func.name});
+                for (func.parameters.items, 0..) |param, i| {
+                    if (i > 0) std.debug.print(", ", .{});
+                    std.debug.print("\x1b[36m{s}\x1b[0m: \x1b[33m{s}\x1b[0m", .{param.name, param.type_name});
+                }
+                std.debug.print(") -> \x1b[33m{s}\x1b[0m ({} statement{s})\n", .{ func.return_type, func.body.items.len, if (func.body.items.len == 1) @as([]const u8, "") else "s" });
+            } else {
+                std.debug.print("⚡ Function: \x1b[32m{s}\x1b[0m() -> \x1b[33m{s}\x1b[0m ({} statement{s})\n", .{ func.name, func.return_type, func.body.items.len, if (func.body.items.len == 1) @as([]const u8, "") else "s" });
+            }
             for (func.body.items, 0..) |stmt, i| {
                 const is_stmt_last = i == func.body.items.len - 1;
                 printAST(stmt, indent + 1, is_stmt_last, false);
