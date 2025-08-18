@@ -36,6 +36,7 @@ const TokenType = enum(c_int) {
     at = 278,
     comma = 279,
     string = 280,
+    colon = 281,
 
     pub fn toString(self: TokenType) []const u8 {
         return switch (self) {
@@ -65,6 +66,7 @@ const TokenType = enum(c_int) {
             .rshift => "RSHIFT",
             .at => "AT",
             .comma => "COMMA",
+            .colon => "COLON",
             .string => "STRING",
         };
     }

@@ -52,6 +52,7 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "]"         { return TOKEN_RBRACKET; }
 "@"         { return TOKEN_AT; }
 ","         { return TOKEN_COMMA; }
+":"         { return TOKEN_COLON; }
 ";"         { return TOKEN_SEMICOLON; }
 [ \t\n]+    { /* skip spaces */ }
 "??".*      { /* skip single-line comments */ }

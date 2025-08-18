@@ -8,7 +8,10 @@ int yydebug = 0;
 
 /* Forward declarations for Zig functions (implemented on Zig side) */
 extern void* zig_create_program(void);
-extern void* zig_create_function(const char* name, const char* return_type, void* body);
+extern void* zig_create_parameter(const char* name, const char* type_name);
+extern void* zig_create_param_list(void);
+extern void zig_add_to_param_list(void* list, void* param);
+extern void* zig_create_function(const char* name, const char* return_type, void* params, void* body);
 extern void* zig_create_var_decl(const char* type_name, const char* name, void* initializer);
 extern void* zig_create_function_call(const char* name, int is_libc, void* args);
 extern void* zig_create_return_stmt(void* expression);
@@ -48,13 +51,14 @@ void* ast_root = NULL;
 %token TOKEN_ASSIGN TOKEN_EQUAL
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT
-%token TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE
+%token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE
 
 %right UMINUS UPLUS
 %left TOKEN_MULTIPLY TOKEN_DIVIDE
 %left TOKEN_PLUS TOKEN_MINUS
 %nonassoc TOKEN_EQUAL
 
+%type <node> parameter_list parameters parameter
 %type <node> program function_list function statement_list statement
 %type <node> var_declaration function_call return_statement assignment brainfuck_statement
 %type <node> expression term factor argument_list arguments
@@ -87,10 +91,34 @@ function_list:
 ;
 
 function:
-    TOKEN_FUN function_name TOKEN_LPAREN TOKEN_RPAREN TOKEN_RSHIFT type_name TOKEN_LBRACE statement_list TOKEN_RBRACE {
-        $$ = zig_create_function($2, $6, $8);
+    TOKEN_FUN function_name TOKEN_LPAREN parameter_list TOKEN_RPAREN TOKEN_RSHIFT type_name TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        $$ = zig_create_function($2, $7, $4, $9);
         free($2);
-        free($6);
+        free($7);
+    }
+;
+
+parameter_list:
+    /* empty */ { $$ = zig_create_param_list(); }
+  | parameters { $$ = $1; }
+;
+
+parameters:
+    parameter {
+        void* list = zig_create_param_list();
+        zig_add_to_param_list(list, $1);
+        $$ = list;
+    }
+  | parameters TOKEN_COMMA parameter {
+        zig_add_to_param_list($1, $3);
+        $$ = $1;
+    }
+;
+
+parameter:
+    TOKEN_IDENTIFIER TOKEN_COLON type_name {
+        $$ = zig_create_parameter($1, $3);
+        free($3);
     }
 ;
 
