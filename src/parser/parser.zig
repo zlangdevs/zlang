@@ -177,6 +177,22 @@ export fn zig_create_identifier(name_ptr: [*c]const u8) ?*anyopaque {
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_unary_op(op: u8, operand_ptr: ?*anyopaque) ?*anyopaque {
+    if (operand_ptr == null) return null;
+
+    const operand = @as(*ast.Node, @ptrFromInt(@intFromPtr(operand_ptr.?)));
+
+    const unary_op_data = ast.NodeData{
+        .unary_op = ast.UnaryOp{
+            .op = op,
+            .operand = operand,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, unary_op_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_create_float_literal(value_ptr: [*c]const u8) ?*anyopaque {
     const value = std.mem.span(value_ptr);
     const value_copy = global_allocator.dupe(u8, value) catch return null;

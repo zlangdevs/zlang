@@ -13,6 +13,7 @@ extern void* zig_create_var_decl(const char* type_name, const char* name, void* 
 extern void* zig_create_function_call(const char* name, int is_libc, void* args);
 extern void* zig_create_return_stmt(void* expression);
 extern void* zig_create_binary_op(char op, void* lhs, void* rhs);
+extern void* zig_create_unary_op(char op, void* operand);
 extern void* zig_create_assignment(const char* name, void* value);
 extern void* zig_create_identifier(const char* name);
 extern void* zig_create_float_literal(const char* value);
@@ -21,7 +22,7 @@ extern void* zig_create_string_literal(const char* value);
 extern void* zig_create_bool_literal(int value);
 extern void* zig_create_stmt_list(void);
 extern void* zig_create_arg_list(void);
-extern void* zig_create_brainfuck(const char* code); /* New function for Brainfuck */
+extern void* zig_create_brainfuck(const char* code);
 extern void zig_add_to_program(void* program, void* function);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
@@ -34,31 +35,26 @@ extern void* current_scanner;
 void* ast_root = NULL;
 %}
 
-/* produce more helpful parse errors */
 %define parse.error verbose
 
-/* semantic value union */
 %union {
     char* string;
     void* node;
 }
 
-/* tokens with semantic values */
 %token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING TOKEN_BRAINFUCK
 
-/* plain tokens (declared before the grammar) */
 %token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID
 %token TOKEN_ASSIGN TOKEN_EQUAL
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT
 %token TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE
 
-/* Operator precedence and associativity */
-%left TOKEN_PLUS TOKEN_MINUS
+%right UMINUS UPLUS
 %left TOKEN_MULTIPLY TOKEN_DIVIDE
+%left TOKEN_PLUS TOKEN_MINUS
 %nonassoc TOKEN_EQUAL
 
-/* nonterminals with types */
 %type <node> program function_list function statement_list statement
 %type <node> var_declaration function_call return_statement assignment brainfuck_statement
 %type <node> expression term factor argument_list arguments
@@ -68,10 +64,8 @@ void* ast_root = NULL;
 
 %%
 
-/* Top-level: empty program or one-or-more functions */
 program:
     /* empty */ {
-        /* make an empty program node for empty files */
         ast_root = zig_create_program();
         $$ = ast_root;
     }
@@ -80,7 +74,6 @@ program:
     }
 ;
 
-/* list of functions (one or more) */
 function_list:
     function {
         if (ast_root == NULL) {
@@ -93,7 +86,6 @@ function_list:
     }
 ;
 
-/* function: fun name() >> type { statements } */
 function:
     TOKEN_FUN function_name TOKEN_LPAREN TOKEN_RPAREN TOKEN_RSHIFT type_name TOKEN_LBRACE statement_list TOKEN_RBRACE {
         $$ = zig_create_function($2, $6, $8);
@@ -102,7 +94,6 @@ function:
     }
 ;
 
-/* helpers for strings */
 function_name:
     TOKEN_IDENTIFIER { $$ = strdup($1); }
 ;
@@ -111,7 +102,6 @@ type_name:
     TOKEN_IDENTIFIER { $$ = strdup($1); }
 ;
 
-/* statement list (zero or more statements) */
 statement_list:
     /* empty */ { $$ = zig_create_stmt_list(); }
   | statement_list statement {
@@ -120,20 +110,18 @@ statement_list:
     }
 ;
 
-/* statements end with semicolons */
 statement:
     var_declaration TOKEN_SEMICOLON { $$ = $1; }
   | assignment TOKEN_SEMICOLON { $$ = $1; }
   | function_call TOKEN_SEMICOLON { $$ = $1; }
   | return_statement TOKEN_SEMICOLON { $$ = $1; }
-  | brainfuck_statement TOKEN_SEMICOLON { $$ = $1; } /* New rule for Brainfuck */
+  | brainfuck_statement TOKEN_SEMICOLON { $$ = $1; }
 ;
 
-/* Brainfuck statement: brainfuck { code } */
 brainfuck_statement:
     TOKEN_BRAINFUCK {
         $$ = zig_create_brainfuck($1);
-        free($1); /* Free the string allocated by the lexer */
+        free($1);
     }
 ;
 
@@ -143,7 +131,6 @@ assignment:
     }
 ;
 
-/* var decl: type name (= expr)? */
 var_declaration:
     type_name TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
         void* initializer = $4;
@@ -156,7 +143,6 @@ var_declaration:
     }
 ;
 
-/* function calls: @ident(...) (libc) or ident(...) */
 function_call:
     TOKEN_AT TOKEN_IDENTIFIER TOKEN_LPAREN argument_list TOKEN_RPAREN {
         $$ = zig_create_function_call($2, 1, $4);
@@ -166,13 +152,11 @@ function_call:
     }
 ;
 
-/* return with optional expression */
 return_statement:
     TOKEN_RETURN expression { $$ = zig_create_return_stmt($2); }
   | TOKEN_RETURN { $$ = zig_create_return_stmt(NULL); }
 ;
 
-/* argument list (empty or comma-separated) */
 argument_list:
     /* empty */ { $$ = zig_create_arg_list(); }
   | arguments { $$ = $1; }
@@ -194,6 +178,8 @@ expression:
     term { $$ = $1; }
   | expression TOKEN_PLUS term { $$ = zig_create_binary_op('+', $1, $3); }
   | expression TOKEN_MINUS term { $$ = zig_create_binary_op('-', $1, $3); }
+  | TOKEN_MINUS expression %prec UMINUS { $$ = zig_create_unary_op('-', $2); }
+  | TOKEN_PLUS expression %prec UPLUS { $$ = zig_create_unary_op('+', $2); }
 ;
 
 term:
@@ -211,7 +197,6 @@ factor:
   | TOKEN_LPAREN expression TOKEN_RPAREN { $$ = $2; }
 ;
 
-/* string literal wrapper */
 string_literal:
     TOKEN_STRING { $$ = strdup($1); }
 ;

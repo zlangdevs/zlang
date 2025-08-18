@@ -485,6 +485,32 @@ pub const CodeGenerator = struct {
                     "str",
                 );
             },
+            .unary_op => |un| {
+                const operand_val = try self.generateExpression(un.operand);
+                const operand_type = c.LLVMTypeOf(operand_val);
+                const type_kind = c.LLVMGetTypeKind(operand_type);
+                switch (un.op) {
+                    '-' => {
+                        switch (type_kind) {
+                            c.LLVMIntegerTypeKind => {
+                                return c.LLVMBuildNeg(self.builder, operand_val, "neg");
+                            },
+                            c.LLVMFloatTypeKind, c.LLVMDoubleTypeKind => {
+                                return c.LLVMBuildFNeg(self.builder, operand_val, "fneg");
+                            },
+                            else => {
+                                return errors.CodegenError.UnsupportedOperation;
+                            },
+                        }
+                    },
+                    '+' => {
+                        return operand_val;
+                    },
+                    else => {
+                        return errors.CodegenError.UnsupportedOperation;
+                    },
+                }
+            },
             .binary_op => |b| {
                 return self.generateBinaryOp(b);
             },
