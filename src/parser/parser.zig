@@ -16,6 +16,16 @@ extern fn fclose(file: ?*anyopaque) c_int;
 export var current_scanner: ?*anyopaque = null;
 extern var ast_root: ?*anyopaque;
 
+const ParameterList = struct {
+    items: std.ArrayList(ast.Parameter),
+
+    fn init(allocator: std.mem.Allocator) ParameterList {
+        return ParameterList{
+            .items = std.ArrayList(ast.Parameter).init(allocator),
+        };
+    }
+};
+
 // Helper struct to manage lists
 const NodeList = struct {
     items: std.ArrayList(*ast.Node),
@@ -41,12 +51,49 @@ export fn zig_create_program() ?*anyopaque {
     return node_ptr;
 }
 
-export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const u8, body_ptr: ?*anyopaque) ?*anyopaque {
+export fn zig_create_parameter(name_ptr: [*c]const u8, type_ptr: [*c]const u8) ?*anyopaque {
+    const name = std.mem.span(name_ptr);
+    const type_name = std.mem.span(type_ptr);
+    
+    const name_copy = global_allocator.dupe(u8, name) catch return null;
+    const type_copy = global_allocator.dupe(u8, type_name) catch return null;
+    
+    const param = global_allocator.create(ast.Parameter) catch return null;
+    param.* = ast.Parameter{
+        .name = name_copy,
+        .type_name = type_copy,
+    };
+    
+    return @as(*anyopaque, @ptrCast(param));
+}
+
+export fn zig_create_param_list() ?*anyopaque {
+    const param_list = global_allocator.create(ParameterList) catch return null;
+    param_list.* = ParameterList.init(global_allocator);
+    return @as(*anyopaque, @ptrCast(param_list));
+}
+
+export fn zig_add_to_param_list(list_ptr: ?*anyopaque, param_ptr: ?*anyopaque) void {
+    if (list_ptr == null or param_ptr == null) return;
+    
+    const param_list = @as(*ParameterList, @ptrFromInt(@intFromPtr(list_ptr.?)));
+    const param = @as(*ast.Parameter, @ptrFromInt(@intFromPtr(param_ptr.?)));
+    
+    param_list.items.append(param.*) catch return;
+}
+
+export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const u8, params_ptr: ?*anyopaque, body_ptr: ?*anyopaque) ?*anyopaque {
     const name = std.mem.span(name_ptr);
     const return_type = std.mem.span(return_type_ptr);
 
     const name_copy = global_allocator.dupe(u8, name) catch return null;
     const return_type_copy = global_allocator.dupe(u8, return_type) catch return null;
+
+    var parameters = std.ArrayList(ast.Parameter).init(global_allocator);
+    if (params_ptr) |ptr| {
+        const param_list = @as(*ParameterList, @ptrFromInt(@intFromPtr(ptr)));
+        parameters = param_list.items;
+    }
 
     var body = std.ArrayList(*ast.Node).init(global_allocator);
     if (body_ptr) |ptr| {
@@ -58,6 +105,7 @@ export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const
         .function = ast.Function{
             .name = name_copy,
             .return_type = return_type_copy,
+            .parameters = parameters,
             .body = body,
         },
     };
