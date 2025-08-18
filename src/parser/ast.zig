@@ -8,6 +8,7 @@ pub const NodeType = enum {
     function_call,
     return_stmt,
     identifier,
+    unary_op,
     float_literal,
     number_literal,
     string_literal,
@@ -28,6 +29,11 @@ pub const Type = struct {
 
 pub const Identifier = struct {
     name: []const u8,
+};
+
+pub const UnaryOp = struct {
+    op: u8,
+    operand: *Node,
 };
 
 pub const FloatLiteral = struct {
@@ -89,6 +95,7 @@ pub const NodeData = union(NodeType) {
     function_call: FunctionCall,
     return_stmt: ReturnStmt,
     identifier: Identifier,
+    unary_op: UnaryOp,
     float_literal: FloatLiteral,
     number_literal: NumberLiteral,
     string_literal: StringLiteral,
@@ -129,6 +136,9 @@ pub const Node = struct {
                     arg.destroy();
                 }
                 call.args.deinit();
+            },
+            .unary_op => |un| {
+                un.operand.destroy();
             },
             .var_decl => |decl| {
                 if (decl.initializer) |init| {
@@ -207,6 +217,10 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             } else {
                 std.debug.print("↩️  Return (void)\n", .{});
             }
+        },
+        .unary_op => |unary_op| {
+            std.debug.print("📐 UnaryOp: \x1b[35m{c}\x1b[0m\n", .{unary_op.op});
+            printAST(unary_op.operand, indent + 1, true, false);
         },
         .binary_op => |binary_op| {
             std.debug.print("🧮 BinaryOp: \x1b[35m{c}\x1b[0m\n", .{binary_op.op});
