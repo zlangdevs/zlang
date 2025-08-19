@@ -527,6 +527,11 @@ pub const CodeGenerator = struct {
                     '+' => {
                         return operand_val;
                     },
+                    '!' => {
+                        const bool_val = self.convertToBool(operand_val);
+                        const true_val = c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 1, 0);
+                        return c.LLVMBuildXor(self.builder, bool_val, true_val, "not");
+                    },
                     else => {
                         return errors.CodegenError.UnsupportedOperation;
                     },
