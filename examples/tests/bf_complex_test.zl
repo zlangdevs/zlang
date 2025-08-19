@@ -58,6 +58,6 @@ fun main() >> i32 {
     @printf("u32 test (should be дохуя): %u\n", bf_u32());
     @printf("brainfuck hello world:\n");
     bf_hello();
-    @printf("ctx parse test (should be 150): %d\n", ctx_parse_test());
+    @printf("ctx parse test (should be -1000): %d\n", ctx_parse_test());
     return 0;
 }
