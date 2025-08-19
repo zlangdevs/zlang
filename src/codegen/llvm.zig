@@ -590,56 +590,65 @@ pub const CodeGenerator = struct {
         const is_rhs_float = rhs_kind == c.LLVMFloatTypeKind or
             rhs_kind == c.LLVMDoubleTypeKind or
             rhs_kind == c.LLVMHalfTypeKind;
-    
-        if (is_lhs_bool or is_rhs_bool) {
+        if (is_lhs_bool and is_rhs_bool) {
             if (comparison.op != '=' and comparison.op != '!') {
                 std.debug.print("Error: boolean values can only be compared for equality/inequality\n", .{});
                 return errors.CodegenError.TypeMismatch;
             }
             
-            const bool_type = c.LLVMInt1TypeInContext(self.context);
-            const casted_lhs = self.castToType(lhs_value, bool_type);
-            const casted_rhs = self.castToType(rhs_value, bool_type);
-            
             return switch (comparison.op) {
-                '=' => c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, casted_lhs, casted_rhs, "icmp_eq"),
-                '!' => c.LLVMBuildICmp(self.builder, c.LLVMIntNE, casted_lhs, casted_rhs, "icmp_ne"),
+                '=' => c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, lhs_value, rhs_value, "icmp_eq"),
+                '!' => c.LLVMBuildICmp(self.builder, c.LLVMIntNE, lhs_value, rhs_value, "icmp_ne"),
                 else => return errors.CodegenError.UnsupportedOperation,
             };
         }
-    
-        const is_float_comp = is_lhs_float or is_rhs_float;
+        var converted_lhs = lhs_value;
+        var converted_rhs = rhs_value;
+        if (is_lhs_bool and !is_rhs_bool) {
+            if (is_rhs_float) {
+                converted_lhs = c.LLVMBuildUIToFP(self.builder, lhs_value, rhs_type, "bool_to_fp");
+            } else {
+                converted_lhs = c.LLVMBuildZExt(self.builder, lhs_value, rhs_type, "bool_to_int");
+            }
+        } else if (is_rhs_bool and !is_lhs_bool) {
+            if (is_lhs_float) {
+                converted_rhs = c.LLVMBuildUIToFP(self.builder, rhs_value, lhs_type, "bool_to_fp");
+            } else {
+                converted_rhs = c.LLVMBuildZExt(self.builder, rhs_value, lhs_type, "bool_to_int");
+            }
+        }
+        const final_lhs_type = c.LLVMTypeOf(converted_lhs);
+        const final_rhs_type = c.LLVMTypeOf(converted_rhs);
+        const final_lhs_kind = c.LLVMGetTypeKind(final_lhs_type);
+        const final_rhs_kind = c.LLVMGetTypeKind(final_rhs_type);
+        const final_is_lhs_float = final_lhs_kind == c.LLVMFloatTypeKind or
+            final_lhs_kind == c.LLVMDoubleTypeKind or
+            final_lhs_kind == c.LLVMHalfTypeKind;
+        const final_is_rhs_float = final_rhs_kind == c.LLVMFloatTypeKind or
+            final_rhs_kind == c.LLVMDoubleTypeKind or
+            final_rhs_kind == c.LLVMHalfTypeKind;
+        const is_float_comp = final_is_lhs_float or final_is_rhs_float;
         var result_type: c.LLVMTypeRef = undefined;
         
         if (is_float_comp) {
-            if (lhs_kind == c.LLVMDoubleTypeKind or rhs_kind == c.LLVMDoubleTypeKind) {
+            if (final_lhs_kind == c.LLVMDoubleTypeKind or final_rhs_kind == c.LLVMDoubleTypeKind) {
                 result_type = c.LLVMDoubleTypeInContext(self.context);
-            } else if (lhs_kind == c.LLVMFloatTypeKind or rhs_kind == c.LLVMFloatTypeKind) {
+            } else if (final_lhs_kind == c.LLVMFloatTypeKind or final_rhs_kind == c.LLVMFloatTypeKind) {
                 result_type = c.LLVMFloatTypeInContext(self.context);
             } else {
                 result_type = c.LLVMFloatTypeInContext(self.context);
             }
         } else {
-            const lhs_width = c.LLVMGetIntTypeWidth(lhs_type);
-            const rhs_width = c.LLVMGetIntTypeWidth(rhs_type);
-            
+            const lhs_width = c.LLVMGetIntTypeWidth(final_lhs_type);
+            const rhs_width = c.LLVMGetIntTypeWidth(final_rhs_type);
             if (lhs_width >= rhs_width) {
-                result_type = lhs_type;
+                result_type = final_lhs_type;
             } else {
-                result_type = rhs_type;
+                result_type = final_rhs_type;
             }
         }
-    
-        const casted_lhs = if (is_float_comp) 
-            self.castToType(lhs_value, result_type)
-        else
-            self.castToType(lhs_value, result_type);
-            
-        const casted_rhs = if (is_float_comp)
-            self.castToType(rhs_value, result_type)
-        else
-            self.castToType(rhs_value, result_type);
-    
+        const casted_lhs = self.castToType(converted_lhs, result_type);
+        const casted_rhs = self.castToType(converted_rhs, result_type);
         return switch (comparison.op) {
             '=' => {
                 if (is_float_comp) {
@@ -697,11 +706,13 @@ pub const CodeGenerator = struct {
         const lhs_kind = c.LLVMGetTypeKind(lhs_type);
         const rhs_kind = c.LLVMGetTypeKind(rhs_type);
 
-        if (lhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(lhs_type) == 1) {
-            return errors.CodegenError.TypeMismatch;
-        }
-        if (rhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(rhs_type) == 1) {
-            return errors.CodegenError.TypeMismatch;
+        if (binary_op.op != '&' and binary_op.op != '|') {
+            if (lhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(lhs_type) == 1) {
+                return errors.CodegenError.TypeMismatch;
+            }
+            if (rhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(rhs_type) == 1) {
+                return errors.CodegenError.TypeMismatch;
+            }
         }
 
         const is_lhs_float = lhs_kind == c.LLVMFloatTypeKind or
@@ -762,10 +773,79 @@ pub const CodeGenerator = struct {
                 c.LLVMBuildFDiv(self.builder, casted_lhs, casted_rhs, "fdiv")
             else
                 c.LLVMBuildSDiv(self.builder, casted_lhs, casted_rhs, "sdiv"),
+            '&' =>
+                return self.generateLogicalAnd(binary_op.lhs, binary_op.rhs),
+            '|' =>
+                return self.generateLogicalOr(binary_op.lhs, binary_op.rhs),
             else => return errors.CodegenError.UnsupportedOperation,
         };
     }
-
+    
+    fn generateLogicalAnd(self: *CodeGenerator, lhs_expr: *ast.Node, rhs_expr: *ast.Node) errors.CodegenError!c.LLVMValueRef {
+        const current_function = self.current_function orelse return errors.CodegenError.TypeMismatch;
+        const rhs_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "and_rhs");
+        const merge_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "and_merge");
+        const lhs_value = try self.generateExpression(lhs_expr);
+        const lhs_bool = self.convertToBool(lhs_value);
+        _ = c.LLVMBuildCondBr(self.builder, lhs_bool, rhs_bb, merge_bb);
+        c.LLVMPositionBuilderAtEnd(self.builder, rhs_bb);
+        const rhs_value = try self.generateExpression(rhs_expr);
+        const rhs_bool = self.convertToBool(rhs_value);
+        _ = c.LLVMBuildBr(self.builder, merge_bb);
+        const rhs_end_bb = c.LLVMGetInsertBlock(self.builder);
+        c.LLVMPositionBuilderAtEnd(self.builder, merge_bb);
+        const bool_type = c.LLVMInt1TypeInContext(self.context);
+        const phi = c.LLVMBuildPhi(self.builder, bool_type, "and_result");
+        const false_val = c.LLVMConstInt(bool_type, 0, 0);
+        var phi_vals = [_]c.LLVMValueRef{ false_val, rhs_bool };
+        var phi_blocks = [_]c.LLVMBasicBlockRef{ c.LLVMGetPreviousBasicBlock(rhs_bb).?, rhs_end_bb };
+        c.LLVMAddIncoming(phi, &phi_vals[0], &phi_blocks[0], 2);
+        return phi;
+    }
+    
+    fn generateLogicalOr(self: *CodeGenerator, lhs_expr: *ast.Node, rhs_expr: *ast.Node) errors.CodegenError!c.LLVMValueRef {
+        const current_function = self.current_function orelse return errors.CodegenError.TypeMismatch;
+        const rhs_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "or_rhs");
+        const merge_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "or_merge");
+        const lhs_value = try self.generateExpression(lhs_expr);
+        const lhs_bool = self.convertToBool(lhs_value);
+        _ = c.LLVMBuildCondBr(self.builder, lhs_bool, merge_bb, rhs_bb);
+        c.LLVMPositionBuilderAtEnd(self.builder, rhs_bb);
+        const rhs_value = try self.generateExpression(rhs_expr);
+        const rhs_bool = self.convertToBool(rhs_value);
+        _ = c.LLVMBuildBr(self.builder, merge_bb);
+        const rhs_end_bb = c.LLVMGetInsertBlock(self.builder);
+        c.LLVMPositionBuilderAtEnd(self.builder, merge_bb);
+        const bool_type = c.LLVMInt1TypeInContext(self.context);
+        const phi = c.LLVMBuildPhi(self.builder, bool_type, "or_result");
+        const true_val = c.LLVMConstInt(bool_type, 1, 0);
+        var phi_vals = [_]c.LLVMValueRef{ true_val, rhs_bool };
+        var phi_blocks = [_]c.LLVMBasicBlockRef{ c.LLVMGetPreviousBasicBlock(rhs_bb).?, rhs_end_bb };
+        c.LLVMAddIncoming(phi, &phi_vals[0], &phi_blocks[0], 2);
+        return phi;
+    }
+    
+    fn convertToBool(self: *CodeGenerator, value: c.LLVMValueRef) c.LLVMValueRef {
+        const value_type = c.LLVMTypeOf(value);
+        const type_kind = c.LLVMGetTypeKind(value_type);
+        if (type_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(value_type) == 1) {
+            return value;
+        }
+        if (type_kind == c.LLVMIntegerTypeKind) {
+            const zero = c.LLVMConstInt(value_type, 0, 0);
+            return c.LLVMBuildICmp(self.builder, c.LLVMIntNE, value, zero, "tobool");
+        }
+        if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind) {
+            const zero = c.LLVMConstReal(value_type, 0.0);
+            return c.LLVMBuildFCmp(self.builder, c.LLVMRealONE, value, zero, "tobool");
+        }
+        if (type_kind == c.LLVMPointerTypeKind) {
+            const null_ptr = c.LLVMConstNull(value_type);
+            return c.LLVMBuildICmp(self.builder, c.LLVMIntNE, value, null_ptr, "tobool");
+        }
+        return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 1, 0);
+    }
+    
     fn generateBrainfuck(self: *CodeGenerator, bf: ast.Brainfuck) !c.LLVMValueRef {
         var ctx = bfck.ParseBfContext(self.allocator, bf.code);
         defer ctx.requests.deinit();

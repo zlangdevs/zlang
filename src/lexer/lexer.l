@@ -37,6 +37,8 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 {FLOAT_BASIC}    { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
 {INTEGER}        { yylval.string = strdup(yytext); return TOKEN_NUMBER; }
 {STRING}    { yylval.string = strndup(yytext+1, yyleng-2); return TOKEN_STRING; }
+"&&"        { return TOKEN_AND; }
+"||"        { return TOKEN_OR; }
 "*"         { return TOKEN_MULTIPLY; }
 "/"         { return TOKEN_DIVIDE; }
 "+"         { return TOKEN_PLUS; }

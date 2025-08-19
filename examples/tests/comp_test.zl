@@ -5,6 +5,8 @@ fun main() >> i32 {
     bool scomp = -5 > -20;
     bool eqg = 1 >= 1;
     bool non = -500 != 200;
-    @printf("Should be only ones: %d%d%d%d%d%d\n", eq, not_eq, fcomp, scomp, eqg, non);
+    bool and = true && true;
+    bool or = true || false;
+    @printf("Should be only ones: %d%d%d%d%d%d%d%d\n", eq, not_eq, fcomp, scomp, eqg, non, and, or);
     return 0;
 }

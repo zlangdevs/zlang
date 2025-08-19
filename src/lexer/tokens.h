@@ -33,6 +33,8 @@ typedef enum {
     TOKEN_EQ_LESS,
     TOKEN_EQ_GREATER,
     TOKEN_NON_EQUAL,
+    TOKEN_AND,
+    TOKEN_OR,
     TOKEN_EOF = 0
 } TokenType;
 
