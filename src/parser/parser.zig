@@ -114,6 +114,22 @@ export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_comparison(op: u8, lhs_ptr: *anyopaque, rhs_ptr: *anyopaque) ?*anyopaque {
+    const lhs = @as(*ast.Node, @ptrFromInt(@intFromPtr(lhs_ptr)));
+    const rhs = @as(*ast.Node, @ptrFromInt(@intFromPtr(rhs_ptr)));
+    
+    const comp_data = ast.NodeData{
+        .comparison = ast.Comparison{
+            .op = op,
+            .lhs = lhs,
+            .rhs = rhs,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, comp_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_create_binary_op(op: u8, lhs_ptr: *anyopaque, rhs_ptr: *anyopaque) ?*anyopaque {
     const lhs = @as(*ast.Node, @ptrFromInt(@intFromPtr(lhs_ptr)));
     const rhs = @as(*ast.Node, @ptrFromInt(@intFromPtr(rhs_ptr)));

@@ -532,6 +532,9 @@ pub const CodeGenerator = struct {
                     },
                 }
             },
+            .comparison => |comp| {
+                return self.generateComparison(comp);
+            },
             .binary_op => |b| {
                 return self.generateBinaryOp(b);
             },
@@ -571,7 +574,128 @@ pub const CodeGenerator = struct {
             else => return errors.CodegenError.TypeMismatch,
         }
     }
-
+    
+    fn generateComparison(self: *CodeGenerator, comparison: ast.Comparison) errors.CodegenError!c.LLVMValueRef {
+        const lhs_value = try self.generateExpression(comparison.lhs);
+        const rhs_value = try self.generateExpression(comparison.rhs);
+    
+        const lhs_type = c.LLVMTypeOf(lhs_value);
+        const rhs_type = c.LLVMTypeOf(rhs_value);
+    
+        const lhs_kind = c.LLVMGetTypeKind(lhs_type);
+        const rhs_kind = c.LLVMGetTypeKind(rhs_type);
+    
+        // Проверяем типы операндов
+        const is_lhs_bool = lhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(lhs_type) == 1;
+        const is_rhs_bool = rhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(rhs_type) == 1;
+        const is_lhs_float = lhs_kind == c.LLVMFloatTypeKind or
+            lhs_kind == c.LLVMDoubleTypeKind or
+            lhs_kind == c.LLVMHalfTypeKind;
+        const is_rhs_float = rhs_kind == c.LLVMFloatTypeKind or
+            rhs_kind == c.LLVMDoubleTypeKind or
+            rhs_kind == c.LLVMHalfTypeKind;
+    
+        // Булевы значения можно сравнивать только на равенство/неравенство
+        if (is_lhs_bool or is_rhs_bool) {
+            if (comparison.op != '=' and comparison.op != '!') {
+                std.debug.print("Error: boolean values can only be compared for equality/inequality\n", .{});
+                return errors.CodegenError.TypeMismatch;
+            }
+            
+            // Приводим оба операнда к булевому типу
+            const bool_type = c.LLVMInt1TypeInContext(self.context);
+            const casted_lhs = self.castToType(lhs_value, bool_type);
+            const casted_rhs = self.castToType(rhs_value, bool_type);
+            
+            return switch (comparison.op) {
+                '=' => c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, casted_lhs, casted_rhs, "icmp_eq"),
+                '!' => c.LLVMBuildICmp(self.builder, c.LLVMIntNE, casted_lhs, casted_rhs, "icmp_ne"),
+                else => return errors.CodegenError.UnsupportedOperation,
+            };
+        }
+    
+        const is_float_comp = is_lhs_float or is_rhs_float;
+        var result_type: c.LLVMTypeRef = undefined;
+        
+        if (is_float_comp) {
+            if (lhs_kind == c.LLVMDoubleTypeKind or rhs_kind == c.LLVMDoubleTypeKind) {
+                result_type = c.LLVMDoubleTypeInContext(self.context);
+            } else if (lhs_kind == c.LLVMFloatTypeKind or rhs_kind == c.LLVMFloatTypeKind) {
+                result_type = c.LLVMFloatTypeInContext(self.context);
+            } else {
+                result_type = c.LLVMFloatTypeInContext(self.context);
+            }
+        } else {
+            // Для целых чисел определяем общий тип
+            const lhs_width = c.LLVMGetIntTypeWidth(lhs_type);
+            const rhs_width = c.LLVMGetIntTypeWidth(rhs_type);
+            
+            if (lhs_width >= rhs_width) {
+                result_type = lhs_type;
+            } else {
+                result_type = rhs_type;
+            }
+        }
+    
+        // Приведение типов для сравнения используя вашу функцию castToType
+        const casted_lhs = if (is_float_comp) 
+            self.castToType(lhs_value, result_type)
+        else
+            self.castToType(lhs_value, result_type);
+            
+        const casted_rhs = if (is_float_comp)
+            self.castToType(rhs_value, result_type)
+        else
+            self.castToType(rhs_value, result_type);
+    
+        // Генерация сравнений
+        return switch (comparison.op) {
+            '=' => { // ==
+                if (is_float_comp) {
+                    return c.LLVMBuildFCmp(self.builder, c.LLVMRealOEQ, casted_lhs, casted_rhs, "fcmp_eq");
+                } else {
+                    return c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, casted_lhs, casted_rhs, "icmp_eq");
+                }
+            },
+            '!' => { // !=
+                if (is_float_comp) {
+                    return c.LLVMBuildFCmp(self.builder, c.LLVMRealONE, casted_lhs, casted_rhs, "fcmp_ne");
+                } else {
+                    return c.LLVMBuildICmp(self.builder, c.LLVMIntNE, casted_lhs, casted_rhs, "icmp_ne");
+                }
+            },
+            '<' => { // <
+                if (is_float_comp) {
+                    return c.LLVMBuildFCmp(self.builder, c.LLVMRealOLT, casted_lhs, casted_rhs, "fcmp_lt");
+                } else {
+                    return c.LLVMBuildICmp(self.builder, c.LLVMIntSLT, casted_lhs, casted_rhs, "icmp_lt");
+                }
+            },
+            '>' => { // >
+                if (is_float_comp) {
+                    return c.LLVMBuildFCmp(self.builder, c.LLVMRealOGT, casted_lhs, casted_rhs, "fcmp_gt");
+                } else {
+                    return c.LLVMBuildICmp(self.builder, c.LLVMIntSGT, casted_lhs, casted_rhs, "icmp_gt");
+                }
+            },
+            'L' => { // <=
+                if (is_float_comp) {
+                    return c.LLVMBuildFCmp(self.builder, c.LLVMRealOLE, casted_lhs, casted_rhs, "fcmp_le");
+                } else {
+                    return c.LLVMBuildICmp(self.builder, c.LLVMIntSLE, casted_lhs, casted_rhs, "icmp_le");
+                }
+            },
+            'G' => { // >=
+                if (is_float_comp) {
+                    return c.LLVMBuildFCmp(self.builder, c.LLVMRealOGE, casted_lhs, casted_rhs, "fcmp_ge");
+                } else {
+                    return c.LLVMBuildICmp(self.builder, c.LLVMIntSGE, casted_lhs, casted_rhs, "icmp_ge");
+                }
+            },
+            else => return errors.CodegenError.UnsupportedOperation,
+        };
+    }
+    
     fn generateBinaryOp(self: *CodeGenerator, binary_op: ast.BinaryOp) errors.CodegenError!c.LLVMValueRef {
         const lhs_value = try self.generateExpression(binary_op.lhs);
         const rhs_value = try self.generateExpression(binary_op.rhs);

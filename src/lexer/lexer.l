@@ -41,8 +41,13 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "/"         { return TOKEN_DIVIDE; }
 "+"         { return TOKEN_PLUS; }
 "-"         { return TOKEN_MINUS; }
-"="         { return TOKEN_ASSIGN; }
+"<="        { return TOKEN_EQ_LESS; }
+">="        { return TOKEN_EQ_GREATER; }
+"!="        { return TOKEN_NON_EQUAL; }
 "=="        { return TOKEN_EQUAL; }
+"<"         { return TOKEN_LESS; }
+">"         { return TOKEN_GREATER; }
+"="         { return TOKEN_ASSIGN; }
 ">>"        { return TOKEN_RSHIFT; }
 "{"         { return TOKEN_LBRACE; }
 "}"         { return TOKEN_RBRACE; }

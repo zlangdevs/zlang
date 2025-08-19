@@ -1,0 +1,6 @@
+fun main() >> i32 {
+    bool eq = 5 == 5;
+    bool not_eq = true != false;
+    @printf("%d%d\n", eq, not_eq);
+    return 0;
+}

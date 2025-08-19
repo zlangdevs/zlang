@@ -37,7 +37,12 @@ const TokenType = enum(c_int) {
     comma = 279,
     string = 280,
     colon = 281,
-
+    less = 282,
+    greater = 283,
+    eq_less = 284,
+    eq_greater = 285,
+    non_equal = 286,
+    
     pub fn toString(self: TokenType) []const u8 {
         return switch (self) {
             .eof => "EOF",
@@ -68,6 +73,11 @@ const TokenType = enum(c_int) {
             .comma => "COMMA",
             .colon => "COLON",
             .string => "STRING",
+            .less => "LESS",
+            .greater => "GREATER",
+            .eq_less => "EQ_LESS",
+            .eq_greater => "EQ_GREATER",
+            .non_equal => "NON_EQ",
         };
     }
 };
