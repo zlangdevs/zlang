@@ -56,11 +56,27 @@ pub fn ParseBfContext(allocator: std.mem.Allocator, input: []const u8) Brainfuck
             ctx.code = std.mem.trim(u8, input[line_start..], " \t\r\n");
             break;
         }
-        if (trimmed.len >= 2 and trimmed[0] == '?' and trimmed[trimmed.len - 1] == '?') {
-            const content = trimmed[1 .. trimmed.len - 1];
+        var line_pos: usize = 0;
+        while (line_pos < trimmed.len) {
+            const directive_start = std.mem.indexOfScalarPos(u8, trimmed, line_pos, '?');
+            if (directive_start == null) break;
+            const start_pos = directive_start.?;
+            if (start_pos >= trimmed.len) break;
+            const directive_end = std.mem.indexOfScalarPos(u8, trimmed, start_pos + 1, '?');
+            if (directive_end == null) break;
+            
+            const end_pos = directive_end.?;
+            if (end_pos <= start_pos + 1) {
+                line_pos = end_pos + 1;
+                continue;
+            }
+            const content = trimmed[start_pos + 1..end_pos];
             const content_trimmed = std.mem.trim(u8, content, " \t");
             var parts = std.mem.splitSequence(u8, content_trimmed, " ");
-            const arg_name = parts.next() orelse continue;
+            const arg_name = parts.next() orelse {
+                line_pos = end_pos + 1;
+                continue;
+            };
             const arg_value = parts.rest();
             const arg_value_trimmed = std.mem.trim(u8, arg_value, " \t");
             if (std.mem.eql(u8, arg_name, "cell_size")) {
@@ -71,15 +87,22 @@ pub fn ParseBfContext(allocator: std.mem.Allocator, input: []const u8) Brainfuck
                 ctx.len = std.fmt.parseInt(i32, arg_value_trimmed, 10) catch ctx.len;
             } else if (std.mem.eql(u8, arg_name, "load")) {
                 var load_parts = std.mem.splitSequence(u8, arg_value_trimmed, " ");
-                const var_name = load_parts.next() orelse continue;
-                const load_idx_str = load_parts.next() orelse continue;
+                const var_name = load_parts.next() orelse {
+                    line_pos = end_pos + 1;
+                    continue;
+                };
+                const load_idx_str = load_parts.next() orelse {
+                    line_pos = end_pos + 1;
+                    continue;
+                };
                 if (std.fmt.parseInt(i32, std.mem.trim(u8, load_idx_str, " \t"), 10)) |load_idx| {
                     ctx.requests.append(.{
                         .var_name = var_name,
                         .load_idx = load_idx,
-                    }) catch continue;
+                    }) catch {};
                 } else |_| {}
             }
+            line_pos = end_pos + 1;
         }
     }
     return ctx;
