@@ -787,6 +787,7 @@ pub const CodeGenerator = struct {
         const merge_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "and_merge");
         const lhs_value = try self.generateExpression(lhs_expr);
         const lhs_bool = self.convertToBool(lhs_value);
+        const lhs_bb = c.LLVMGetInsertBlock(self.builder);
         _ = c.LLVMBuildCondBr(self.builder, lhs_bool, rhs_bb, merge_bb);
         c.LLVMPositionBuilderAtEnd(self.builder, rhs_bb);
         const rhs_value = try self.generateExpression(rhs_expr);
@@ -798,7 +799,7 @@ pub const CodeGenerator = struct {
         const phi = c.LLVMBuildPhi(self.builder, bool_type, "and_result");
         const false_val = c.LLVMConstInt(bool_type, 0, 0);
         var phi_vals = [_]c.LLVMValueRef{ false_val, rhs_bool };
-        var phi_blocks = [_]c.LLVMBasicBlockRef{ c.LLVMGetPreviousBasicBlock(rhs_bb).?, rhs_end_bb };
+        var phi_blocks = [_]c.LLVMBasicBlockRef{ lhs_bb, rhs_end_bb };
         c.LLVMAddIncoming(phi, &phi_vals[0], &phi_blocks[0], 2);
         return phi;
     }
@@ -809,6 +810,7 @@ pub const CodeGenerator = struct {
         const merge_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "or_merge");
         const lhs_value = try self.generateExpression(lhs_expr);
         const lhs_bool = self.convertToBool(lhs_value);
+        const lhs_bb = c.LLVMGetInsertBlock(self.builder);
         _ = c.LLVMBuildCondBr(self.builder, lhs_bool, merge_bb, rhs_bb);
         c.LLVMPositionBuilderAtEnd(self.builder, rhs_bb);
         const rhs_value = try self.generateExpression(rhs_expr);
@@ -820,7 +822,7 @@ pub const CodeGenerator = struct {
         const phi = c.LLVMBuildPhi(self.builder, bool_type, "or_result");
         const true_val = c.LLVMConstInt(bool_type, 1, 0);
         var phi_vals = [_]c.LLVMValueRef{ true_val, rhs_bool };
-        var phi_blocks = [_]c.LLVMBasicBlockRef{ c.LLVMGetPreviousBasicBlock(rhs_bb).?, rhs_end_bb };
+        var phi_blocks = [_]c.LLVMBasicBlockRef{ lhs_bb, rhs_end_bb };
         c.LLVMAddIncoming(phi, &phi_vals[0], &phi_blocks[0], 2);
         return phi;
     }
