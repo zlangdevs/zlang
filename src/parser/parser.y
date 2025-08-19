@@ -52,13 +52,13 @@ void* ast_root = NULL;
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT
-%token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_AND TOKEN_OR
+%token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_AND TOKEN_OR TOKEN_NOT
 
 %left TOKEN_EQUAL TOKEN_NON_EQUAL
 %left TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %left TOKEN_PLUS TOKEN_MINUS
 %left TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_AND TOKEN_OR
-%right UMINUS UPLUS
+%right NOT UMINUS UPLUS
 
 %type <node> parameter_list parameters parameter
 %type <node> program function_list function statement_list statement
@@ -208,6 +208,7 @@ expression:
     term { $$ = $1; }
   | expression TOKEN_PLUS term { $$ = zig_create_binary_op('+', $1, $3); }
   | expression TOKEN_MINUS term { $$ = zig_create_binary_op('-', $1, $3); }
+  | TOKEN_NOT expression %prec NOT { $$ = zig_create_unary_op('!', $2); }
   | TOKEN_MINUS expression %prec UMINUS { $$ = zig_create_unary_op('-', $2); }
   | TOKEN_PLUS expression %prec UPLUS { $$ = zig_create_unary_op('+', $2); }
   | expression TOKEN_EQUAL expression { $$ = zig_create_comparison('=', $1, $3); }

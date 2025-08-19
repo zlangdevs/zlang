@@ -9,5 +9,12 @@ fun main() >> i32 {
     bool or = true || false;
     bool complex = ((1&&0.5)||(false||true||false)) && ((false||.5>.0)&&(true&&500>0));
     @printf("Should be only ones: %d%d%d%d%d%d%d%d%d\n", eq, not_eq, fcomp, scomp, eqg, non, and, or,complex);
+    
+    bool a = !true;
+    bool b = !false;
+    bool c = !(1 > 0);
+    bool d = !0;
+    
+    @printf("Should be 0101: %d%d%d%d\n", a, b, c ,d);
     return 0;
 }
