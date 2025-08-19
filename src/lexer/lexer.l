@@ -49,6 +49,7 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "=="        { return TOKEN_EQUAL; }
 "<"         { return TOKEN_LESS; }
 ">"         { return TOKEN_GREATER; }
+"!"         { return TOKEN_NOT; }
 "="         { return TOKEN_ASSIGN; }
 ">>"        { return TOKEN_RSHIFT; }
 "{"         { return TOKEN_LBRACE; }
