@@ -578,14 +578,10 @@ pub const CodeGenerator = struct {
     fn generateComparison(self: *CodeGenerator, comparison: ast.Comparison) errors.CodegenError!c.LLVMValueRef {
         const lhs_value = try self.generateExpression(comparison.lhs);
         const rhs_value = try self.generateExpression(comparison.rhs);
-    
         const lhs_type = c.LLVMTypeOf(lhs_value);
         const rhs_type = c.LLVMTypeOf(rhs_value);
-    
         const lhs_kind = c.LLVMGetTypeKind(lhs_type);
         const rhs_kind = c.LLVMGetTypeKind(rhs_type);
-    
-        // Проверяем типы операндов
         const is_lhs_bool = lhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(lhs_type) == 1;
         const is_rhs_bool = rhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(rhs_type) == 1;
         const is_lhs_float = lhs_kind == c.LLVMFloatTypeKind or
@@ -595,14 +591,12 @@ pub const CodeGenerator = struct {
             rhs_kind == c.LLVMDoubleTypeKind or
             rhs_kind == c.LLVMHalfTypeKind;
     
-        // Булевы значения можно сравнивать только на равенство/неравенство
         if (is_lhs_bool or is_rhs_bool) {
             if (comparison.op != '=' and comparison.op != '!') {
                 std.debug.print("Error: boolean values can only be compared for equality/inequality\n", .{});
                 return errors.CodegenError.TypeMismatch;
             }
             
-            // Приводим оба операнда к булевому типу
             const bool_type = c.LLVMInt1TypeInContext(self.context);
             const casted_lhs = self.castToType(lhs_value, bool_type);
             const casted_rhs = self.castToType(rhs_value, bool_type);
@@ -626,7 +620,6 @@ pub const CodeGenerator = struct {
                 result_type = c.LLVMFloatTypeInContext(self.context);
             }
         } else {
-            // Для целых чисел определяем общий тип
             const lhs_width = c.LLVMGetIntTypeWidth(lhs_type);
             const rhs_width = c.LLVMGetIntTypeWidth(rhs_type);
             
@@ -637,7 +630,6 @@ pub const CodeGenerator = struct {
             }
         }
     
-        // Приведение типов для сравнения используя вашу функцию castToType
         const casted_lhs = if (is_float_comp) 
             self.castToType(lhs_value, result_type)
         else
@@ -648,44 +640,43 @@ pub const CodeGenerator = struct {
         else
             self.castToType(rhs_value, result_type);
     
-        // Генерация сравнений
         return switch (comparison.op) {
-            '=' => { // ==
+            '=' => {
                 if (is_float_comp) {
                     return c.LLVMBuildFCmp(self.builder, c.LLVMRealOEQ, casted_lhs, casted_rhs, "fcmp_eq");
                 } else {
                     return c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, casted_lhs, casted_rhs, "icmp_eq");
                 }
             },
-            '!' => { // !=
+            '!' => {
                 if (is_float_comp) {
                     return c.LLVMBuildFCmp(self.builder, c.LLVMRealONE, casted_lhs, casted_rhs, "fcmp_ne");
                 } else {
                     return c.LLVMBuildICmp(self.builder, c.LLVMIntNE, casted_lhs, casted_rhs, "icmp_ne");
                 }
             },
-            '<' => { // <
+            '<' => {
                 if (is_float_comp) {
                     return c.LLVMBuildFCmp(self.builder, c.LLVMRealOLT, casted_lhs, casted_rhs, "fcmp_lt");
                 } else {
                     return c.LLVMBuildICmp(self.builder, c.LLVMIntSLT, casted_lhs, casted_rhs, "icmp_lt");
                 }
             },
-            '>' => { // >
+            '>' => {
                 if (is_float_comp) {
                     return c.LLVMBuildFCmp(self.builder, c.LLVMRealOGT, casted_lhs, casted_rhs, "fcmp_gt");
                 } else {
                     return c.LLVMBuildICmp(self.builder, c.LLVMIntSGT, casted_lhs, casted_rhs, "icmp_gt");
                 }
             },
-            'L' => { // <=
+            'L' => {
                 if (is_float_comp) {
                     return c.LLVMBuildFCmp(self.builder, c.LLVMRealOLE, casted_lhs, casted_rhs, "fcmp_le");
                 } else {
                     return c.LLVMBuildICmp(self.builder, c.LLVMIntSLE, casted_lhs, casted_rhs, "icmp_le");
                 }
             },
-            'G' => { // >=
+            'G' => {
                 if (is_float_comp) {
                     return c.LLVMBuildFCmp(self.builder, c.LLVMRealOGE, casted_lhs, casted_rhs, "fcmp_ge");
                 } else {
