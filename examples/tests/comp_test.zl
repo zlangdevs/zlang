@@ -1,6 +1,10 @@
 fun main() >> i32 {
     bool eq = 5 == 5;
     bool not_eq = true != false;
-    @printf("%d%d\n", eq, not_eq);
+    bool fcomp = .5 < 1.0;
+    bool scomp = -5 > -20;
+    bool eqg = 1 >= 1;
+    bool non = -500 != 200;
+    @printf("Should be only ones: %d%d%d%d%d%d\n", eq, not_eq, fcomp, scomp, eqg, non);
     return 0;
 }
