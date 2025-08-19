@@ -52,7 +52,7 @@ void* ast_root = NULL;
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT
-%token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE
+%token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_AND TOKEN_OR
 
 %right UMINUS UPLUS
 %left TOKEN_MULTIPLY TOKEN_DIVIDE
@@ -219,6 +219,8 @@ expression:
 
 term:
     factor { $$ = $1; }
+  | term TOKEN_AND factor { $$ = zig_create_binary_op('&', $1, $3); }
+  | term TOKEN_OR factor { $$ = zig_create_binary_op('|', $1, $3); }
   | term TOKEN_MULTIPLY factor { $$ = zig_create_binary_op('*', $1, $3); }
   | term TOKEN_DIVIDE factor { $$ = zig_create_binary_op('/', $1, $3); }
 ;
