@@ -15,6 +15,7 @@ pub const NodeType = enum {
     bool_literal,
     binary_op,
     brainfuck,
+    comparison,
 };
 
 pub const BinaryOp = struct {
@@ -55,6 +56,12 @@ pub const BoolLiteral = struct {
 pub const Assignment = struct {
     name: []const u8,
     value: *Node,
+};
+
+pub const Comparison = struct {
+    op: u8,
+    lhs: *Node,
+    rhs: *Node,
 };
 
 pub const VarDecl = struct {
@@ -108,6 +115,7 @@ pub const NodeData = union(NodeType) {
     bool_literal: BoolLiteral,
     binary_op: BinaryOp,
     brainfuck: Brainfuck,
+    comparison: Comparison,
 };
 
 pub const Node = struct {
@@ -142,6 +150,14 @@ pub const Node = struct {
                     arg.destroy();
                 }
                 call.args.deinit();
+            },
+            .comparison => |comp| {
+                comp.lhs.destroy();
+                comp.rhs.destroy();
+            },
+            .binary_op => |bop| {
+                bop.lhs.destroy();
+                bop.rhs.destroy();
             },
             .unary_op => |un| {
                 un.operand.destroy();
@@ -232,6 +248,11 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             } else {
                 std.debug.print("↩️  Return (void)\n", .{});
             }
+        },
+        .comparison => |comp| {
+            std.debug.print("⚖️ Comparison: \x1b[35m{c}\x1b[0m\n", .{comp.op});
+            printAST(comp.lhs, indent + 1, false, false);
+            printAST(comp.rhs, indent + 1, true, false);
         },
         .unary_op => |unary_op| {
             std.debug.print("📐 UnaryOp: \x1b[35m{c}\x1b[0m\n", .{unary_op.op});

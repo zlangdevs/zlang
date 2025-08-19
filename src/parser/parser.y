@@ -14,6 +14,7 @@ extern void zig_add_to_param_list(void* list, void* param);
 extern void* zig_create_function(const char* name, const char* return_type, void* params, void* body);
 extern void* zig_create_var_decl(const char* type_name, const char* name, void* initializer);
 extern void* zig_create_function_call(const char* name, int is_libc, void* args);
+extern void* zig_create_comparison(char op, void* lhs, void* rhs);
 extern void* zig_create_return_stmt(void* expression);
 extern void* zig_create_binary_op(char op, void* lhs, void* rhs);
 extern void* zig_create_unary_op(char op, void* operand);
@@ -48,7 +49,7 @@ void* ast_root = NULL;
 %token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING TOKEN_BRAINFUCK
 
 %token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID
-%token TOKEN_ASSIGN TOKEN_EQUAL
+%token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT
 %token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE
@@ -208,6 +209,12 @@ expression:
   | expression TOKEN_MINUS term { $$ = zig_create_binary_op('-', $1, $3); }
   | TOKEN_MINUS expression %prec UMINUS { $$ = zig_create_unary_op('-', $2); }
   | TOKEN_PLUS expression %prec UPLUS { $$ = zig_create_unary_op('+', $2); }
+  | expression TOKEN_EQUAL expression { $$ = zig_create_comparison('=', $1, $3); }
+  | expression TOKEN_NON_EQUAL expression { $$ = zig_create_comparison('!', $1, $3); }
+  | expression TOKEN_LESS expression { $$ = zig_create_comparison('<', $1, $3); }
+  | expression TOKEN_GREATER expression { $$ = zig_create_comparison('>', $1, $3); }
+  | expression TOKEN_EQ_LESS expression { $$ = zig_create_comparison('L', $1, $3); }
+  | expression TOKEN_EQ_GREATER expression { $$ = zig_create_comparison('G', $1, $3); }
 ;
 
 term:
