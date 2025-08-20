@@ -307,8 +307,47 @@ pub const CodeGenerator = struct {
             .brainfuck => |bf| {
                 _ = try self.generateBrainfuck(bf);
             },
+            .if_stmt => |if_stmt| {
+                try self.generateIfStatement(if_stmt);
+            },
             else => {},
         }
+    }
+
+    fn generateIfStatement(self: *CodeGenerator, if_stmt: ast.IfStmt) errors.CodegenError!void {
+        const current_function = self.current_function orelse return errors.CodegenError.TypeMismatch;
+        const then_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "then");
+        const else_bb = if (if_stmt.else_body != null) 
+            c.LLVMAppendBasicBlockInContext(self.context, current_function, "else") 
+        else 
+            null;
+        const merge_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "ifcont");
+        const condition_value = try self.generateExpression(if_stmt.condition);
+        const condition_bool = self.convertToBool(condition_value);
+        if (else_bb) |else_block| {
+            _ = c.LLVMBuildCondBr(self.builder, condition_bool, then_bb, else_block);
+        } else {
+            _ = c.LLVMBuildCondBr(self.builder, condition_bool, then_bb, merge_bb);
+        }
+        c.LLVMPositionBuilderAtEnd(self.builder, then_bb);
+        for (if_stmt.then_body.items) |stmt| {
+            try self.generateStatement(stmt);
+        }
+        if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
+            _ = c.LLVMBuildBr(self.builder, merge_bb);
+        }
+        if (else_bb) |else_block| {
+            c.LLVMPositionBuilderAtEnd(self.builder, else_block);
+            if (if_stmt.else_body) |else_body| {
+                for (else_body.items) |stmt| {
+                    try self.generateStatement(stmt);
+                }
+            }
+            if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
+                _ = c.LLVMBuildBr(self.builder, merge_bb);
+            }
+        }
+        c.LLVMPositionBuilderAtEnd(self.builder, merge_bb);
     }
 
     pub fn castToType(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef) c.LLVMValueRef {

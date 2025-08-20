@@ -1,0 +1,30 @@
+fun main() >> i32 {
+    i32 x = 5;
+    i32 y = 10;
+    
+    if x < y {
+        @printf("x is less than y\n");
+    }
+    
+    if x > y {
+        @printf("x is greater than y\n");
+    } else {
+        @printf("x is not greater than y\n");
+    }
+    
+    if x == y {
+        @printf("x equals y\n");
+    } else if x < y {
+        @printf("x is less than y\n");
+    } else {
+        @printf("x is greater than y\n");
+    }
+    
+    if x > 0 {
+        if y > 0 {
+            @printf("Both x and y are positive\n");
+        }
+    }
+    
+    return 0;
+}

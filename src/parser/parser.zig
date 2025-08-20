@@ -369,6 +369,31 @@ export fn zig_create_brainfuck(code_ptr: [*c]const u8) ?*anyopaque {
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_if_stmt(condition_ptr: ?*anyopaque, then_body_ptr: ?*anyopaque, else_body_ptr: ?*anyopaque) ?*anyopaque {
+    if (condition_ptr == null or then_body_ptr == null) return null;
+
+    const condition = @as(*ast.Node, @ptrFromInt(@intFromPtr(condition_ptr.?)));
+    const then_node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(then_body_ptr.?)));
+    const then_body = then_node_list.items;
+    
+    var else_body_opt: ?std.ArrayList(*ast.Node) = null;
+    if (else_body_ptr) |ptr| {
+        const else_node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
+        else_body_opt = else_node_list.items;
+    }
+
+    const if_data = ast.NodeData{
+        .if_stmt = ast.IfStmt{
+            .condition = condition,
+            .then_body = then_body,
+            .else_body = else_body_opt,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, if_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!?*ast.Node {
     global_allocator = allocator;
     ast_root = null;
