@@ -17,6 +17,9 @@ pub const NodeType = enum {
     brainfuck,
     comparison,
     if_stmt,
+    for_stmt,
+    break_stmt,
+    continue_stmt,
 };
 
 pub const BinaryOp = struct {
@@ -107,6 +110,14 @@ pub const IfStmt = struct {
     else_body: ?std.ArrayList(*Node),
 };
 
+pub const ForStmt = struct {
+    body: std.ArrayList(*Node),
+};
+
+pub const BreakStmt = struct {};
+
+pub const ContinueStmt = struct {};
+
 pub const NodeData = union(NodeType) {
     program: Program,
     function: Function,
@@ -124,6 +135,9 @@ pub const NodeData = union(NodeType) {
     brainfuck: Brainfuck,
     comparison: Comparison,
     if_stmt: IfStmt,
+    for_stmt: ForStmt,
+    break_stmt: BreakStmt,
+    continue_stmt: ContinueStmt,
 };
 
 pub const Node = struct {
@@ -192,6 +206,12 @@ pub const Node = struct {
                     }
                     else_body.deinit();
                 }
+            },
+            .for_stmt => |for_stmt| {
+                for (for_stmt.body.items) |stmt| {
+                    stmt.destroy();
+                }
+                for_stmt.body.deinit();
             },
             else => {},
         }
@@ -343,6 +363,19 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
                     }
                 }
             }
+        },
+        .for_stmt => |for_stmt| {
+            std.debug.print("🔁 For Statement:\n", .{});
+            for (for_stmt.body.items, 0..) |stmt, i| {
+                const is_stmt_last = i == for_stmt.body.items.len - 1;
+                printAST(stmt, indent + 1, is_stmt_last, false);
+            }
+        },
+        .break_stmt => {
+            std.debug.print("🚫 Break Statement\n", .{});
+        },
+        .continue_stmt => {
+            std.debug.print("➡️  Continue Statement\n", .{});
         },
     }
 }

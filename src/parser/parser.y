@@ -28,6 +28,9 @@ extern void* zig_create_stmt_list(void);
 extern void* zig_create_arg_list(void);
 extern void* zig_create_brainfuck(const char* code);
 extern void* zig_create_if_stmt(void* condition, void* then_body, void* else_body);
+extern void* zig_create_for_stmt(void* body);
+extern void* zig_create_break_stmt(void);
+extern void* zig_create_continue_stmt(void);
 extern void zig_add_to_program(void* program, void* function);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
@@ -49,13 +52,16 @@ void* ast_root = NULL;
 
 %token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING TOKEN_BRAINFUCK
 
-%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID
+%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT
 %token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_AND TOKEN_OR TOKEN_NOT
 
 %type <node> if_statement
+%type <node> for_statement
+%type <node> break_statement
+%type <node> continue_statement
 
 %left TOKEN_EQUAL TOKEN_NON_EQUAL
 %left TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
@@ -150,6 +156,9 @@ statement:
   | return_statement TOKEN_SEMICOLON { $$ = $1; }
   | brainfuck_statement TOKEN_SEMICOLON { $$ = $1; }
   | if_statement { $$ = $1; }
+  | for_statement { $$ = $1; }
+  | break_statement TOKEN_SEMICOLON { $$ = $1; }
+  | continue_statement TOKEN_SEMICOLON { $$ = $1; }
 ;
 
 if_statement:
@@ -164,6 +173,24 @@ if_statement:
         void* else_stmt_list = zig_create_stmt_list();
         zig_add_to_stmt_list(else_stmt_list, $7);
         $$ = zig_create_if_stmt($2, $4, else_stmt_list);
+    }
+;
+
+for_statement:
+    TOKEN_FOR TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        $$ = zig_create_for_stmt($3);
+    }
+;
+
+break_statement:
+    TOKEN_BREAK {
+        $$ = zig_create_break_stmt();
+    }
+;
+
+continue_statement:
+    TOKEN_CONTINUE {
+        $$ = zig_create_continue_stmt();
     }
 ;
 
