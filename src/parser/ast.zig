@@ -16,6 +16,7 @@ pub const NodeType = enum {
     binary_op,
     brainfuck,
     comparison,
+    if_stmt,
 };
 
 pub const BinaryOp = struct {
@@ -100,6 +101,12 @@ pub const Brainfuck = struct {
     code: []const u8,
 };
 
+pub const IfStmt = struct {
+    condition: *Node,
+    then_body: std.ArrayList(*Node),
+    else_body: ?std.ArrayList(*Node),
+};
+
 pub const NodeData = union(NodeType) {
     program: Program,
     function: Function,
@@ -116,6 +123,7 @@ pub const NodeData = union(NodeType) {
     binary_op: BinaryOp,
     brainfuck: Brainfuck,
     comparison: Comparison,
+    if_stmt: IfStmt,
 };
 
 pub const Node = struct {
@@ -170,6 +178,19 @@ pub const Node = struct {
             .return_stmt => |ret| {
                 if (ret.expression) |expr| {
                     expr.destroy();
+                }
+            },
+            .if_stmt => |if_stmt| {
+                if_stmt.condition.destroy();
+                for (if_stmt.then_body.items) |stmt| {
+                    stmt.destroy();
+                }
+                if_stmt.then_body.deinit();
+                if (if_stmt.else_body) |else_body| {
+                    for (else_body.items) |stmt| {
+                        stmt.destroy();
+                    }
+                    else_body.deinit();
                 }
             },
             else => {},
@@ -305,6 +326,23 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         },
         .bool_literal => |bool_val| {
             std.debug.print("✅ Boolean: \x1b[35m{s}\x1b[0m\n", .{if (bool_val.value) "true" else "false"});
+        },
+        .if_stmt => |if_stmt| {
+            const has_else = if (if_stmt.else_body) |else_body| else_body.items.len > 0 else false;
+            std.debug.print("❓ If Statement:\n", .{});
+            printAST(if_stmt.condition, indent + 1, false, false);
+            for (if_stmt.then_body.items, 0..) |stmt, i| {
+                const is_stmt_last = i == if_stmt.then_body.items.len - 1 and !has_else;
+                printAST(stmt, indent + 1, is_stmt_last, false);
+            }
+            if (if_stmt.else_body) |else_body| {
+                if (else_body.items.len > 0) {
+                    for (else_body.items, 0..) |stmt, i| {
+                        const is_stmt_last = i == else_body.items.len - 1;
+                        printAST(stmt, indent + 1, is_stmt_last, false);
+                    }
+                }
+            }
         },
     }
 }
