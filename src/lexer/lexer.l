@@ -29,6 +29,8 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "for"       { return TOKEN_FOR; }
 "fun"       { return TOKEN_FUN; }
 "return"    { return TOKEN_RETURN; }
+"break"     { return TOKEN_BREAK; }
+"continue"  { return TOKEN_CONTINUE; }
 "brainfuck"[ \t\n]*"{" { BEGIN(BRAINFUCK); yylval.string = strdup(""); }
 {IDENT}     { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
 {FLOAT_EXP_DOT}  { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
