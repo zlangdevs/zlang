@@ -394,6 +394,41 @@ export fn zig_create_if_stmt(condition_ptr: ?*anyopaque, then_body_ptr: ?*anyopa
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_for_stmt(body_ptr: ?*anyopaque) ?*anyopaque {
+    var body = std.ArrayList(*ast.Node).init(global_allocator);
+    if (body_ptr) |ptr| {
+        const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
+        body = node_list.items;
+    }
+
+    const for_data = ast.NodeData{
+        .for_stmt = ast.ForStmt{
+            .body = body,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, for_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_break_stmt() ?*anyopaque {
+    const break_data = ast.NodeData{
+        .break_stmt = ast.BreakStmt{},
+    };
+
+    const node = ast.Node.create(global_allocator, break_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_continue_stmt() ?*anyopaque {
+    const continue_data = ast.NodeData{
+        .continue_stmt = ast.ContinueStmt{},
+    };
+
+    const node = ast.Node.create(global_allocator, continue_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!?*ast.Node {
     global_allocator = allocator;
     ast_root = null;
