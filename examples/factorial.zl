@@ -1,0 +1,12 @@
+fun factorial(n: i32) >> i32 {
+    if n <= 1 {
+        return 1;
+    } else {
+        return n * factorial(n - 1);
+    }
+}
+
+fun main() >> i32 {
+    @printf("Factorial of 5 is %d\n", factorial(5));
+    return 0;
+}
