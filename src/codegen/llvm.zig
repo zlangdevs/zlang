@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../parser/ast.zig");
 const errors = @import("../errors.zig");
 const bfck = @import("bf.zig");
+const control_flow = @import("control_flow.zig");
 
 const c = @cImport({
     @cInclude("llvm-c/Core.h");
@@ -62,6 +63,7 @@ pub const CodeGenerator = struct {
     functions: std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     variables: std.HashMap([]const u8, VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     current_function: ?c.LLVMValueRef,
+    control_flow_analyzer: control_flow.ControlFlowAnalyzer,
 
     const VariableInfo = struct {
         value: c.LLVMValueRef,
@@ -71,16 +73,15 @@ pub const CodeGenerator = struct {
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
         _ = c.LLVMInitializeNativeTarget();
         _ = c.LLVMInitializeNativeAsmPrinter();
-        _ = c.LLVMInitializeNativeAsmParser();
-
+        _ = c.LLVMInitializeNativeAsmParser();        
         const context = c.LLVMContextCreate();
         if (context == null) return errors.CodegenError.ModuleCreationFailed;
-
+        
         const module = c.LLVMModuleCreateWithNameInContext("zlang_module", context);
-        if (module == null) return errors.CodegenError.ModuleCreationFailed;
-
+        if (module == null) return errors.CodegenError.ModuleCreationFailed;        
         const builder = c.LLVMCreateBuilderInContext(context);
         if (builder == null) return errors.CodegenError.BuilderCreationFailed;
+        const control_flow_analyzer = control_flow.ControlFlowAnalyzer.init(allocator);
 
         return CodeGenerator{
             .context = context,
@@ -90,6 +91,7 @@ pub const CodeGenerator = struct {
             .functions = std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .variables = std.HashMap([]const u8, VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .current_function = null,
+            .control_flow_analyzer = control_flow_analyzer,
         };
     }
 
@@ -205,6 +207,18 @@ pub const CodeGenerator = struct {
         }
     }
 
+    fn hasValidControlFlow(self: *CodeGenerator, func_node: *ast.Node) errors.CodegenError!bool {
+        switch (func_node.data) {
+            .function => |func| {
+                if (std.mem.eql(u8, func.return_type, "void")) {
+                    return true;
+                }
+                return self.control_flow_analyzer.analyzeStatementListEnhanced(func.body.items);
+            },
+            else => return errors.CodegenError.TypeMismatch,
+        }
+    }
+     
     fn generateFunction(self: *CodeGenerator, func_node: *ast.Node) errors.CodegenError!void {
         switch (func_node.data) {
             .function => |func| {
@@ -245,12 +259,66 @@ pub const CodeGenerator = struct {
                     });
                 }
     
+                const valid_control_flow = try self.hasValidControlFlow(func_node);
                 for (func.body.items) |stmt| {
                     try self.generateStatement(stmt);
+                }
+                if (!valid_control_flow and !std.mem.eql(u8, func.return_type, "void")) {
+                    if (func.body.items.len == 0 or !self.isReturnStatement(func.body.items[func.body.items.len - 1])) {
+                        std.debug.print("Error: Function '{s}' does not return a value on all code paths\n", .{func.name});
+                        return errors.CodegenError.TypeMismatch;
+                    }
+                }
+                if (valid_control_flow and !std.mem.eql(u8, func.return_type, "void")) {
+                    const last_is_return = if (func.body.items.len > 0)
+                        self.isReturnStatement(func.body.items[func.body.items.len - 1])
+                    else
+                        false;
+                    
+                    if (!last_is_return) {
+                        const default_value = self.getDefaultValueForType(func.return_type);
+                        _ = c.LLVMBuildRet(self.builder, default_value);
+                    }
                 }
             },
             else => return errors.CodegenError.TypeMismatch,
         }
+    }
+    
+    fn getDefaultValueForType(self: *CodeGenerator, type_name: []const u8) c.LLVMValueRef {
+        if (std.mem.eql(u8, type_name, "i8")) {
+            return c.LLVMConstInt(c.LLVMInt8TypeInContext(self.context), 0, 0);
+        } else if (std.mem.eql(u8, type_name, "i16")) {
+            return c.LLVMConstInt(c.LLVMInt16TypeInContext(self.context), 0, 0);
+        } else if (std.mem.eql(u8, type_name, "i32")) {
+            return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0);
+        } else if (std.mem.eql(u8, type_name, "i64")) {
+            return c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), 0, 0);
+        } else if (std.mem.eql(u8, type_name, "u8")) {
+            return c.LLVMConstInt(c.LLVMInt8TypeInContext(self.context), 0, 0);
+        } else if (std.mem.eql(u8, type_name, "u16")) {
+            return c.LLVMConstInt(c.LLVMInt16TypeInContext(self.context), 0, 0);
+        } else if (std.mem.eql(u8, type_name, "u32")) {
+            return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0);
+        } else if (std.mem.eql(u8, type_name, "u64")) {
+            return c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), 0, 0);
+        } else if (std.mem.eql(u8, type_name, "f16")) {
+            return c.LLVMConstReal(c.LLVMHalfTypeInContext(self.context), 0.0);
+        } else if (std.mem.eql(u8, type_name, "f32")) {
+            return c.LLVMConstReal(c.LLVMFloatTypeInContext(self.context), 0.0);
+        } else if (std.mem.eql(u8, type_name, "f64")) {
+            return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), 0.0);
+        } else if (std.mem.eql(u8, type_name, "bool")) {
+            return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 0, 0);
+        }
+        return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0);
+    }
+    fn isReturnStatement(self: *CodeGenerator, stmt: *ast.Node) bool {
+        _ = self;
+        return switch (stmt.data) {
+            .return_stmt => true,
+            else => false,
+        };
     }
 
     fn generateStatement(self: *CodeGenerator, stmt: *ast.Node) errors.CodegenError!void {
