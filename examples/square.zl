@@ -20,7 +20,7 @@ fun main() >> i32 {
         print_square(i * 2, i);
         @printf("\n\n\n");
         i = i + 1;
-        if i > 5 {break;} ?? check with return
+        if i > 5 {break;}
     }
     return 0;
 }
