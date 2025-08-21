@@ -872,46 +872,46 @@ pub const CodeGenerator = struct {
         };
     }
     
-    fn generateBinaryOp(self: *CodeGenerator, binary_op: ast.BinaryOp) errors.CodegenError!c.LLVMValueRef {
-        const lhs_value = try self.generateExpression(binary_op.lhs);
-        const rhs_value = try self.generateExpression(binary_op.rhs);
-
+    fn generateBinaryOp(self: *CodeGenerator, bin_op: ast.BinaryOp) errors.CodegenError!c.LLVMValueRef {
+        const lhs_value = try self.generateExpression(bin_op.lhs);
+        const rhs_value = try self.generateExpression(bin_op.rhs);
         const lhs_type = c.LLVMTypeOf(lhs_value);
         const rhs_type = c.LLVMTypeOf(rhs_value);
 
         const lhs_kind = c.LLVMGetTypeKind(lhs_type);
         const rhs_kind = c.LLVMGetTypeKind(rhs_type);
-
-        if (binary_op.op != '&' and binary_op.op != '|') {
+        if (bin_op.op != '&' and bin_op.op != '|') {
             if (lhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(lhs_type) == 1) {
+                std.debug.print("Error: Boolean type i1 not allowed in arithmetic operations\n", .{});
                 return errors.CodegenError.TypeMismatch;
             }
             if (rhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(rhs_type) == 1) {
+                std.debug.print("Error: Boolean type i1 not allowed in arithmetic operations\n", .{});
                 return errors.CodegenError.TypeMismatch;
             }
         }
 
         const is_lhs_float = lhs_kind == c.LLVMFloatTypeKind or
-            lhs_kind == c.LLVMDoubleTypeKind or
-            lhs_kind == c.LLVMHalfTypeKind;
+                             lhs_kind == c.LLVMDoubleTypeKind or
+                             lhs_kind == c.LLVMHalfTypeKind;
         const is_rhs_float = rhs_kind == c.LLVMFloatTypeKind or
-            rhs_kind == c.LLVMDoubleTypeKind or
-            rhs_kind == c.LLVMHalfTypeKind;
-
+                             rhs_kind == c.LLVMDoubleTypeKind or
+                             rhs_kind == c.LLVMHalfTypeKind;
         const is_float_op = is_lhs_float or is_rhs_float;
-        var result_type: c.LLVMTypeRef = undefined;
-        if (is_float_op) {
+        const result_type = if (is_float_op) blk: {
             if (lhs_kind == c.LLVMDoubleTypeKind or rhs_kind == c.LLVMDoubleTypeKind) {
-                result_type = c.LLVMDoubleTypeInContext(self.context);
+                break :blk c.LLVMDoubleTypeInContext(self.context);
             } else if (lhs_kind == c.LLVMFloatTypeKind or rhs_kind == c.LLVMFloatTypeKind) {
-                result_type = c.LLVMFloatTypeInContext(self.context);
+                break :blk c.LLVMFloatTypeInContext(self.context);
             } else {
-                result_type = c.LLVMFloatTypeInContext(self.context);
+                break :blk c.LLVMFloatTypeInContext(self.context);
             }
-        } else {
-            result_type = lhs_type;
-        }
-
+        } else blk: {
+            const lhs_width = if (lhs_kind == c.LLVMIntegerTypeKind) c.LLVMGetIntTypeWidth(lhs_type) else 0;
+            const rhs_width = if (rhs_kind == c.LLVMIntegerTypeKind) c.LLVMGetIntTypeWidth(rhs_type) else 0;
+            break :blk if (lhs_width >= rhs_width) lhs_type else rhs_type;
+        };
+    
         var casted_lhs = lhs_value;
         var casted_rhs = rhs_value;
 
@@ -930,9 +930,12 @@ pub const CodeGenerator = struct {
             } else if (rhs_kind == c.LLVMFloatTypeKind and c.LLVMGetTypeKind(result_type) == c.LLVMDoubleTypeKind) {
                 casted_rhs = c.LLVMBuildFPExt(self.builder, rhs_value, result_type, "fpext_rhs");
             }
+        } else if (bin_op.op != '&' and bin_op.op != '|') {
+            casted_lhs = self.castToType(lhs_value, result_type);
+            casted_rhs = self.castToType(rhs_value, result_type);
         }
-
-        return switch (binary_op.op) {
+        
+        return switch (bin_op.op) {
             '+' => if (is_float_op)
                 c.LLVMBuildFAdd(self.builder, casted_lhs, casted_rhs, "fadd")
             else
@@ -949,11 +952,12 @@ pub const CodeGenerator = struct {
                 c.LLVMBuildFDiv(self.builder, casted_lhs, casted_rhs, "fdiv")
             else
                 c.LLVMBuildSDiv(self.builder, casted_lhs, casted_rhs, "sdiv"),
-            '&' =>
-                return self.generateLogicalAnd(binary_op.lhs, binary_op.rhs),
-            '|' =>
-                return self.generateLogicalOr(binary_op.lhs, binary_op.rhs),
-            else => return errors.CodegenError.UnsupportedOperation,
+            '&' => self.generateLogicalAnd(bin_op.lhs, bin_op.rhs),
+            '|' => self.generateLogicalOr(bin_op.lhs, bin_op.rhs),
+            else => {
+                std.debug.print("Error: Unsupported binary operator\n", .{});
+                return errors.CodegenError.UnsupportedOperation;
+            },
         };
     }
     
