@@ -15,6 +15,12 @@ fun print_square(w: i32, h: i32) >> void {
 }
 
 fun main() >> i32 {
-    print_square(10, 5);
+    i32 i = 1;
+    for {
+        print_square(i * 2, i);
+        @printf("\n\n\n");
+        i = i + 1;
+        if i > 5 {break;} ?? check with return
+    }
     return 0;
 }
