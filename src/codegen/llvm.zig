@@ -277,15 +277,20 @@ pub const CodeGenerator = struct {
                         return errors.CodegenError.TypeMismatch;
                     }
                 }
-                if (valid_control_flow and !std.mem.eql(u8, func.return_type, "void")) {
+                if (valid_control_flow) {
                     const last_is_return = if (func.body.items.len > 0)
                         self.isReturnStatement(func.body.items[func.body.items.len - 1])
                     else
                         false;
-                    
-                    if (!last_is_return) {
-                        const default_value = self.getDefaultValueForType(func.return_type);
-                        _ = c.LLVMBuildRet(self.builder, default_value);
+                    if (std.mem.eql(u8, func.return_type, "void")) {
+                        if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
+                            _ = c.LLVMBuildRetVoid(self.builder);
+                        }
+                    } else {
+                        if (!last_is_return) {
+                            const default_value = self.getDefaultValueForType(func.return_type);
+                            _ = c.LLVMBuildRet(self.builder, default_value);
+                        }
                     }
                 }
             },

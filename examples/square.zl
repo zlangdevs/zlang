@@ -1,0 +1,20 @@
+fun print_square(w: i32, h: i32) >> void {
+    i32 i = 0;
+    i32 j = 0;
+    for {
+        for {
+            j = j + 1;
+            @printf("#");
+            if j >= w {break;}
+        }
+        j = 0;
+        i = i + 1;
+        @printf("\n");
+        if i >= h {break;}
+    }
+}
+
+fun main() >> i32 {
+    print_square(10, 5);
+    return 0;
+}
