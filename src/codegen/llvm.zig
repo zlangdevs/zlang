@@ -394,6 +394,9 @@ pub const CodeGenerator = struct {
             .for_stmt => |for_stmt| {
                 try self.generateForStatement(for_stmt);
             },
+            .c_for_stmt => |c_for| {
+                try self.generateCForStatement(c_for);
+            },
             .break_stmt => {
                 try self.generateBreakStatement();
             },
@@ -486,6 +489,46 @@ pub const CodeGenerator = struct {
             c.LLVMPositionBuilderAtEnd(self.builder, exit_bb);
             _ = self.loop_context_stack.pop();
         }
+    }
+    
+    fn generateCForStatement(self: *CodeGenerator, c_for_stmt: ast.CForStmt) errors.CodegenError!void {
+        const current_function = self.current_function orelse return errors.CodegenError.TypeMismatch;
+        if (c_for_stmt.init) |cinit| {
+            try self.generateStatement(cinit);
+        }
+    
+        const condition_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "c_for_cond");
+        const body_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "c_for_body");
+        const increment_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "c_for_inc");
+        const exit_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "c_for_exit");
+        _ = c.LLVMBuildBr(self.builder, condition_bb);
+        c.LLVMPositionBuilderAtEnd(self.builder, condition_bb);
+        if (c_for_stmt.condition) |cond| {
+            const cond_value = try self.generateExpression(cond);
+            const cond_bool = self.convertToBool(cond_value);
+            _ = c.LLVMBuildCondBr(self.builder, cond_bool, body_bb, exit_bb);
+        } else {
+            _ = c.LLVMBuildBr(self.builder, body_bb);
+        }
+        const loop_context = LoopContext{
+            .break_block = exit_bb,
+            .continue_block = increment_bb,
+        };
+        try self.loop_context_stack.append(loop_context);
+        c.LLVMPositionBuilderAtEnd(self.builder, body_bb);
+        for (c_for_stmt.body.items) |stmt| {
+            try self.generateStatement(stmt);
+        }
+        if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
+            _ = c.LLVMBuildBr(self.builder, increment_bb);
+        }
+        c.LLVMPositionBuilderAtEnd(self.builder, increment_bb);
+        if (c_for_stmt.increment) |inc| {
+            try self.generateStatement(inc);
+        }
+        _ = c.LLVMBuildBr(self.builder, condition_bb);
+        c.LLVMPositionBuilderAtEnd(self.builder, exit_bb);
+        _ = self.loop_context_stack.pop();
     }
 
     fn generateBreakStatement(self: *CodeGenerator) errors.CodegenError!void {
