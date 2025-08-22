@@ -111,6 +111,7 @@ pub const IfStmt = struct {
 };
 
 pub const ForStmt = struct {
+    condition: ?*Node,
     body: std.ArrayList(*Node),
 };
 
@@ -208,6 +209,9 @@ pub const Node = struct {
                 }
             },
             .for_stmt => |for_stmt| {
+                if (for_stmt.condition) |cond| {
+                    cond.destroy();
+                }
                 for (for_stmt.body.items) |stmt| {
                     stmt.destroy();
                 }
@@ -365,7 +369,12 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             }
         },
         .for_stmt => |for_stmt| {
-            std.debug.print("🔁 For Statement:\n", .{});
+            if (for_stmt.condition) |cond| {
+                std.debug.print("🔁 For Statement (condition):\n", .{});
+                printAST(cond, indent + 1, false, false);
+            } else {
+                std.debug.print("🔁 For Statement (infinite):\n", .{});
+            }
             for (for_stmt.body.items, 0..) |stmt, i| {
                 const is_stmt_last = i == for_stmt.body.items.len - 1;
                 printAST(stmt, indent + 1, is_stmt_last, false);
