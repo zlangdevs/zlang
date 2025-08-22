@@ -28,7 +28,7 @@ extern void* zig_create_stmt_list(void);
 extern void* zig_create_arg_list(void);
 extern void* zig_create_brainfuck(const char* code);
 extern void* zig_create_if_stmt(void* condition, void* then_body, void* else_body);
-extern void* zig_create_for_stmt(void* body);
+extern void* zig_create_for_stmt(void* condition, void* body);
 extern void* zig_create_break_stmt(void);
 extern void* zig_create_continue_stmt(void);
 extern void zig_add_to_program(void* program, void* function);
@@ -178,7 +178,10 @@ if_statement:
 
 for_statement:
     TOKEN_FOR TOKEN_LBRACE statement_list TOKEN_RBRACE {
-        $$ = zig_create_for_stmt($3);
+        $$ = zig_create_for_stmt(NULL, $3);
+    }
+  | TOKEN_FOR expression TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        $$ = zig_create_for_stmt($2, $4);
     }
 ;
 
