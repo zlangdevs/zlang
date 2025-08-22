@@ -394,7 +394,12 @@ export fn zig_create_if_stmt(condition_ptr: ?*anyopaque, then_body_ptr: ?*anyopa
     return @as(*anyopaque, @ptrCast(node));
 }
 
-export fn zig_create_for_stmt(body_ptr: ?*anyopaque) ?*anyopaque {
+export fn zig_create_for_stmt(condition_ptr: ?*anyopaque, body_ptr: ?*anyopaque) ?*anyopaque {
+    var condition: ?*ast.Node = null;
+    if (condition_ptr) |ptr| {
+        condition = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
+    }
+
     var body = std.ArrayList(*ast.Node).init(global_allocator);
     if (body_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
@@ -403,6 +408,7 @@ export fn zig_create_for_stmt(body_ptr: ?*anyopaque) ?*anyopaque {
 
     const for_data = ast.NodeData{
         .for_stmt = ast.ForStmt{
+            .condition = condition,
             .body = body,
         },
     };
