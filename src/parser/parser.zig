@@ -417,6 +417,34 @@ export fn zig_create_for_stmt(condition_ptr: ?*anyopaque, body_ptr: ?*anyopaque)
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_c_for_stmt(init_ptr: ?*anyopaque, cond_ptr: ?*anyopaque, inc_ptr: ?*anyopaque, body_ptr: ?*anyopaque) ?*anyopaque {
+    var init: ?*ast.Node = null;
+    var cond: ?*ast.Node = null;
+    var increment: ?*ast.Node = null;
+    
+    if (init_ptr) |ptr| init = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
+    if (cond_ptr) |ptr| cond = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
+    if (inc_ptr) |ptr| increment = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
+
+    var body = std.ArrayList(*ast.Node).init(global_allocator);
+    if (body_ptr) |ptr| {
+        const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
+        body = node_list.items;
+    }
+
+    const c_for_data = ast.NodeData{
+        .c_for_stmt = ast.CForStmt{
+            .init = init,
+            .condition = cond,
+            .increment = increment,
+            .body = body,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, c_for_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_create_break_stmt() ?*anyopaque {
     const break_data = ast.NodeData{
         .break_stmt = ast.BreakStmt{},

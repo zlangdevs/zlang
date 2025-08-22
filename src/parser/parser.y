@@ -29,6 +29,7 @@ extern void* zig_create_arg_list(void);
 extern void* zig_create_brainfuck(const char* code);
 extern void* zig_create_if_stmt(void* condition, void* then_body, void* else_body);
 extern void* zig_create_for_stmt(void* condition, void* body);
+extern void* zig_create_c_for_stmt(void* init, void* condition, void* increment, void* body);
 extern void* zig_create_break_stmt(void);
 extern void* zig_create_continue_stmt(void);
 extern void zig_add_to_program(void* program, void* function);
@@ -73,6 +74,7 @@ void* ast_root = NULL;
 %type <node> program function_list function statement_list statement
 %type <node> var_declaration function_call return_statement assignment brainfuck_statement
 %type <node> expression term factor argument_list arguments
+%type <node> c_for_statement for_increment
 %type <string> type_name function_name string_literal
 
 %start program
@@ -157,6 +159,7 @@ statement:
   | brainfuck_statement TOKEN_SEMICOLON { $$ = $1; }
   | if_statement { $$ = $1; }
   | for_statement { $$ = $1; }
+  | c_for_statement { $$ = $1; }
   | break_statement TOKEN_SEMICOLON { $$ = $1; }
   | continue_statement TOKEN_SEMICOLON { $$ = $1; }
 ;
@@ -183,6 +186,20 @@ for_statement:
   | TOKEN_FOR expression TOKEN_LBRACE statement_list TOKEN_RBRACE {
         $$ = zig_create_for_stmt($2, $4);
     }
+;
+
+c_for_statement:
+    TOKEN_FOR var_declaration TOKEN_SEMICOLON expression TOKEN_SEMICOLON for_increment TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        $$ = zig_create_c_for_stmt($2, $4, $6, $8);
+    }
+  | TOKEN_FOR assignment TOKEN_SEMICOLON expression TOKEN_SEMICOLON for_increment TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        $$ = zig_create_c_for_stmt($2, $4, $6, $8);
+    }
+;
+
+for_increment:
+    assignment { $$ = $1; }
+  | /* empty */ { $$ = NULL; }
 ;
 
 break_statement:

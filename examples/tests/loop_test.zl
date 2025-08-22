@@ -36,6 +36,10 @@ fun main() >> i32 {
         i = i + 1;
         @printf("Loop with condition: %d\n", i);
     }
+    @printf("\n\n\n");
+    for i32 ci = 0; ci < 5; ci = ci + 1 {
+        @printf("C-style loop: %d\n", ci);
+    }
     @printf("All loop tests completed\n");
     return 0;
 }

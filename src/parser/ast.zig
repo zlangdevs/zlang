@@ -20,6 +20,7 @@ pub const NodeType = enum {
     for_stmt,
     break_stmt,
     continue_stmt,
+    c_for_stmt,
 };
 
 pub const BinaryOp = struct {
@@ -115,6 +116,13 @@ pub const ForStmt = struct {
     body: std.ArrayList(*Node),
 };
 
+pub const CForStmt = struct {
+    init: ?*Node,
+    condition: ?*Node,
+    increment: ?*Node,
+    body: std.ArrayList(*Node),
+};
+
 pub const BreakStmt = struct {};
 
 pub const ContinueStmt = struct {};
@@ -139,6 +147,7 @@ pub const NodeData = union(NodeType) {
     for_stmt: ForStmt,
     break_stmt: BreakStmt,
     continue_stmt: ContinueStmt,
+    c_for_stmt: CForStmt,
 };
 
 pub const Node = struct {
@@ -216,6 +225,13 @@ pub const Node = struct {
                     stmt.destroy();
                 }
                 for_stmt.body.deinit();
+            },
+            .c_for_stmt => |c_for| {
+                if (c_for.init) |init| init.destroy();
+                if (c_for.condition) |cond| cond.destroy();
+                if (c_for.increment) |inc| inc.destroy();
+                for (c_for.body.items) |stmt| stmt.destroy();
+                c_for.body.deinit();
             },
             else => {},
         }
@@ -378,6 +394,30 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             for (for_stmt.body.items, 0..) |stmt, i| {
                 const is_stmt_last = i == for_stmt.body.items.len - 1;
                 printAST(stmt, indent + 1, is_stmt_last, false);
+            }
+        },
+        .c_for_stmt => |c_for| {
+            std.debug.print("🔄 C-style For Statement:\n", .{});
+            if (c_for.init) |init| {
+                printIndent(indent + 1, false, false);
+                std.debug.print("Init:\n", .{});
+                printAST(init, indent + 2, false, false);
+            }
+            if (c_for.condition) |cond| {
+                printIndent(indent + 1, false, false);
+                std.debug.print("Condition:\n", .{});
+                printAST(cond, indent + 2, false, false);
+            }
+            if (c_for.increment) |inc| {
+                printIndent(indent + 1, false, false);
+                std.debug.print("Increment:\n", .{});
+                printAST(inc, indent + 2, false, false);
+            }
+            printIndent(indent + 1, true, false);
+            std.debug.print("Body:\n", .{});
+            for (c_for.body.items, 0..) |stmt, i| {
+                const is_stmt_last = i == c_for.body.items.len - 1;
+                printAST(stmt, indent + 2, is_stmt_last, false);
             }
         },
         .break_stmt => {
