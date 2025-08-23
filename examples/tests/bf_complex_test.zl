@@ -52,12 +52,12 @@ fun ctx_parse_test() >> i16 {
 }
 
 fun main() >> i32 {
-    @printf("i16 test (should be 255): %d\n", bf_i16());
-    @printf("subzero test (should be 255): %d\n", bf_subzero());
-    @printf("sign test (should be -3): %d\n", bf_sign());
-    @printf("u32 test (should be дохуя): %u\n", bf_u32());
+    @printf("i16 test (expected 255):%d\n", bf_i16());
+    @printf("subzero test (expected 255):%d\n", bf_subzero());
+    @printf("sign test (expected -3):%d\n", bf_sign());
+    @printf("u32 test (expected 4294967295):%u\n", bf_u32());
     @printf("brainfuck hello world:\n");
     bf_hello();
-    @printf("ctx parse test (should be -1000): %d\n", ctx_parse_test());
+    @printf("ctx parse test (expected -1000):%d\n", ctx_parse_test());
     return 0;
 }
