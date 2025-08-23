@@ -32,14 +32,14 @@ fun lot_of_args(a: i32, b: i32, c: i32, d: i32,
 
 fun main() >> i32 {
     i32 five = 5;
-    @printf("%d\n", sum(2, five));
+    @printf("(expected 7):%d\n", sum(2, five));
     change_val(five); ?? should not change value
-    @printf("%d\n", five);
+    @printf("(expected 5):%d\n", five);
     u16 one = 1;
     ?? for some reason if use just 1 as literal autocast doesn't work
-    @printf("%d\n", sub_bytes(260));
-    @printf("%d\n", none(none(none(none(none(none(none(none(none(none(none(none(none(one))))))))))))));
-    @printf("%d\n", 
+    @printf("(expected 3):%d\n", sub_bytes(260));
+    @printf("(expected 1):%d\n", none(none(none(none(none(none(none(none(none(none(none(none(none(one))))))))))))));
+    @printf("(expected 20):%d\n", 
         lot_of_args(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
     );
     return 0;
