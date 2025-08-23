@@ -9,8 +9,8 @@ fun main() >> i32 {
         ?load b 4?
         >>>>[-<->]<<+
     };
-    @printf("a after bf: %d\n", a);
-    @printf("b after bf: %d\n", b);
+    @printf("a after bf (expected 352):%d\n", a);
+    @printf("b after bf (expected 0):%d\n", b);
     brainfuck {
         ++++++[>++++++++<-]>.
         <++++++++++.

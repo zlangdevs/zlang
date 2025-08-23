@@ -19,7 +19,7 @@ fun main() >> i32 {
     print_hello();
 
     i32 result = add_numbers();
-    @printf("Result: %d", result);
+    @printf("Result(expected 15):%d", result);
 
     return result;
 }

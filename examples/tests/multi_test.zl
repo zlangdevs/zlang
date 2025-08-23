@@ -25,5 +25,5 @@ fun main() >> i32 {
     i32 result = get_number();
     @printf("Got result: %d\n", result);
     cleanup();
-    return result;
+    return 0;
 }

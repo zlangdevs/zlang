@@ -4,9 +4,9 @@ fun main() >> i32 {
     f64 c = 2.718281828459045;
     f32 a_casted = a;
     f32 c_casted = c;
-    @printf("f16 value: %f\n", a_casted);
-    @printf("f32 value: %f\n", b);
-    @printf("f64 value: %f\n", c);
-    @printf("f32 value: %f\n", c_casted);
+    @printf("f16 value(expected 1.000000):%f\n", a_casted);
+    @printf("f32 value(expected 3.140000):%f\n", b);
+    @printf("f64 value(expected 2.718282):%f\n", c);
+    @printf("f32 value(expected 2.718282):%f\n", c_casted);
     return 0;
 }

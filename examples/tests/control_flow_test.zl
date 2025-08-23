@@ -23,6 +23,12 @@ fun main() >> i32 {
     i32 result4 = complexTest(10);
     i32 result5 = complexTest(0);
     i32 result6 = complexTest(-5);
+    @printf("(expected 300):%d\n", result1);
+    @printf("(expected 75):%d\n", result2);
+    @printf("(expected 29):%d\n", result3);
+    @printf("(expected 11):%d\n", result4);
+    @printf("(expected 0):%d\n", result5);
+    @printf("(expected -1):%d\n", result6);
     @printf("Results: %d, %d, %d, %d, %d, %d\n", result1, result2, result3, result4, result5, result6);
     return 0;
 }
