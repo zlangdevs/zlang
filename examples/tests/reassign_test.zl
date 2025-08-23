@@ -1,10 +1,10 @@
 fun main()>>i32 {
     i32 var = 0;
-    @printf("var = %d\n", var);
+    @printf("var = (expected 0):%d\n", var);
     var = 5;
-    @printf("var = %d\n", var);
+    @printf("var = (expected 5):%d\n", var);
     f32 float_val = 14.88;
     var = float_val;
-    @printf("var = %d\n", var);
+    @printf("var = (expected 14):%d\n", var);
     return 0;
 }
