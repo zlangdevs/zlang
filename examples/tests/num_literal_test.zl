@@ -8,14 +8,14 @@ fun main() >> i32 {
     f32 neg_exp = -2e-2;
     f32 neg_var = -neg_exp;
     
-    @printf("%d\n", simple);
-    @printf("%d\n", neg);
-    @printf("%d\n", pos);
-    @printf("%d\n", exp_pos);
-    @printf("%f\n", exp_neg);
-    @printf("%f\n", exp_zer);
-    @printf("%f\n", neg_exp);
-    @printf("%f\n", neg_var);
+    @printf("(expected 2):%d\n", simple);
+    @printf("(expected -2):%d\n", neg);
+    @printf("(expected 2):%d\n", pos);
+    @printf("(expected 200):%d\n", exp_pos);
+    @printf("(expected 0.020000):%f\n", exp_neg);
+    @printf("(expected 2.000000)%f\n", exp_zer);
+    @printf("(expected -0.020000)%f\n", neg_exp);
+    @printf("(expected 0.020000)%f\n", neg_var);
     
     return 0;
 }
