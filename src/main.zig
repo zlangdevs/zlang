@@ -165,7 +165,6 @@ pub fn main() !u8 {
             return 1;
         };
 
-        // Write LLVM IR to file
         const exe_filename = if (ctx.output_path.len == 0) consts.DEFAULT_OUTPUT_NAME
             else ctx.output_path;
         const ir_filename = try std.fmt.allocPrint(allocator, "{s}.ll", .{exe_filename});
@@ -176,7 +175,6 @@ pub fn main() !u8 {
         };
         std.debug.print("LLVM IR written to {s}\n", .{ir_filename});
 
-        // Compile to executable
         code_generator.compileToExecutable(exe_filename, ctx.arch) catch |err| {
             std.debug.print("Error compiling to executable: {}\n", .{err});
             return 1;
