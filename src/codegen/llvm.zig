@@ -534,11 +534,23 @@ pub const CodeGenerator = struct {
 
     fn generateArrayDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.CodegenError!void {
         const inner = decl.type_name[4..decl.type_name.len-1];
-        if (std.mem.indexOf(u8, inner, ", ")) |comma_pos| {
-            const element_type_name = inner[0..comma_pos];
-            const size_str = inner[comma_pos + 2..];
+        var comma_pos: ?usize = null;
+        var search_idx: usize = inner.len;
+        while (search_idx > 0) {
+            search_idx -= 1;
+            if (inner[search_idx] == ',') {
+                comma_pos = search_idx;
+                break;
+            }
+        }
+        
+        if (comma_pos) |pos| {
+            const element_type_part = inner[0..pos];
+            const element_type_name = std.mem.trim(u8, element_type_part, " \t");
+            const size_part = inner[pos + 1..];
+            const size_str = std.mem.trim(u8, size_part, " \t");
             const array_size = std.fmt.parseInt(usize, size_str, 10) catch {
-                std.debug.print("Error: invalid array size\n", .{});
+                std.debug.print("Error: invalid array size\\n", .{});
                 return errors.CodegenError.TypeMismatch;
             };
             const element_type = self.getLLVMType(element_type_name);
@@ -552,11 +564,11 @@ pub const CodeGenerator = struct {
             if (decl.initializer) |initializer| {
                 switch (initializer.data) {
                     .array_initializer => |init_list| {
-                        for (init_list.elements.items, 0..) |element, i| {
+                        for (init_list.elements.items, 0..) |element, idx| {
                             const element_value = try self.generateExpression(element);
                             var indices = [_]c.LLVMValueRef{
                                 c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0),
-                                c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(i)), 0)
+                                c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(idx)), 0)
                             };
                             const element_ptr = c.LLVMBuildGEP2(self.builder, array_type, alloca, &indices[0], 2, "array_element_ptr");
                             const casted_value = self.castToType(element_value, element_type);
@@ -564,13 +576,13 @@ pub const CodeGenerator = struct {
                         }
                     },
                     else => {
-                        std.debug.print("Error: invalid array initializer\n", .{});
+                        std.debug.print("Error: invalid array initializer\\n", .{});
                         return errors.CodegenError.TypeMismatch;
                     }
                 }
             }
         } else {
-            std.debug.print("Error: invalid array type format\n", .{});
+            std.debug.print("Error: invalid array type format\\n", .{});
             return errors.CodegenError.TypeMismatch;
         }
     }
