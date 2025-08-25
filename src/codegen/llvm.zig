@@ -359,19 +359,20 @@ pub const CodeGenerator = struct {
                     return;
                 }
 
-                const var_type = self.getLLVMType(decl.type_name);
-
-                const alloca = c.LLVMBuildAlloca(self.builder, var_type, decl.name.ptr);
-
-                try self.variables.put(decl.name, VariableInfo{
-                    .value = alloca,
-                    .type_ref = var_type,
-                });
-
-                if (decl.initializer) |initializer| {
-                    const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
-                    const casted_value = self.castToType(init_value, var_type);
-                    _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
+                if (std.mem.startsWith(u8, decl.type_name, "arr<") and std.mem.endsWith(u8, decl.type_name, ">")) {
+                    try self.generateArrayDeclaration(decl);
+                } else {
+                    const var_type = self.getLLVMType(decl.type_name);
+                    const alloca = c.LLVMBuildAlloca(self.builder, var_type, decl.name.ptr);
+                    try self.variables.put(decl.name, VariableInfo{
+                        .value = alloca,
+                        .type_ref = var_type,
+                    });
+                    if (decl.initializer) |initializer| {
+                        const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
+                        const casted_value = self.castToType(init_value, var_type);
+                        _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
+                    }
                 }
             },
             .function_call => {
@@ -531,14 +532,47 @@ pub const CodeGenerator = struct {
         _ = self.loop_context_stack.pop();
     }
 
-    fn generateBreakStatement(self: *CodeGenerator) errors.CodegenError!void {
-        if (self.loop_context_stack.items.len == 0) {
-            std.debug.print("Error: break statement not inside a loop\n", .{});
+    fn generateArrayDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.CodegenError!void {
+        const inner = decl.type_name[4..decl.type_name.len-1];
+        if (std.mem.indexOf(u8, inner, ", ")) |comma_pos| {
+            const element_type_name = inner[0..comma_pos];
+            const size_str = inner[comma_pos + 2..];
+            const array_size = std.fmt.parseInt(usize, size_str, 10) catch {
+                std.debug.print("Error: invalid array size\n", .{});
+                return errors.CodegenError.TypeMismatch;
+            };
+            const element_type = self.getLLVMType(element_type_name);
+            const array_type = c.LLVMArrayType(element_type, @intCast(array_size));
+            const alloca = c.LLVMBuildAlloca(self.builder, array_type, decl.name.ptr);
+            
+            try self.variables.put(decl.name, VariableInfo{
+                .value = alloca,
+                .type_ref = array_type,
+            });
+            if (decl.initializer) |initializer| {
+                switch (initializer.data) {
+                    .array_initializer => |init_list| {
+                        for (init_list.elements.items, 0..) |element, i| {
+                            const element_value = try self.generateExpression(element);
+                            var indices = [_]c.LLVMValueRef{
+                                c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0),
+                                c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(i)), 0)
+                            };
+                            const element_ptr = c.LLVMBuildGEP2(self.builder, array_type, alloca, &indices[0], 2, "array_element_ptr");
+                            const casted_value = self.castToType(element_value, element_type);
+                            _ = c.LLVMBuildStore(self.builder, casted_value, element_ptr);
+                        }
+                    },
+                    else => {
+                        std.debug.print("Error: invalid array initializer\n", .{});
+                        return errors.CodegenError.TypeMismatch;
+                    }
+                }
+            }
+        } else {
+            std.debug.print("Error: invalid array type format\n", .{});
             return errors.CodegenError.TypeMismatch;
         }
-        const loop_context = self.loop_context_stack.items[self.loop_context_stack.items.len - 1];
-        const break_block = loop_context.break_block;
-        _ = c.LLVMBuildBr(self.builder, break_block);
     }
 
     fn generateContinueStatement(self: *CodeGenerator) errors.CodegenError!void {
@@ -549,6 +583,16 @@ pub const CodeGenerator = struct {
         const loop_context = self.loop_context_stack.items[self.loop_context_stack.items.len - 1];
         const continue_block = loop_context.continue_block;
         _ = c.LLVMBuildBr(self.builder, continue_block);
+    }
+
+    fn generateBreakStatement(self: *CodeGenerator) errors.CodegenError!void {
+        if (self.loop_context_stack.items.len == 0) {
+            std.debug.print("Error: break statement not inside a loop\n", .{});
+            return errors.CodegenError.TypeMismatch;
+        }
+        const loop_context = self.loop_context_stack.items[self.loop_context_stack.items.len - 1];
+        const break_block = loop_context.break_block;
+        _ = c.LLVMBuildBr(self.builder, break_block);
     }
 
     pub fn castToType(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef) c.LLVMValueRef {
@@ -610,7 +654,7 @@ pub const CodeGenerator = struct {
                         't' => transformed_string.append('\t') catch return errors.CodegenError.OutOfMemory,
                         'r' => transformed_string.append('\r') catch return errors.CodegenError.OutOfMemory,
                         '\'' => transformed_string.append('\'') catch return errors.CodegenError.OutOfMemory,
-                        '\"' => transformed_string.append('\"') catch return errors.CodegenError.OutOfMemory,
+                        '"' => transformed_string.append('"') catch return errors.CodegenError.OutOfMemory,
                         else => {
                             transformed_string.append('\\') catch return errors.CodegenError.OutOfMemory;
                             transformed_string.append(str[i]) catch return errors.CodegenError.OutOfMemory;

@@ -32,6 +32,7 @@ extern void* zig_create_for_stmt(void* condition, void* body);
 extern void* zig_create_c_for_stmt(void* init, void* condition, void* increment, void* body);
 extern void* zig_create_break_stmt(void);
 extern void* zig_create_continue_stmt(void);
+extern void* zig_create_array_initializer(void* elements);
 extern void zig_add_to_program(void* program, void* function);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
@@ -75,7 +76,9 @@ void* ast_root = NULL;
 %type <node> var_declaration function_call return_statement assignment brainfuck_statement
 %type <node> expression term factor argument_list arguments
 %type <node> c_for_statement for_increment
+%type <node> array_initializer
 %type <string> type_name function_name string_literal
+%type <string> complex_type_name
 
 %start program
 
@@ -139,8 +142,18 @@ function_name:
     TOKEN_IDENTIFIER { $$ = strdup($1); }
 ;
 
+complex_type_name:
+    TOKEN_IDENTIFIER '<' TOKEN_IDENTIFIER ',' TOKEN_NUMBER '>' {
+        // Allocate memory for the combined string "arr<type,size>"
+        char* result = malloc(strlen($1) + strlen($3) + strlen($5) + 6);
+        sprintf(result, "%s<%s, %s>", $1, $3, $5);
+        $$ = result;
+    }
+;
+
 type_name:
-    TOKEN_IDENTIFIER { $$ = strdup($1); }
+    complex_type_name { $$ = $1; }
+  | TOKEN_IDENTIFIER { $$ = strdup($1); }
 ;
 
 statement_list:
@@ -227,8 +240,19 @@ assignment:
     }
 ;
 
+array_initializer:
+    TOKEN_LBRACE argument_list TOKEN_RBRACE { 
+        $$ = zig_create_array_initializer($2);
+    }
+;
+
 var_declaration:
     type_name TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
+        void* initializer = $4;
+        $$ = zig_create_var_decl($1, $2, initializer);
+        free($1);
+    }
+  | type_name TOKEN_IDENTIFIER TOKEN_ASSIGN array_initializer {
         void* initializer = $4;
         $$ = zig_create_var_decl($1, $2, initializer);
         free($1);

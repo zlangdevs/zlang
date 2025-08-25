@@ -463,6 +463,23 @@ export fn zig_create_continue_stmt() ?*anyopaque {
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_array_initializer(elements_ptr: ?*anyopaque) ?*anyopaque {
+    var elements = std.ArrayList(*ast.Node).init(global_allocator);
+    if (elements_ptr) |ptr| {
+        const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
+        elements = node_list.items;
+    }
+
+    const array_init_data = ast.NodeData{
+        .array_initializer = ast.ArrayInitializer{
+            .elements = elements,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, array_init_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!?*ast.Node {
     global_allocator = allocator;
     ast_root = null;
