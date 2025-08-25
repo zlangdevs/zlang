@@ -22,6 +22,8 @@ pub const NodeType = enum {
     continue_stmt,
     c_for_stmt,
     array_initializer,
+    array_index,
+    array_assignment,
 };
 
 pub const BinaryOp = struct {
@@ -132,6 +134,17 @@ pub const ArrayInitializer = struct {
     elements: std.ArrayList(*Node),
 };
 
+pub const ArrayIndex = struct {
+    array_name: []const u8,
+    index: *Node,
+};
+
+pub const ArrayAssignment = struct {
+    array_name: []const u8,
+    index: *Node,
+    value: *Node,
+};
+
 pub const NodeData = union(NodeType) {
     program: Program,
     function: Function,
@@ -154,6 +167,8 @@ pub const NodeData = union(NodeType) {
     continue_stmt: ContinueStmt,
     c_for_stmt: CForStmt,
     array_initializer: ArrayInitializer,
+    array_index: ArrayIndex,
+    array_assignment: ArrayAssignment,
 };
 
 pub const Node = struct {
@@ -244,6 +259,13 @@ pub const Node = struct {
                     element.destroy();
                 }
                 arr_init.elements.deinit();
+            },
+            .array_index => |arr_idx| {
+                arr_idx.index.destroy();
+            },
+            .array_assignment => |arr_ass| {
+                arr_ass.index.destroy();
+                arr_ass.value.destroy();
             },
             else => {},
         }
@@ -444,6 +466,17 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
                 const is_elem_last = i == arr_init.elements.items.len - 1;
                 printAST(element, indent + 1, is_elem_last, false);
             }
+        },
+        .array_index => |arr_idx| {
+            std.debug.print("🔍 Array Index: \x1b[36m{s}\x1b[0m[\n", .{arr_idx.array_name});
+            printAST(arr_idx.index, indent + 1, true, false);
+            std.debug.print("    ]\n", .{});
+        },
+        .array_assignment => |arr_ass| {
+            std.debug.print("🔄 Array Assignment: \x1b[36m{s}\x1b[0m[\n", .{arr_ass.array_name});
+            printAST(arr_ass.index, indent + 1, false, false);
+            std.debug.print("    ] = \n", .{});
+            printAST(arr_ass.value, indent + 1, true, false);
         },
     }
 }

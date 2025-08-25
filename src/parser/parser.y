@@ -33,6 +33,8 @@ extern void* zig_create_c_for_stmt(void* init, void* condition, void* increment,
 extern void* zig_create_break_stmt(void);
 extern void* zig_create_continue_stmt(void);
 extern void* zig_create_array_initializer(void* elements);
+extern void* zig_create_array_index(const char* array_name, void* index);
+extern void* zig_create_array_assignment(const char* array_name, void* index, void* value);
 extern void zig_add_to_program(void* program, void* function);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
@@ -75,8 +77,8 @@ void* ast_root = NULL;
 %type <node> program function_list function statement_list statement
 %type <node> var_declaration function_call return_statement assignment brainfuck_statement
 %type <node> expression term factor argument_list arguments
-%type <node> c_for_statement for_increment
-%type <node> array_initializer
+%type <node> comparison_expression simple_term c_for_statement for_increment
+%type <node> array_initializer array_assignment
 %type <string> type_name function_name string_literal
 %type <string> complex_type_name
 
@@ -167,6 +169,7 @@ statement_list:
 statement:
     var_declaration TOKEN_SEMICOLON { $$ = $1; }
   | assignment TOKEN_SEMICOLON { $$ = $1; }
+  | array_assignment TOKEN_SEMICOLON { $$ = $1; }
   | function_call TOKEN_SEMICOLON { $$ = $1; }
   | return_statement TOKEN_SEMICOLON { $$ = $1; }
   | brainfuck_statement TOKEN_SEMICOLON { $$ = $1; }
@@ -196,7 +199,7 @@ for_statement:
     TOKEN_FOR TOKEN_LBRACE statement_list TOKEN_RBRACE {
         $$ = zig_create_for_stmt(NULL, $3);
     }
-  | TOKEN_FOR expression TOKEN_LBRACE statement_list TOKEN_RBRACE {
+  | TOKEN_FOR comparison_expression TOKEN_LBRACE statement_list TOKEN_RBRACE {
         $$ = zig_create_for_stmt($2, $4);
     }
 ;
@@ -240,6 +243,12 @@ assignment:
     }
 ;
 
+array_assignment:
+    TOKEN_IDENTIFIER TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_ASSIGN expression {
+        $$ = zig_create_array_assignment($1, $3, $6);
+    }
+;
+
 array_initializer:
     TOKEN_LBRACE argument_list TOKEN_RBRACE { 
         $$ = zig_create_array_initializer($2);
@@ -248,11 +257,6 @@ array_initializer:
 
 var_declaration:
     type_name TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
-        void* initializer = $4;
-        $$ = zig_create_var_decl($1, $2, initializer);
-        free($1);
-    }
-  | type_name TOKEN_IDENTIFIER TOKEN_ASSIGN array_initializer {
         void* initializer = $4;
         $$ = zig_create_var_decl($1, $2, initializer);
         free($1);
@@ -294,6 +298,22 @@ arguments:
     }
 ;
 
+comparison_expression:
+    simple_term TOKEN_EQUAL simple_term { $$ = zig_create_comparison('=', $1, $3); }
+  | simple_term TOKEN_NON_EQUAL simple_term { $$ = zig_create_comparison('!', $1, $3); }
+  | simple_term TOKEN_LESS simple_term { $$ = zig_create_comparison('<', $1, $3); }
+  | simple_term TOKEN_GREATER simple_term { $$ = zig_create_comparison('>', $1, $3); }
+  | simple_term TOKEN_EQ_LESS simple_term { $$ = zig_create_comparison('L', $1, $3); }
+  | simple_term TOKEN_EQ_GREATER simple_term { $$ = zig_create_comparison('G', $1, $3); }
+;
+
+simple_term:
+    TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
+  | TOKEN_FLOAT { $$ = zig_create_float_literal($1); }
+  | TOKEN_NUMBER { $$ = zig_create_number_literal($1); }
+  | TOKEN_LPAREN simple_term TOKEN_RPAREN { $$ = $2; }
+;
+
 expression:
     term { $$ = $1; }
   | expression TOKEN_PLUS term { $$ = zig_create_binary_op('+', $1, $3); }
@@ -319,6 +339,8 @@ term:
 
 factor:
     TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
+  | TOKEN_IDENTIFIER TOKEN_LBRACKET expression TOKEN_RBRACKET { $$ = zig_create_array_index($1, $3); }
+  | array_initializer { $$ = $1; }
   | TOKEN_FLOAT { $$ = zig_create_float_literal($1); }
   | TOKEN_NUMBER { $$ = zig_create_number_literal($1); }
   | string_literal { $$ = zig_create_string_literal($1); free($1); }

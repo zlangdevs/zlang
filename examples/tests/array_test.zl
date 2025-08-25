@@ -18,5 +18,16 @@ fun main() >> i32 {
     arr<i16, 4> var_arr = {a, b, c};
     arr<i16, 10> empty_arr;
     arr<bool,2> bool = {true,false};
+    
+    arr<i32, 5> myarr = {1, 2, 3, 4, 5};
+    myarr[0] = 10;
+    i32 val = myarr[0];
+    myarr = {1, 1, 1, 1, 1};
+    
+    @printf("myarr[0] (expected 1):%d\n", myarr[0]);
+    
+    myarr[4] = myarr[2] * 5 + 3;
+    @printf("myarr[2] (expected 8):%d\n", myarr[4]);
+    
     return 0;
 }
