@@ -338,9 +338,14 @@ pub const CodeGenerator = struct {
         switch (stmt.data) {
             .assignment => |as| {
                 const var_info = self.variables.get(as.name) orelse return errors.CodegenError.UndefinedVariable;
-                const value = try self.generateExpression(as.value);
-                const casted_value = self.castToType(value, var_info.type_ref);
-                _ = c.LLVMBuildStore(self.builder, casted_value, var_info.value);
+                const var_type_kind = c.LLVMGetTypeKind(var_info.type_ref);
+                if (var_type_kind == c.LLVMArrayTypeKind) {
+                    try self.generateArrayReassignment(as.name, as.value);
+                } else {
+                    const value = try self.generateExpression(as.value);
+                    const casted_value = self.castToType(value, var_info.type_ref);
+                    _ = c.LLVMBuildStore(self.builder, casted_value, var_info.value);
+                }
             },
             .var_decl => |decl| {
                 if (self.variables.contains(decl.name)) {
@@ -403,6 +408,9 @@ pub const CodeGenerator = struct {
             },
             .continue_stmt => {
                 try self.generateContinueStatement();
+            },
+            .array_assignment => |arr_ass| {
+                try self.generateArrayAssignment(arr_ass);
             },
             else => {},
         }
@@ -530,6 +538,50 @@ pub const CodeGenerator = struct {
         _ = c.LLVMBuildBr(self.builder, condition_bb);
         c.LLVMPositionBuilderAtEnd(self.builder, exit_bb);
         _ = self.loop_context_stack.pop();
+    }
+
+    fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignment) errors.CodegenError!void {
+        const var_info = self.variables.get(arr_ass.array_name) orelse return errors.CodegenError.UndefinedVariable;
+
+        const index_value = try self.generateExpression(arr_ass.index);
+        const value = try self.generateExpression(arr_ass.value);
+
+        const element_type = c.LLVMGetElementType(var_info.type_ref);
+
+        var indices = [_]c.LLVMValueRef{
+            c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0),
+            index_value
+        };
+        const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
+
+        const casted_value = self.castToType(value, element_type);
+        _ = c.LLVMBuildStore(self.builder, casted_value, element_ptr);
+    }
+
+    fn generateArrayReassignment(self: *CodeGenerator, array_name: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
+        const var_info = self.variables.get(array_name) orelse return errors.CodegenError.UndefinedVariable;
+
+        switch (value_expr.data) {
+            .array_initializer => |init_list| {
+                for (init_list.elements.items, 0..) |element, idx| {
+                    const element_value = try self.generateExpression(element);
+                    const element_type = c.LLVMGetElementType(var_info.type_ref);
+
+                    var indices = [_]c.LLVMValueRef{
+                        c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0),
+                        c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(idx)), 0)
+                    };
+                    const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
+
+                    const casted_value = self.castToType(element_value, element_type);
+                    _ = c.LLVMBuildStore(self.builder, casted_value, element_ptr);
+                }
+            },
+            else => {
+                std.debug.print("Error: invalid array re-assignment\n", .{});
+                return errors.CodegenError.TypeMismatch;
+            }
+        }
     }
 
     fn generateArrayDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.CodegenError!void {
@@ -871,6 +923,18 @@ pub const CodeGenerator = struct {
                 } else {
                     return c.LLVMBuildCall2(self.builder, func_type, func, null, 0, call_name_z.ptr);
                 }
+            },
+            .array_index => |arr_idx| {
+                const var_info = self.variables.get(arr_idx.array_name) orelse return errors.CodegenError.UndefinedVariable;
+                const index_value = try self.generateExpression(arr_idx.index);
+                const element_type = c.LLVMGetElementType(var_info.type_ref);
+                var indices = [_]c.LLVMValueRef{
+                    c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0),
+                    index_value
+                };
+                const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
+
+                return c.LLVMBuildLoad2(self.builder, element_type, element_ptr, "array_element");
             },
             else => return errors.CodegenError.TypeMismatch,
         }
