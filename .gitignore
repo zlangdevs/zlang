@@ -7,3 +7,4 @@ src/parser/parser.c
 src/parser/parser.h
 output.ll
 output
+convert.sh

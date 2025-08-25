@@ -21,6 +21,7 @@ pub const NodeType = enum {
     break_stmt,
     continue_stmt,
     c_for_stmt,
+    array_initializer,
 };
 
 pub const BinaryOp = struct {
@@ -127,6 +128,10 @@ pub const BreakStmt = struct {};
 
 pub const ContinueStmt = struct {};
 
+pub const ArrayInitializer = struct {
+    elements: std.ArrayList(*Node),
+};
+
 pub const NodeData = union(NodeType) {
     program: Program,
     function: Function,
@@ -148,6 +153,7 @@ pub const NodeData = union(NodeType) {
     break_stmt: BreakStmt,
     continue_stmt: ContinueStmt,
     c_for_stmt: CForStmt,
+    array_initializer: ArrayInitializer,
 };
 
 pub const Node = struct {
@@ -232,6 +238,12 @@ pub const Node = struct {
                 if (c_for.increment) |inc| inc.destroy();
                 for (c_for.body.items) |stmt| stmt.destroy();
                 c_for.body.deinit();
+            },
+            .array_initializer => |arr_init| {
+                for (arr_init.elements.items) |element| {
+                    element.destroy();
+                }
+                arr_init.elements.deinit();
             },
             else => {},
         }
@@ -425,6 +437,13 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         },
         .continue_stmt => {
             std.debug.print("➡️  Continue Statement\n", .{});
+        },
+        .array_initializer => |arr_init| {
+            std.debug.print("🔢 Array Initializer ({} elements)\n", .{arr_init.elements.items.len});
+            for (arr_init.elements.items, 0..) |element, i| {
+                const is_elem_last = i == arr_init.elements.items.len - 1;
+                printAST(element, indent + 1, is_elem_last, false);
+            }
         },
     }
 }
