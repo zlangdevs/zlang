@@ -6,7 +6,7 @@ fun main() >> i32 {
     arr<i8, 3> i8_arr = {1, -2, 3};
     arr<i16, 3> i16_arr = {100, -200, 300};
     arr<i32, 3> i32_arr = {1000, -2000, 3000};
-    arr<i64, 3> i64_arr = {10000, -20000, 30000};
+    arr<i64, 3> i64_arr = {10000, -2e4, 30000};
     
     arr<f16, 2> f16_arr = {.1, .2};
     arr<f32, 2> f32_arr = {.1, .2};
@@ -17,5 +17,6 @@ fun main() >> i32 {
     i32 c = 300;
     arr<i16, 4> var_arr = {a, b, c};
     arr<i16, 10> empty_arr;
+    arr<bool,2> bool = {true,false};
     return 0;
 }
