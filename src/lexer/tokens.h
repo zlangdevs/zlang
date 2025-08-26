@@ -36,6 +36,7 @@ typedef enum {
     TOKEN_AND,
     TOKEN_OR,
     TOKEN_NOT,
+    TOKEN_AMPERSAND,
     TOKEN_EOF = 0
 } TokenType;
 

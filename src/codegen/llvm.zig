@@ -114,7 +114,11 @@ pub const CodeGenerator = struct {
     }
 
     fn getLLVMType(self: *CodeGenerator, type_name: []const u8) c.LLVMTypeRef {
-        if (std.mem.eql(u8, type_name, "i8")) {
+        if (std.mem.startsWith(u8, type_name, "ptr<") and std.mem.endsWith(u8, type_name, ">")) {
+            const inner_type_name = type_name[4..type_name.len-1];
+            const inner_type = self.getLLVMType(inner_type_name);
+            return c.LLVMPointerType(inner_type, 0);
+        } else if (std.mem.eql(u8, type_name, "i8")) {
             return c.LLVMInt8TypeInContext(self.context);
         } else if (std.mem.eql(u8, type_name, "i16")) {
             return c.LLVMInt16TypeInContext(self.context);
@@ -983,6 +987,25 @@ pub const CodeGenerator = struct {
                         const bool_val = self.convertToBool(operand_val);
                         const true_val = c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 1, 0);
                         return c.LLVMBuildXor(self.builder, bool_val, true_val, "not");
+                    },
+                    '&' => {
+                        if (un.operand.data == .identifier) {
+                            const ident = un.operand.data.identifier;
+                            if (self.variables.get(ident.name)) |var_info| {
+                                return var_info.value;
+                            }
+                        }
+                        std.debug.print("Error: Address-of operator can only be applied to variables\n", .{});
+                        return errors.CodegenError.TypeMismatch;
+                    },
+                    '*' => {
+                        if (c.LLVMGetTypeKind(operand_type) == c.LLVMPointerTypeKind) {
+                            const pointee_type = c.LLVMGetElementType(operand_type);
+                            return c.LLVMBuildLoad2(self.builder, pointee_type, operand_val, "deref");
+                        } else {
+                            std.debug.print("Error: Dereference operator can only be applied to pointers\n", .{});
+                            return errors.CodegenError.TypeMismatch;
+                        }
                     },
                     else => {
                         return errors.CodegenError.UnsupportedOperation;
