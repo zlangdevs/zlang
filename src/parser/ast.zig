@@ -24,6 +24,7 @@ pub const NodeType = enum {
     array_initializer,
     array_index,
     array_assignment,
+    c_function_decl,
 };
 
 pub const BinaryOp = struct {
@@ -145,6 +146,12 @@ pub const ArrayAssignment = struct {
     value: *Node,
 };
 
+pub const CFunctionDecl = struct {
+    name: []const u8,
+    return_type: []const u8,
+    parameters: std.ArrayList(Parameter),
+};
+
 pub const NodeData = union(NodeType) {
     program: Program,
     function: Function,
@@ -169,6 +176,7 @@ pub const NodeData = union(NodeType) {
     array_initializer: ArrayInitializer,
     array_index: ArrayIndex,
     array_assignment: ArrayAssignment,
+    c_function_decl: CFunctionDecl,
 };
 
 pub const Node = struct {
@@ -477,6 +485,18 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             printAST(arr_ass.index, indent + 1, false, false);
             std.debug.print("    ] = \n", .{});
             printAST(arr_ass.value, indent + 1, true, false);
+        },
+        .c_function_decl => |c_func| {
+            if (c_func.parameters.items.len > 0) {
+                std.debug.print("🔗 C Function Decl: \x1b[32m{s}\x1b[0m(", .{c_func.name});
+                for (c_func.parameters.items, 0..) |param, i| {
+                    if (i > 0) std.debug.print(", ", .{});
+                    std.debug.print("\x1b[36m{s}\x1b[0m: \x1b[33m{s}\x1b[0m", .{param.name, param.type_name});
+                }
+                std.debug.print(") -> \x1b[33m{s}\x1b[0m\n", .{c_func.return_type});
+            } else {
+                std.debug.print("🔗 C Function Decl: \x1b[32m{s}\x1b[0m() -> \x1b[33m{s}\x1b[0m\n", .{c_func.name, c_func.return_type});
+            }
         },
     }
 }
