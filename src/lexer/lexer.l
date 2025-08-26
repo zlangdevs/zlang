@@ -47,6 +47,8 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "||"        { return TOKEN_OR; }
 "*"         { return TOKEN_MULTIPLY; }
 "/"         { return TOKEN_DIVIDE; }
+"++"        { return TOKEN_INCREMENT; }
+"--"        { return TOKEN_DECREMENT; }
 "+"         { return TOKEN_PLUS; }
 "-"         { return TOKEN_MINUS; }
 "<="        { return TOKEN_EQ_LESS; }
@@ -71,16 +73,16 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 ";"         { return TOKEN_SEMICOLON; }
 [ \t\n]+    { /* skip spaces */ }
 "??".*      { /* skip single-line comments */ }
-<BRAINFUCK>[^{}]+ { 
+<BRAINFUCK>[^{}]+ {
     yylval.string = realloc(yylval.string, strlen(yylval.string) + yyleng + 1);
-    strcat(yylval.string, yytext); 
+    strcat(yylval.string, yytext);
 }
-<BRAINFUCK>"{"    { 
+<BRAINFUCK>"{"    {
     yylval.string = realloc(yylval.string, strlen(yylval.string) + 2);
-    strcat(yylval.string, "{"); 
+    strcat(yylval.string, "{");
 }
-<BRAINFUCK>"}"    { 
-    BEGIN(INITIAL); 
-    return TOKEN_BRAINFUCK; 
+<BRAINFUCK>"}"    {
+    BEGIN(INITIAL);
+    return TOKEN_BRAINFUCK;
 }
 %%
