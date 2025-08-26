@@ -1,0 +1,85 @@
+fun testPointerParameter(ptr: ptr<i32>) >> void {
+    @printf("Function received pointer: %p\n", ptr);
+}
+
+fun testAllTypes() >> i32 {
+    @printf("=== Testing All Pointer Types ===\n");
+
+    bool b = true;
+    ptr<bool> pb = &b;
+    @printf("bool pointer: %p\n", pb);
+
+    i8 i8v = -42;
+    ptr<i8> pi8 = &i8v;
+    @printf("i8 pointer: %p\n", pi8);
+
+    u8 u8v = 255;
+    ptr<u8> pu8 = &u8v;
+    @printf("u8 pointer: %p\n", pu8);
+
+    i16 i16v = -1000;
+    ptr<i16> pi16 = &i16v;
+    @printf("i16 pointer: %p\n", pi16);
+
+    u16 u16v = 65535;
+    ptr<u16> pu16 = &u16v;
+    @printf("u16 pointer: %p\n", pu16);
+
+    i32 i32v = -2147483648;
+    ptr<i32> pi32 = &i32v;
+    @printf("i32 pointer: %p\n", pi32);
+
+    u32 u32v = 4294967295;
+    ptr<u32> pu32 = &u32v;
+    @printf("u32 pointer: %p\n", pu32);
+
+    i64 i64v = -9223372036854775808;
+    ptr<i64> pi64 = &i64v;
+    @printf("i64 pointer: %p\n", pi64);
+
+    u64 u64v = 18446744073709551615;
+    ptr<u64> pu64 = &u64v;
+    @printf("u64 pointer: %p\n", pu64);
+
+    f16 f16v = 1.5;
+    ptr<f16> pf16 = &f16v;
+    @printf("f16 pointer: %p\n", pf16);
+
+    f32 f32v = 3.14159;
+    ptr<f32> pf32 = &f32v;
+    @printf("f32 pointer: %p\n", pf32);
+
+    f64 f64v = 2.718281828459;
+    ptr<f64> pf64 = &f64v;
+    @printf("f64 pointer: %p\n", pf64);
+
+    return 13;
+}
+
+fun main() >> i32 {
+    @printf("=== Comprehensive Pointer Test ===\n\n");
+
+    i32 types_tested = testAllTypes();
+    @printf("(expected 13):%d\n", types_tested);
+
+    @printf("\n=== Testing Pointer Operations ===\n");
+
+    i32 x = 42;
+    i32 y = 100;
+    ptr<i32> p = &x;
+
+    @printf("(expected 42):%d\n", x);
+    @printf("(expected 100):%d\n", y);
+    @printf("p points to: %p\n", p);
+
+    p = &y;
+    @printf("After reassigning to y:\n");
+    @printf("p now points to: %p\n", p);
+
+    @printf("Testing function with pointer parameter...\n");
+    ptr<i32> px = &x;
+    testPointerParameter(px);
+
+    @printf("\n=== Test Complete ===\n");
+    return 0;
+}

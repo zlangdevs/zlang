@@ -15,6 +15,7 @@ DIGIT    [0-9]
 LETTER   [a-zA-Z_]
 IDENT    {LETTER}({LETTER}|{DIGIT})*
 ARRAY_TYPE arr<[a-zA-Z_][a-zA-Z0-9_]*,[ \t]*[0-9]+>
+PTR_TYPE ptr<[^>]*>
 STRING   \"([^"\\]|\\.)*\"
 INTEGER  {DIGIT}+
 FLOAT_BASIC  {DIGIT}+\.{DIGIT}+
@@ -34,6 +35,7 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "continue"  { return TOKEN_CONTINUE; }
 "brainfuck"[ \t\n]*"{" { BEGIN(BRAINFUCK); yylval.string = strdup(""); }
 {ARRAY_TYPE} { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
+{PTR_TYPE} { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
 {IDENT}     { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
 {FLOAT_EXP_DOT}  { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
 {FLOAT_EXP_INT}  { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
@@ -54,6 +56,7 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "<"         { return TOKEN_LESS; }
 ">"         { return TOKEN_GREATER; }
 "!"         { return TOKEN_NOT; }
+"&"         { return TOKEN_AMPERSAND; }
 "="         { return TOKEN_ASSIGN; }
 ">>"        { return TOKEN_RSHIFT; }
 "{"         { return TOKEN_LBRACE; }

@@ -61,7 +61,7 @@ void* ast_root = NULL;
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT
-%token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_AND TOKEN_OR TOKEN_NOT
+%token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_AND TOKEN_OR TOKEN_NOT TOKEN_AMPERSAND
 
 %type <node> if_statement
 %type <node> for_statement
@@ -170,6 +170,13 @@ complex_type_name:
         // Allocate memory for the combined string "arr<type,size>"
         char* result = malloc(strlen($1) + strlen($3) + strlen($5) + 6);
         sprintf(result, "%s<%s, %s>", $1, $3, $5);
+        $$ = result;
+    }
+  | TOKEN_IDENTIFIER '<' type_name '>' {
+        // Allocate memory for the combined string "ptr<type>" where type can be nested
+        char* result = malloc(strlen($1) + strlen($3) + 5);
+        sprintf(result, "%s<%s>", $1, $3);
+        free($3);
         $$ = result;
     }
 ;
@@ -343,6 +350,7 @@ expression:
   | TOKEN_NOT expression %prec NOT { $$ = zig_create_unary_op('!', $2); }
   | TOKEN_MINUS expression %prec UMINUS { $$ = zig_create_unary_op('-', $2); }
   | TOKEN_PLUS expression %prec UPLUS { $$ = zig_create_unary_op('+', $2); }
+  | TOKEN_AMPERSAND expression %prec NOT { $$ = zig_create_unary_op('&', $2); }
   | expression TOKEN_EQUAL expression { $$ = zig_create_comparison('=', $1, $3); }
   | expression TOKEN_NON_EQUAL expression { $$ = zig_create_comparison('!', $1, $3); }
   | expression TOKEN_LESS expression { $$ = zig_create_comparison('<', $1, $3); }
@@ -368,6 +376,7 @@ factor:
   | string_literal { $$ = zig_create_string_literal($1); free($1); }
   | function_call { $$ = $1; }
   | TOKEN_LPAREN expression TOKEN_RPAREN { $$ = $2; }
+  | TOKEN_MULTIPLY expression %prec NOT { $$ = zig_create_unary_op('*', $2); }
 ;
 
 string_literal:
