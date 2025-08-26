@@ -1,0 +1,71 @@
+fun main() >> i32 {
+    u8 inp;
+    arr<u8, 300> mem;
+    arr<u8, 300> code;
+    u8 mem_ptr = 0;
+    u16 code_ptr = 0;
+    
+    for i32 inc = 0; inc < 300; inc = inc + 1 {
+        code[inc] = 0;
+        mem[inc] = 0;
+    }
+    
+    @printf("Paste Brainfuck code and press enter:\n");
+    for {
+        @scanf("%c", &inp);
+        if inp == 10 {break;}
+        code[code_ptr] = inp;
+        code_ptr = code_ptr + 1;
+    }
+    
+    @printf("\nInput code:\n");
+    code_ptr = 0;
+    for {
+        if code[code_ptr] == 0 {break;}
+        @printf("%c", code[code_ptr]);
+        code_ptr = code_ptr + 1;
+    }
+    @printf("\n\nProcessing\n\n");
+    code_ptr = 0;
+    u8 loop_stack = 0;
+    
+    for {
+        u8 c = code[code_ptr];
+        if c == 0 {break;}
+        else if c == 43 {mem[mem_ptr] = mem[mem_ptr] + 1;} ?? +
+        else if c == 45 {mem[mem_ptr] = mem[mem_ptr] - 1;} ?? -
+        else if c == 60 {mem_ptr = mem_ptr - 1;} ?? <
+        else if c == 62 {mem_ptr = mem_ptr + 1;} ?? >
+        else if c == 44 {@scanf("%c", mem[mem_ptr]);} ?? ,
+        else if c == 46 {@printf("%c", mem[mem_ptr]);} ?? .
+        else if c == 91 {
+            if mem[mem_ptr] == 0 {
+                loop_stack = 1;
+                code_ptr = code_ptr + 1;
+                for {
+                    if code[code_ptr] == 0 {@printf("Error: Unmatched 91. Exiting...\n");return 1;}
+                    if code[code_ptr] == 91 {loop_stack = loop_stack + 1;}
+                    else if code[code_ptr] == 93 {loop_stack = loop_stack - 1;}
+                    if loop_stack == 0 {break;}
+                    code_ptr = code_ptr + 1;
+                }
+            }
+        }
+        else if c == 93 {
+            if mem[mem_ptr] != 0 {
+                loop_stack = 1;
+                code_ptr = code_ptr - 1;
+                for {
+                    if code_ptr == 0 {@printf("Error: Unmatched 93. Exiting...\n");return 1;}
+                    if code[code_ptr] == 93 {loop_stack = loop_stack + 1;}
+                    else if code[code_ptr] == 91 {loop_stack = loop_stack - 1;}
+                    if loop_stack == 0 {break;}
+                    code_ptr = code_ptr - 1;
+                }
+            }
+        }
+        code_ptr = code_ptr + 1;
+    }
+    
+    return 0;
+}
