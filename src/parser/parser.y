@@ -60,13 +60,14 @@ void* ast_root = NULL;
 %token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
-%token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT
+%token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT TOKEN_DECREMENT TOKEN_INCREMENT
 %token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_AND TOKEN_OR TOKEN_NOT TOKEN_AMPERSAND
 
 %type <node> if_statement
 %type <node> for_statement
 %type <node> break_statement
 %type <node> continue_statement
+%type <node> expression_statement
 
 %left TOKEN_EQUAL TOKEN_NON_EQUAL
 %left TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
@@ -74,6 +75,9 @@ void* ast_root = NULL;
 %left TOKEN_AND
 %left TOKEN_PLUS TOKEN_MINUS
 %left TOKEN_MULTIPLY TOKEN_DIVIDE
+%left TOKEN_LBRACKET TOKEN_LPAREN
+%left TOKEN_INCREMENT TOKEN_DECREMENT
+%left TOKEN_AT
 %right NOT UMINUS UPLUS
 %right UDEREF
 
@@ -170,13 +174,11 @@ function_name:
 
 complex_type_name:
     TOKEN_IDENTIFIER '<' TOKEN_IDENTIFIER ',' TOKEN_NUMBER '>' {
-        // Allocate memory for the combined string "arr<type,size>"
         char* result = malloc(strlen($1) + strlen($3) + strlen($5) + 6);
         sprintf(result, "%s<%s, %s>", $1, $3, $5);
         $$ = result;
     }
   | TOKEN_IDENTIFIER '<' type_name '>' {
-        // Allocate memory for the combined string "ptr<type>" where type can be nested
         char* result = malloc(strlen($1) + strlen($3) + 5);
         sprintf(result, "%s<%s>", $1, $3);
         free($3);
@@ -201,7 +203,6 @@ statement:
     var_declaration TOKEN_SEMICOLON { $$ = $1; }
   | assignment TOKEN_SEMICOLON { $$ = $1; }
   | array_assignment TOKEN_SEMICOLON { $$ = $1; }
-  | function_call TOKEN_SEMICOLON { $$ = $1; }
   | return_statement TOKEN_SEMICOLON { $$ = $1; }
   | brainfuck_statement TOKEN_SEMICOLON { $$ = $1; }
   | if_statement { $$ = $1; }
@@ -210,6 +211,11 @@ statement:
   | break_statement TOKEN_SEMICOLON { $$ = $1; }
   | continue_statement TOKEN_SEMICOLON { $$ = $1; }
   | c_function_decl TOKEN_SEMICOLON { $$ = $1; }
+  | expression_statement { $$ = $1; }
+;
+
+expression_statement:
+    expression TOKEN_SEMICOLON { $$ = $1; }
 ;
 
 if_statement:
@@ -220,7 +226,6 @@ if_statement:
         $$ = zig_create_if_stmt($2, $4, $8);
     }
   | TOKEN_IF expression TOKEN_LBRACE statement_list TOKEN_RBRACE TOKEN_ELSE if_statement {
-        // Create a statement list containing the if statement for the else body
         void* else_stmt_list = zig_create_stmt_list();
         zig_add_to_stmt_list(else_stmt_list, $7);
         $$ = zig_create_if_stmt($2, $4, else_stmt_list);
@@ -247,7 +252,7 @@ c_for_statement:
 
 for_increment:
     assignment { $$ = $1; }
-  | /* empty */ { $$ = NULL; }
+  | unary_expression { $$ = $1; }
 ;
 
 break_statement:
@@ -379,12 +384,14 @@ multiplicative_expression:
 ;
 
 unary_expression:
-    primary_expression { $$ = $1; }
+    primary_expression TOKEN_INCREMENT { $$ = zig_create_unary_op('I', $1); }
+  | primary_expression TOKEN_DECREMENT { $$ = zig_create_unary_op('D', $1); }
+  | primary_expression { $$ = $1; }
   | TOKEN_NOT unary_expression { $$ = zig_create_unary_op('!', $2); }
-  | TOKEN_MINUS unary_expression { $$ = zig_create_unary_op('-', $2); }
-  | TOKEN_PLUS unary_expression { $$ = zig_create_unary_op('+', $2); }
+  | TOKEN_MINUS unary_expression %prec UMINUS { $$ = zig_create_unary_op('-', $2); }
+  | TOKEN_PLUS unary_expression %prec UPLUS { $$ = zig_create_unary_op('+', $2); }
   | TOKEN_AMPERSAND unary_expression { $$ = zig_create_unary_op('&', $2); }
-  | TOKEN_MULTIPLY unary_expression { $$ = zig_create_unary_op('*', $2); }
+  | TOKEN_MULTIPLY unary_expression %prec UDEREF { $$ = zig_create_unary_op('*', $2); }
 ;
 
 primary_expression:
