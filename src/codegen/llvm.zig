@@ -159,9 +159,13 @@ pub const CodeGenerator = struct {
             return existing;
         }
         if (LIBC_FUNCTIONS.get(func_name)) |signature| {
-            return self.createFunctionFromSignature(func_name, signature);
+            const func = try self.createFunctionFromSignature(func_name, signature);
+            try self.functions.put(try self.allocator.dupe(u8, func_name), func);
+            return func;
         }
-        return self.createGenericLibcFunction(func_name);
+        const func = try self.createGenericLibcFunction(func_name);
+        try self.functions.put(try self.allocator.dupe(u8, func_name), func);
+        return func;
     }
 
     fn createFunctionFromSignature(self: *CodeGenerator, func_name: []const u8, signature: LibcFunctionSignature) !c.LLVMValueRef {
@@ -208,7 +212,15 @@ pub const CodeGenerator = struct {
         switch (program.data) {
             .program => |prog| {
                 for (prog.functions.items) |func| {
-                    try self.generateFunction(func);
+                    if (func.data == .c_function_decl) {
+                        std.debug.print("Processing C function declaration: {s}\n", .{func.data.c_function_decl.name});
+                        try self.generateCFunctionDeclaration(func.data.c_function_decl);
+                    }
+                }
+                for (prog.functions.items) |func| {
+                    if (func.data != .c_function_decl) {
+                        try self.generateFunction(func);
+                    }
                 }
             },
             else => return errors.CodegenError.TypeMismatch,
@@ -411,6 +423,9 @@ pub const CodeGenerator = struct {
             },
             .array_assignment => |arr_ass| {
                 try self.generateArrayAssignment(arr_ass);
+            },
+            .c_function_decl => |c_func| {
+                try self.generateCFunctionDeclaration(c_func);
             },
             else => {},
         }
@@ -659,6 +674,25 @@ pub const CodeGenerator = struct {
         _ = c.LLVMBuildBr(self.builder, break_block);
     }
 
+    fn generateCFunctionDeclaration(self: *CodeGenerator, c_func: ast.CFunctionDecl) errors.CodegenError!void {
+        var param_types = std.ArrayList(c.LLVMTypeRef).init(self.allocator);
+        defer param_types.deinit();
+        for (c_func.parameters.items) |param| {
+            try param_types.append(self.getLLVMType(param.type_name));
+        }
+        const return_type = self.getLLVMType(c_func.return_type);
+        const function_type = if (param_types.items.len > 0)
+            c.LLVMFunctionType(return_type, param_types.items.ptr, @intCast(param_types.items.len), 0)
+        else
+            c.LLVMFunctionType(return_type, null, 0, 0);
+        const func_name_z = try self.allocator.dupeZ(u8, c_func.name);
+        defer self.allocator.free(func_name_z);
+        _ = self.functions.remove(c_func.name);
+        const llvm_func = c.LLVMAddFunction(self.module, func_name_z.ptr, function_type);
+        try self.functions.put(try self.allocator.dupe(u8, c_func.name), llvm_func);
+        c.LLVMSetLinkage(llvm_func, c.LLVMExternalLinkage);
+    }
+
     pub fn castToType(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef) c.LLVMValueRef {
         const value_type = c.LLVMTypeOf(value);
 
@@ -892,10 +926,21 @@ pub const CodeGenerator = struct {
                 return self.generateBinaryOp(b);
             },
             .function_call => |call| {
-                const func = if (call.is_libc)
-                    try self.declareLibcFunction(call.name)
-                else
-                    self.functions.get(call.name) orelse return errors.CodegenError.UndefinedFunction;
+                var func: c.LLVMValueRef = undefined;
+                if (call.is_libc) {
+                    if (self.functions.get(call.name)) |declared_func| {
+                        func = declared_func;
+                        c.LLVMSetLinkage(func, c.LLVMExternalLinkage);
+                    } else {
+                        func = try self.declareLibcFunction(call.name);
+                    }
+                } else {
+                    if (self.functions.get(call.name)) |declared_func| {
+                        func = declared_func;
+                    } else {
+                        return errors.CodegenError.UndefinedFunction;
+                    }
+                }
 
                 var args = std.ArrayList(c.LLVMValueRef).init(self.allocator);
                 defer args.deinit();
@@ -1506,7 +1551,7 @@ pub const CodeGenerator = struct {
         }
     }
 
-    pub fn compileToExecutable(self: *CodeGenerator, output_filename: []const u8, arch: []const u8) !void {
+    pub fn compileToExecutable(self: *CodeGenerator, output_filename: []const u8, arch: []const u8, link_objects: []const []const u8) !void {
         const temp_ir_file = "temp_output.ll";
         try self.writeToFile(temp_ir_file);
 
@@ -1517,27 +1562,26 @@ pub const CodeGenerator = struct {
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
-        const clang_args = if (std.mem.eql(u8, arch, ""))
-            &[_][]const u8{
-                "clang",
-                temp_ir_file,
-                "-o",
-                output_filename,
-                "-lc",
-            }
-        else blk: {
-            const march_flag: []const u8 = try std.fmt.allocPrint(self.allocator, "--target={s}", .{arch});
-            break :blk &[_][]const u8{
-                "clang",
-                temp_ir_file,
-                "-o",
-                output_filename,
-                "-lc",
-                march_flag,
-            };
-        };
+        var clang_args_list = std.ArrayList([]const u8).init(arena_alloc);
+        try clang_args_list.appendSlice(&[_][]const u8{
+            "clang",
+            temp_ir_file,
+            "-o",
+            output_filename,
+        });
 
-        var child = std.process.Child.init(clang_args, arena_alloc);
+        if (!std.mem.eql(u8, arch, "")) {
+            const march_flag: []const u8 = try std.fmt.allocPrint(arena_alloc, "--target={s}", .{arch});
+            try clang_args_list.append(march_flag);
+        }
+
+        for (link_objects) |obj| {
+            try clang_args_list.append(obj);
+        }
+
+        try clang_args_list.append("-lc");
+
+        var child = std.process.Child.init(clang_args_list.items, arena_alloc);
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
 

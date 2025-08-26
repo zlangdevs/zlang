@@ -518,6 +518,31 @@ export fn zig_create_array_assignment(array_name_ptr: [*c]const u8, index_ptr: ?
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_c_function_decl(name_ptr: [*c]const u8, return_type_ptr: [*c]const u8, params_ptr: ?*anyopaque) ?*anyopaque {
+    const name = std.mem.span(name_ptr);
+    const return_type = std.mem.span(return_type_ptr);
+
+    const name_copy = global_allocator.dupe(u8, name) catch return null;
+    const return_type_copy = global_allocator.dupe(u8, return_type) catch return null;
+
+    var parameters = std.ArrayList(ast.Parameter).init(global_allocator);
+    if (params_ptr) |ptr| {
+        const param_list = @as(*ParameterList, @ptrFromInt(@intFromPtr(ptr)));
+        parameters = param_list.items;
+    }
+
+    const c_function_decl_data = ast.NodeData{
+        .c_function_decl = ast.CFunctionDecl{
+            .name = name_copy,
+            .return_type = return_type_copy,
+            .parameters = parameters,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, c_function_decl_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!?*ast.Node {
     global_allocator = allocator;
     ast_root = null;

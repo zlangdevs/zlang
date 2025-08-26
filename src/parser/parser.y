@@ -35,6 +35,7 @@ extern void* zig_create_continue_stmt(void);
 extern void* zig_create_array_initializer(void* elements);
 extern void* zig_create_array_index(const char* array_name, void* index);
 extern void* zig_create_array_assignment(const char* array_name, void* index, void* value);
+extern void* zig_create_c_function_decl(const char* name, const char* return_type, void* params);
 extern void zig_add_to_program(void* program, void* function);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
@@ -78,9 +79,8 @@ void* ast_root = NULL;
 %type <node> var_declaration function_call return_statement assignment brainfuck_statement
 %type <node> expression term factor argument_list arguments
 %type <node> comparison_expression simple_term c_for_statement for_increment
-%type <node> array_initializer array_assignment
-%type <string> type_name function_name string_literal
-%type <string> complex_type_name
+%type <node> array_initializer array_assignment c_function_decl c_function_decl_statement
+%type <string> type_name function_name string_literal complex_type_name
 
 %start program
 
@@ -106,6 +106,27 @@ function_list:
   | function_list function {
         zig_add_to_program(ast_root, $2);
     }
+  | c_function_decl_statement {
+        if (ast_root == NULL) {
+            ast_root = zig_create_program();
+        }
+        zig_add_to_program(ast_root, $1);
+    }
+  | function_list c_function_decl_statement {
+        zig_add_to_program(ast_root, $2);
+    }
+;
+
+c_function_decl:
+    TOKEN_FUN TOKEN_AT function_name TOKEN_LPAREN parameter_list TOKEN_RPAREN TOKEN_RSHIFT type_name {
+        $$ = zig_create_c_function_decl($3, $8, $5);
+        free($3);
+        free($8);
+    }
+;
+
+c_function_decl_statement:
+    c_function_decl TOKEN_SEMICOLON { $$ = $1; }
 ;
 
 function:
@@ -178,6 +199,7 @@ statement:
   | c_for_statement { $$ = $1; }
   | break_statement TOKEN_SEMICOLON { $$ = $1; }
   | continue_statement TOKEN_SEMICOLON { $$ = $1; }
+  | c_function_decl TOKEN_SEMICOLON { $$ = $1; }
 ;
 
 if_statement:
@@ -250,7 +272,7 @@ array_assignment:
 ;
 
 array_initializer:
-    TOKEN_LBRACE argument_list TOKEN_RBRACE { 
+    TOKEN_LBRACE argument_list TOKEN_RBRACE {
         $$ = zig_create_array_initializer($2);
     }
 ;
