@@ -824,13 +824,8 @@ pub const CodeGenerator = struct {
                 const arg_kind = c.LLVMGetTypeKind(arg_type);
 
                 if (arg_kind == c.LLVMIntegerTypeKind) {
-                    const width = c.LLVMGetIntTypeWidth(arg_type);
-                    if (width == 64) {
-                        return arg_value;
-                    } else {
-                        const i32_type = c.LLVMInt32TypeInContext(self.context);
-                        return self.castToType(arg_value, i32_type);
-                    }
+                    const i32_type = c.LLVMInt32TypeInContext(self.context);
+                    return self.castToType(arg_value, i32_type);
                 } else if (arg_kind == c.LLVMFloatTypeKind or arg_kind == c.LLVMHalfTypeKind) {
                     const double_type = c.LLVMDoubleTypeInContext(self.context);
                     return c.LLVMBuildFPExt(self.builder, arg_value, double_type, "fpext");
@@ -877,20 +872,17 @@ pub const CodeGenerator = struct {
                     if (expected_type) |type_name| {
                         const llvm_type = self.getLLVMType(type_name);
                         if (std.mem.startsWith(u8, type_name, "u")) {
-                            if (std.mem.startsWith(u8, num.value, "-")) {
-                                std.debug.print("Error: Cannot assign negative value '{s}' to unsigned type {s}\n", .{num.value, type_name});
-                                return errors.CodegenError.TypeMismatch;
-                            }
-                            const value = std.fmt.parseInt(u64, num.value, 10) catch {
-                                std.debug.print("Error: Invalid unsigned value '{s}' for type {s}\n", .{num.value, type_name});
-                                return errors.CodegenError.TypeMismatch;
-                            };
+                            const value = std.fmt.parseInt(u64, num.value, 10) catch 0;
                             return c.LLVMConstInt(llvm_type, @as(c_ulonglong, @intCast(value)), 0);
                         } else {
-                            const value = std.fmt.parseInt(i64, num.value, 10) catch {
-                                std.debug.print("Error: Invalid signed value '{s}' for type {s}\n", .{num.value, type_name});
-                                return errors.CodegenError.TypeMismatch;
+                            const unsigned_value = std.fmt.parseInt(u64, num.value, 10) catch {
+                                const value = std.fmt.parseInt(i64, num.value, 10) catch 0;
+                                return c.LLVMConstInt(llvm_type, @as(c_ulonglong, @intCast(value)), 0);
                             };
+                            const value = if (unsigned_value > std.math.maxInt(i64))
+                                @as(i64, @intCast(unsigned_value & std.math.maxInt(i64)))
+                            else
+                                @as(i64, @intCast(unsigned_value));
                             return c.LLVMConstInt(llvm_type, @as(c_ulonglong, @intCast(value)), 0);
                         }
                     } else {
@@ -1148,40 +1140,28 @@ pub const CodeGenerator = struct {
                 if (is_float_comp) {
                     return c.LLVMBuildFCmp(self.builder, c.LLVMRealOLT, casted_lhs, casted_rhs, "fcmp_lt");
                 } else {
-                    const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(result_type));
-                    return c.LLVMBuildICmp(self.builder,
-                        if (is_unsigned) c.LLVMIntULT else c.LLVMIntSLT,
-                        casted_lhs, casted_rhs, "icmp_lt");
+                    return c.LLVMBuildICmp(self.builder, c.LLVMIntSLT, casted_lhs, casted_rhs, "icmp_lt");
                 }
             },
             '>' => {
                 if (is_float_comp) {
                     return c.LLVMBuildFCmp(self.builder, c.LLVMRealOGT, casted_lhs, casted_rhs, "fcmp_gt");
                 } else {
-                    const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(result_type));
-                    return c.LLVMBuildICmp(self.builder,
-                        if (is_unsigned) c.LLVMIntUGT else c.LLVMIntSGT,
-                        casted_lhs, casted_rhs, "icmp_gt");
+                    return c.LLVMBuildICmp(self.builder, c.LLVMIntSGT, casted_lhs, casted_rhs, "icmp_gt");
                 }
             },
             'L' => {
                 if (is_float_comp) {
                     return c.LLVMBuildFCmp(self.builder, c.LLVMRealOLE, casted_lhs, casted_rhs, "fcmp_le");
                 } else {
-                    const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(result_type));
-                    return c.LLVMBuildICmp(self.builder,
-                        if (is_unsigned) c.LLVMIntULE else c.LLVMIntSLE,
-                        casted_lhs, casted_rhs, "icmp_le");
+                    return c.LLVMBuildICmp(self.builder, c.LLVMIntSLE, casted_lhs, casted_rhs, "icmp_le");
                 }
             },
             'G' => {
                 if (is_float_comp) {
                     return c.LLVMBuildFCmp(self.builder, c.LLVMRealOGE, casted_lhs, casted_rhs, "fcmp_ge");
                 } else {
-                    const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(result_type));
-                    return c.LLVMBuildICmp(self.builder,
-                        if (is_unsigned) c.LLVMIntUGE else c.LLVMIntSGE,
-                        casted_lhs, casted_rhs, "icmp_ge");
+                    return c.LLVMBuildICmp(self.builder, c.LLVMIntSGE, casted_lhs, casted_rhs, "icmp_ge");
                 }
             },
             else => return errors.CodegenError.UnsupportedOperation,
@@ -1266,8 +1246,6 @@ pub const CodeGenerator = struct {
                 c.LLVMBuildMul(self.builder, casted_lhs, casted_rhs, "mul"),
             '/' => if (is_float_op)
                 c.LLVMBuildFDiv(self.builder, casted_lhs, casted_rhs, "fdiv")
-            else if (isUnsignedType(self.getTypeNameFromLLVMType(result_type)))
-                c.LLVMBuildUDiv(self.builder, casted_lhs, casted_rhs, "udiv")
             else
                 c.LLVMBuildSDiv(self.builder, casted_lhs, casted_rhs, "sdiv"),
             '&' => self.generateLogicalAnd(bin_op.lhs, bin_op.rhs),

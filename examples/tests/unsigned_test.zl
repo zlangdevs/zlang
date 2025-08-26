@@ -1,0 +1,28 @@
+fun print_unsigned(n: i16) >> void {
+    @printf("UNSIGNED(expected 65535):%hu\n", n);
+    return;
+}
+
+fun main() >> i32 {
+    u8  a = -1;
+    u16 b = -1;
+    u32 c = -1;
+    u64 d = -1;
+    @printf("u8 (expected 255):%hhu\n",  a);
+    @printf("u16 (expected 65535):%hu\n", b);
+    @printf("u32 (expected 4294967295):%u\n", c);
+    @printf("u64 (expected 18446744073709551615):%llu\n", d);
+    
+    @printf("u8 (expected -1):%hhd\n",  a);
+    @printf("u16 (expected -1):%hd\n", b);
+    @printf("u32 (expected -1):%d\n", c);
+    @printf("u64 (expected -1):%lld\n", d);
+    
+    i16 s = -1;
+    u16 us = s;
+    
+    @printf("s (expected -1):%hd\n", s);
+    @printf("us (expected 65535):%hu\n", us);
+    print_unsigned(s);
+    return 0;
+}
