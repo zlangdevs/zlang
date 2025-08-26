@@ -35,13 +35,34 @@ const Context = struct {
     output_path: []const u8,
     arch: []const u8,
     keepll: bool = false,
-    
+    link_objects: std.ArrayList([]const u8),
+
+    pub fn init(_: std.mem.Allocator) Context {
+        return Context{
+            .input_path = "",
+            .output_path = "",
+            .arch = "",
+            .keepll = false,
+            .link_objects = std.ArrayList([]const u8).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Context) void {
+        self.link_objects.deinit();
+    }
+
     pub fn print(self: *const Context) void {
         std.debug.print("========Compilation context=======\n", .{});
         std.debug.print("Input path: {s}\n", .{self.input_path});
         std.debug.print("Output path: {s}\n", .{self.output_path});
         std.debug.print("Architecture: {s}\n", .{self.arch});
         std.debug.print("Keep ll: {s}\n", .{ if (self.keepll) "yes" else "no" });
+        std.debug.print("Link objects: ", .{});
+        for (self.link_objects.items, 0..) |obj, i| {
+            if (i > 0) std.debug.print(", ", .{});
+            std.debug.print("{s}", .{obj});
+        }
+        std.debug.print("\n", .{});
         std.debug.print("==================================\n", .{});
     }
 };
@@ -49,13 +70,8 @@ const Context = struct {
 
 
 fn parseArgs(alloc: std.mem.Allocator, args: [][:0] u8) anyerror!Context {
-    _ = alloc;
-    var context = Context{
-        .input_path = "",
-        .output_path = "",
-        .arch = "",
-        .keepll = false,
-    };
+    var context = Context.init(alloc);
+    errdefer context.deinit();
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         switch (args[i][0]) {
@@ -71,6 +87,10 @@ fn parseArgs(alloc: std.mem.Allocator, args: [][:0] u8) anyerror!Context {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoArch;
                     context.arch = args[i];
+                } else if (std.mem.eql(u8, flag, "-link")) {
+                    i += 1;
+                    if (i >= args.len) return errors.CLIError.InvalidArgument;
+                    try context.link_objects.append(args[i]);
                 } else {
                     return errors.CLIError.InvalidArgument;
                 }
@@ -78,19 +98,21 @@ fn parseArgs(alloc: std.mem.Allocator, args: [][:0] u8) anyerror!Context {
             else => {
                 if (context.input_path.len == 0) {
                     context.input_path = args[i];
+                } else {
+                    try context.link_objects.append(args[i]);
                 }
             },
         }
     }
-    
-    return if (context.input_path.len == 0) 
+
+    return if (context.input_path.len == 0)
         errors.CLIError.NoInputPath
     else context;
 }
 
 pub fn main() !u8 {
     const args = try std.process.argsAlloc(allocator);
-    const ctx = parseArgs(allocator, args) catch |err| {
+    var ctx = parseArgs(allocator, args) catch |err| {
         const error_msg = switch(err) {
             errors.CLIError.NoInputPath => "No input path specified",
             errors.CLIError.NoOutputPath => "No output path specified after -o",
@@ -102,6 +124,7 @@ pub fn main() !u8 {
         return 1;
     };
     ctx.print();
+    defer ctx.deinit();
     defer std.process.argsFree(allocator, args);
     if (args.len < 2) {
         std.debug.print("Usage: zlang <path to file>", .{});
@@ -175,7 +198,7 @@ pub fn main() !u8 {
         };
         std.debug.print("LLVM IR written to {s}\n", .{ir_filename});
 
-        code_generator.compileToExecutable(exe_filename, ctx.arch) catch |err| {
+        code_generator.compileToExecutable(exe_filename, ctx.arch, ctx.link_objects.items) catch |err| {
             std.debug.print("Error compiling to executable: {}\n", .{err});
             return 1;
         };
