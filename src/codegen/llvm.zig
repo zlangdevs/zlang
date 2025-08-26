@@ -470,6 +470,9 @@ pub const CodeGenerator = struct {
             .c_function_decl => |c_func| {
                 try self.generateCFunctionDeclaration(c_func);
             },
+            .unary_op => {
+                _ = try self.generateExpression(stmt);
+            },
             else => {},
         }
     }
@@ -963,11 +966,11 @@ pub const CodeGenerator = struct {
                 );
             },
             .unary_op => |un| {
-                const operand_val = try self.generateExpression(un.operand);
-                const operand_type = c.LLVMTypeOf(operand_val);
-                const type_kind = c.LLVMGetTypeKind(operand_type);
                 switch (un.op) {
                     '-' => {
+                        const operand_val = try self.generateExpression(un.operand);
+                        const operand_type = c.LLVMTypeOf(operand_val);
+                        const type_kind = c.LLVMGetTypeKind(operand_type);
                         switch (type_kind) {
                             c.LLVMIntegerTypeKind => {
                                 return c.LLVMBuildNeg(self.builder, operand_val, "neg");
@@ -981,9 +984,11 @@ pub const CodeGenerator = struct {
                         }
                     },
                     '+' => {
+                        const operand_val = try self.generateExpression(un.operand);
                         return operand_val;
                     },
                     '!' => {
+                        const operand_val = try self.generateExpression(un.operand);
                         const bool_val = self.convertToBool(operand_val);
                         const true_val = c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 1, 0);
                         return c.LLVMBuildXor(self.builder, bool_val, true_val, "not");
@@ -999,6 +1004,8 @@ pub const CodeGenerator = struct {
                         return errors.CodegenError.TypeMismatch;
                     },
                     '*' => {
+                        const operand_val = try self.generateExpression(un.operand);
+                        const operand_type = c.LLVMTypeOf(operand_val);
                         if (c.LLVMGetTypeKind(operand_type) == c.LLVMPointerTypeKind) {
                             const pointee_type = c.LLVMGetElementType(operand_type);
                             return c.LLVMBuildLoad2(self.builder, pointee_type, operand_val, "deref");
@@ -1007,52 +1014,56 @@ pub const CodeGenerator = struct {
                             return errors.CodegenError.TypeMismatch;
                         }
                     },
-                    'D' => { // Декремент (prefix --)
-                        // Проверяем, что операнд - это переменная (lvalue)
+                    'D' => {
                         if (un.operand.data != .identifier) {
                             std.debug.print("Error: Decrement operator can only be applied to variables\n", .{});
                             return errors.CodegenError.TypeMismatch;
                         }
-                        
+
                         const ident = un.operand.data.identifier;
                         if (self.variables.get(ident.name)) |var_info| {
+                            const var_type_name = self.getTypeNameFromLLVMType(var_info.type_ref);
+
+                            const allowed_types = [_][]const u8{ "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64" };
+                            var is_allowed = false;
+                            for (allowed_types) |allowed| {
+                                if (std.mem.eql(u8, var_type_name, allowed)) {
+                                    is_allowed = true;
+                                    break;
+                                }
+                            }
+
+                            if (!is_allowed) {
+                                std.debug.print("Error: Decrement operator not supported for type {s}\n", .{var_type_name});
+                                return errors.CodegenError.UnsupportedOperation;
+                            }
+
                             const var_ptr = var_info.value;
-                            const var_type = c.LLVMGetElementType(c.LLVMTypeOf(var_ptr));
-                            
-                            // Загружаем текущее значение
+                            const var_type = var_info.type_ref;
+
                             const current_val = c.LLVMBuildLoad2(self.builder, var_type, var_ptr, "load_for_dec");
-                            
+
                             const new_val = switch (c.LLVMGetTypeKind(var_type)) {
                                 c.LLVMIntegerTypeKind => blk: {
                                     const one = c.LLVMConstInt(var_type, 1, 0);
                                     break :blk c.LLVMBuildSub(self.builder, current_val, one, "dec");
                                 },
-                                c.LLVMFloatTypeKind, c.LLVMDoubleTypeKind => blk: {
+                                c.LLVMFloatTypeKind, c.LLVMDoubleTypeKind, c.LLVMHalfTypeKind => blk: {
                                     const one = c.LLVMConstReal(var_type, 1.0);
                                     break :blk c.LLVMBuildFSub(self.builder, current_val, one, "fdec");
                                 },
-                                c.LLVMPointerTypeKind => blk: {
-                                    const pointee_type = c.LLVMGetElementType(var_type);
-                                    const minus_one = c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), @bitCast(@as(i64, -1)), 1);
-                                    break :blk c.LLVMBuildGEP2(self.builder, pointee_type, current_val, &minus_one, 1, "ptr_dec");
-                                },
-                                else => {
-                                    std.debug.print("Error: Decrement operator not supported for this type\n", .{});
-                                    return errors.CodegenError.UnsupportedOperation;
-                                },
+                                else => unreachable,
                             };
-                            
-                            // Сохраняем новое значение
+
                             _ = c.LLVMBuildStore(self.builder, new_val, var_ptr);
-                            // Возвращаем новое значение (prefix decrement)
+
                             return new_val;
                         } else {
                             std.debug.print("Error: Variable not found\n", .{});
-                            return errors.CodegenError.VariableNotFound;
+                            return errors.CodegenError.UndefinedVariable;
                         }
                     },
-                    'I' => { // Инкремент (prefix ++)
-                        // Проверяем, что операнд - это переменная (lvalue)
+                    'I' => {
                         if (un.operand.data != .identifier) {
                             std.debug.print("Error: Increment operator can only be applied to variables\n", .{});
                             return errors.CodegenError.TypeMismatch;
@@ -1060,36 +1071,40 @@ pub const CodeGenerator = struct {
                         
                         const ident = un.operand.data.identifier;
                         if (self.variables.get(ident.name)) |var_info| {
+                            const var_type_name = self.getTypeNameFromLLVMType(var_info.type_ref);
+                            const allowed_types = [_][]const u8{ "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64" };
+                            var is_allowed = false;
+                            for (allowed_types) |allowed| {
+                                if (std.mem.eql(u8, var_type_name, allowed)) {
+                                    is_allowed = true;
+                                    break;
+                                }
+                            }
+                            if (!is_allowed) {
+                                std.debug.print("Error: Increment operator not supported for type {s}\n", .{var_type_name});
+                                return errors.CodegenError.UnsupportedOperation;
+                            }
                             const var_ptr = var_info.value;
-                            const var_type = c.LLVMGetElementType(c.LLVMTypeOf(var_ptr));
-                            
-                            // Загружаем текущее значение
+                            const var_type = var_info.type_ref;
+                        
                             const current_val = c.LLVMBuildLoad2(self.builder, var_type, var_ptr, "load_for_inc");
-                            
+
                             const new_val = switch (c.LLVMGetTypeKind(var_type)) {
                                 c.LLVMIntegerTypeKind => blk: {
                                     const one = c.LLVMConstInt(var_type, 1, 0);
                                     break :blk c.LLVMBuildAdd(self.builder, current_val, one, "inc");
                                 },
-                                c.LLVMFloatTypeKind, c.LLVMDoubleTypeKind => blk: {
+                                c.LLVMFloatTypeKind, c.LLVMDoubleTypeKind, c.LLVMHalfTypeKind => blk: {
                                     const one = c.LLVMConstReal(var_type, 1.0);
                                     break :blk c.LLVMBuildFAdd(self.builder, current_val, one, "finc");
                                 },
-                                c.LLVMPointerTypeKind => blk: {
-                                    const pointee_type = c.LLVMGetElementType(var_type);
-                                    const one = c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), 1, 0);
-                                    break :blk c.LLVMBuildGEP2(self.builder, pointee_type, current_val, &one, 1, "ptr_inc");
-                                },
-                                else => {
-                                    std.debug.print("Error: Increment operator not supported for this type\n", .{});
-                                    return errors.CodegenError.UnsupportedOperation;
-                                },
+                                else => unreachable,
                             };
                             _ = c.LLVMBuildStore(self.builder, new_val, var_ptr);
                             return new_val;
                         } else {
                             std.debug.print("Error: Variable not found\n", .{});
-                            return errors.CodegenError.VariableNotFound;
+                            return errors.CodegenError.UndefinedVariable;
                         }
                     },
                     else => {
