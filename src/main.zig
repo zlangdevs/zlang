@@ -134,11 +134,11 @@ pub fn main() !u8 {
     const input = read_file(input_file) catch |err| {
         const error_msg = switch (err) {
             error.FileNotFound => "Specified file does not exist or path is invalid.",
-            error.AccessDenied => "Error accessing file.",
+            error.AccessDenied => "Error accessing file. Please check file permissions.",
             error.InvalidPath => "We don't support directories yet.",
-            error.OutOfMemory => "",
-            error.IOError => "", // TODO: implement these errors
-            else => "",
+            error.OutOfMemory => "Out of memory while reading file. The file may be too large.",
+            error.IOError => "I/O error occurred while reading file. Please check file integrity and disk space.",
+            else => "An unexpected error occurred while reading the file.",
         };
         std.debug.print("Error: {s}\n", .{error_msg});
         return 1;

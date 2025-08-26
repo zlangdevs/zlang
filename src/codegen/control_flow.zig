@@ -32,11 +32,17 @@ pub const ControlFlowAnalyzer = struct {
                 if (i == statements.len - 1) {
                     return true;
                 }
-                
-                // If this is not the last statement, we need to check if subsequent statements are unreachable
-                // For now, we'll be conservative and say that if there's a return statement that's not at the end,
-                // we still require explicit returns at the end
-                // TODO: Implement more sophisticated unreachable code detection
+                var has_unreachable_code = false;
+                for (i + 1..statements.len) |j| {
+                    const next_stmt = statements[j];
+                    if (!self.isUnconditionalTerminator(next_stmt) and !self.isReturnStatement(next_stmt)) {
+                        has_unreachable_code = true;
+                        break;
+                    }
+                }
+                if (has_unreachable_code) {
+                    std.debug.print("Warning: Unreachable code detected after return statement\n", .{});
+                }
             }
             
             if (self.isIfStatement(stmt)) {
