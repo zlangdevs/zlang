@@ -70,14 +70,17 @@ void* ast_root = NULL;
 
 %left TOKEN_EQUAL TOKEN_NON_EQUAL
 %left TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
+%left TOKEN_OR
+%left TOKEN_AND
 %left TOKEN_PLUS TOKEN_MINUS
-%left TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_AND TOKEN_OR
+%left TOKEN_MULTIPLY TOKEN_DIVIDE
 %right NOT UMINUS UPLUS
+%right UDEREF
 
 %type <node> parameter_list parameters parameter
 %type <node> program function_list function statement_list statement
 %type <node> var_declaration function_call return_statement assignment brainfuck_statement
-%type <node> expression term factor argument_list arguments
+%type <node> expression logical_or_expression logical_and_expression additive_expression multiplicative_expression unary_expression primary_expression argument_list arguments
 %type <node> comparison_expression simple_term c_for_statement for_increment
 %type <node> array_initializer array_assignment c_function_decl c_function_decl_statement
 %type <string> type_name function_name string_literal complex_type_name
@@ -344,30 +347,47 @@ simple_term:
 ;
 
 expression:
-    term { $$ = $1; }
-  | expression TOKEN_PLUS term { $$ = zig_create_binary_op('+', $1, $3); }
-  | expression TOKEN_MINUS term { $$ = zig_create_binary_op('-', $1, $3); }
-  | TOKEN_NOT expression %prec NOT { $$ = zig_create_unary_op('!', $2); }
-  | TOKEN_MINUS expression %prec UMINUS { $$ = zig_create_unary_op('-', $2); }
-  | TOKEN_PLUS expression %prec UPLUS { $$ = zig_create_unary_op('+', $2); }
-  | TOKEN_AMPERSAND expression %prec NOT { $$ = zig_create_unary_op('&', $2); }
-  | expression TOKEN_EQUAL expression { $$ = zig_create_comparison('=', $1, $3); }
-  | expression TOKEN_NON_EQUAL expression { $$ = zig_create_comparison('!', $1, $3); }
-  | expression TOKEN_LESS expression { $$ = zig_create_comparison('<', $1, $3); }
-  | expression TOKEN_GREATER expression { $$ = zig_create_comparison('>', $1, $3); }
-  | expression TOKEN_EQ_LESS expression { $$ = zig_create_comparison('L', $1, $3); }
-  | expression TOKEN_EQ_GREATER expression { $$ = zig_create_comparison('G', $1, $3); }
+    logical_or_expression { $$ = $1; }
+  | expression TOKEN_EQUAL logical_or_expression { $$ = zig_create_comparison('=', $1, $3); }
+  | expression TOKEN_NON_EQUAL logical_or_expression { $$ = zig_create_comparison('!', $1, $3); }
+  | expression TOKEN_LESS logical_or_expression { $$ = zig_create_comparison('<', $1, $3); }
+  | expression TOKEN_GREATER logical_or_expression { $$ = zig_create_comparison('>', $1, $3); }
+  | expression TOKEN_EQ_LESS logical_or_expression { $$ = zig_create_comparison('L', $1, $3); }
+  | expression TOKEN_EQ_GREATER logical_or_expression { $$ = zig_create_comparison('G', $1, $3); }
 ;
 
-term:
-    factor { $$ = $1; }
-  | term TOKEN_AND factor { $$ = zig_create_binary_op('&', $1, $3); }
-  | term TOKEN_OR factor { $$ = zig_create_binary_op('|', $1, $3); }
-  | term TOKEN_MULTIPLY factor { $$ = zig_create_binary_op('*', $1, $3); }
-  | term TOKEN_DIVIDE factor { $$ = zig_create_binary_op('/', $1, $3); }
+logical_or_expression:
+    logical_and_expression { $$ = $1; }
+  | logical_or_expression TOKEN_OR logical_and_expression { $$ = zig_create_binary_op('|', $1, $3); }
 ;
 
-factor:
+logical_and_expression:
+    additive_expression { $$ = $1; }
+  | logical_and_expression TOKEN_AND additive_expression { $$ = zig_create_binary_op('&', $1, $3); }
+;
+
+additive_expression:
+    multiplicative_expression { $$ = $1; }
+  | additive_expression TOKEN_PLUS multiplicative_expression { $$ = zig_create_binary_op('+', $1, $3); }
+  | additive_expression TOKEN_MINUS multiplicative_expression { $$ = zig_create_binary_op('-', $1, $3); }
+;
+
+multiplicative_expression:
+    unary_expression { $$ = $1; }
+  | multiplicative_expression TOKEN_MULTIPLY unary_expression { $$ = zig_create_binary_op('*', $1, $3); }
+  | multiplicative_expression TOKEN_DIVIDE unary_expression { $$ = zig_create_binary_op('/', $1, $3); }
+;
+
+unary_expression:
+    primary_expression { $$ = $1; }
+  | TOKEN_NOT unary_expression { $$ = zig_create_unary_op('!', $2); }
+  | TOKEN_MINUS unary_expression { $$ = zig_create_unary_op('-', $2); }
+  | TOKEN_PLUS unary_expression { $$ = zig_create_unary_op('+', $2); }
+  | TOKEN_AMPERSAND unary_expression { $$ = zig_create_unary_op('&', $2); }
+  | TOKEN_MULTIPLY unary_expression { $$ = zig_create_unary_op('*', $2); }
+;
+
+primary_expression:
     TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
   | TOKEN_IDENTIFIER TOKEN_LBRACKET expression TOKEN_RBRACKET { $$ = zig_create_array_index($1, $3); }
   | array_initializer { $$ = $1; }
@@ -376,7 +396,6 @@ factor:
   | string_literal { $$ = zig_create_string_literal($1); free($1); }
   | function_call { $$ = $1; }
   | TOKEN_LPAREN expression TOKEN_RPAREN { $$ = $2; }
-  | TOKEN_MULTIPLY expression %prec NOT { $$ = zig_create_unary_op('*', $2); }
 ;
 
 string_literal:
