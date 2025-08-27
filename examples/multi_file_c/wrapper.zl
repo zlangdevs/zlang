@@ -1,0 +1,5 @@
+fun @square(n: i32) >> i32;
+
+fun square(n: i32) >> i32 {
+    return @square(n);
+}

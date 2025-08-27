@@ -1,0 +1,6 @@
+use wrapper
+
+fun main() >> i32 {
+    @printf("\n\n5 ^ 2 = %d\n\n", square(5));
+    return 0;
+}
