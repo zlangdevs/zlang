@@ -164,17 +164,16 @@ pub fn read_file(file_name: []const u8) anyerror![]const u8 {
         defer file.close();
         const buffer = try file.readToEndAlloc(allocator, consts.MAX_BUFF_SIZE);
         return buffer;
-    } else if (file_stat.kind == .directory) {
-        return errors.ReadFileError.InvalidPath;
     }
-    return "";
+
+    return errors.ReadFileError.InvalidPath;
 }
 
 const Context = struct {
     input_files: std.ArrayList([]const u8),
     output_path: []const u8,
     arch: []const u8,
-    keepll: bool = false,
+    keepll: bool,
     link_objects: std.ArrayList([]const u8),
 
     pub fn init(alloc: std.mem.Allocator) Context {
@@ -213,11 +212,10 @@ const Context = struct {
     }
 };
 
-
-
-fn parseArgs(alloc: std.mem.Allocator, args: [][:0] u8) anyerror!Context {
-    var context = Context.init(alloc);
+fn parseArgs(args: [][:0] u8) anyerror!Context {
+    var context = Context.init(allocator);
     errdefer context.deinit();
+
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         switch (args[i][0]) {
@@ -225,19 +223,23 @@ fn parseArgs(alloc: std.mem.Allocator, args: [][:0] u8) anyerror!Context {
                 const flag = args[i];
                 if (std.mem.eql(u8, flag, "-keepll")) {
                     context.keepll = true;
-                } else if (std.mem.eql(u8, flag, "-o")) {
+                }
+                else if (std.mem.eql(u8, flag, "-o")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoOutputPath;
                     context.output_path = args[i];
-                } else if (std.mem.eql(u8, flag, "-arch")) {
+                }
+                else if (std.mem.eql(u8, flag, "-arch")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoArch;
                     context.arch = args[i];
-                } else if (std.mem.eql(u8, flag, "-link")) {
+                }
+                else if (std.mem.eql(u8, flag, "-link")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.InvalidArgument;
                     try context.link_objects.append(args[i]);
-                } else {
+                }
+                else {
                     return errors.CLIError.InvalidArgument;
                 }
             },
@@ -255,7 +257,7 @@ fn parseArgs(alloc: std.mem.Allocator, args: [][:0] u8) anyerror!Context {
                     };
 
                     if (stat.kind == .directory) {
-                        try collectZlFilesFromDir(alloc, arg, &context.input_files);
+                        try collectZlFilesFromDir(allocator, arg, &context.input_files);
                     } else {
                         try context.link_objects.append(arg);
                     }
@@ -288,7 +290,7 @@ fn collectZlFilesFromDir(alloc: std.mem.Allocator, dir_path: []const u8, files_l
 
 pub fn main() !u8 {
     const args = try std.process.argsAlloc(allocator);
-    var ctx = parseArgs(allocator, args) catch |err| {
+    var ctx = parseArgs(args) catch |err| {
         const error_msg = switch(err) {
             errors.CLIError.NoInputPath => "No input path specified",
             errors.CLIError.NoOutputPath => "No output path specified after -o",
@@ -299,6 +301,7 @@ pub fn main() !u8 {
         std.debug.print("Error: {s}\n", .{error_msg});
         return 1;
     };
+
     ctx.print();
     defer ctx.deinit();
     defer std.process.argsFree(allocator, args);
@@ -315,53 +318,54 @@ pub fn main() !u8 {
     defer ast_root.destroy();
     ast.printASTTree(ast_root);
 
-        // Generate LLVM IR and compile to executable
-        var code_generator = codegen.CodeGenerator.init(allocator) catch |err| {
-            const error_msg = switch (err) {
-                error.ModuleCreationFailed => "Failed to create LLVM module.",
-                error.BuilderCreationFailed => "Failed to create LLVM builder.",
-                error.OutOfMemory => "Out of memory during codegen initialization.",
-                else => "Unknown codegen initialization error.",
-            };
-            std.debug.print("Error initializing codegen: {s}\n", .{error_msg});
-            return 1;
+    // Generate LLVM IR and compile to executable
+    var code_generator = codegen.CodeGenerator.init(allocator) catch |err| {
+        const error_msg = switch (err) {
+            error.ModuleCreationFailed => "Failed to create LLVM module.",
+            error.BuilderCreationFailed => "Failed to create LLVM builder.",
+            error.OutOfMemory => "Out of memory during codegen initialization.",
+            else => "Unknown codegen initialization error.",
         };
-        defer code_generator.deinit();
+        std.debug.print("Error initializing codegen: {s}\n", .{error_msg});
+        return 1;
+    };
 
-        code_generator.generateCode(ast_root) catch |err| {
-            const error_msg = switch (err) {
-                error.FunctionCreationFailed => "Failed to create function.",
-                error.TypeMismatch => "Type mismatch in code generation.",
-                error.UndefinedFunction => "Undefined function called.",
-                error.UndefinedVariable => "Undefined variable used.",
-                error.UnsupportedOperation => "Unsopported operator used",
-                error.OutOfMemory => "Out of memory during code generation.",
-                error.RedeclaredVariable => "Variable reinitialization",
-                else => "Unknown code generation error.",
-            };
-            std.debug.print("Error generating code: {s}\n", .{error_msg});
-            return 1;
+    defer code_generator.deinit();
+    code_generator.generateCode(ast_root) catch |err| {
+        const error_msg = switch (err) {
+            error.FunctionCreationFailed => "Failed to create function.",
+            error.TypeMismatch => "Type mismatch in code generation.",
+            error.UndefinedFunction => "Undefined function called.",
+            error.UndefinedVariable => "Undefined variable used.",
+            error.UnsupportedOperation => "Unsopported operator used",
+            error.OutOfMemory => "Out of memory during code generation.",
+            error.RedeclaredVariable => "Variable reinitialization",
+            else => "Unknown code generation error.",
         };
+        std.debug.print("Error generating code: {s}\n", .{error_msg});
+        return 1;
+    };
 
-        const exe_filename = if (ctx.output_path.len == 0) consts.DEFAULT_OUTPUT_NAME
-            else ctx.output_path;
+    const exe_filename = if (ctx.output_path.len == 0) consts.DEFAULT_OUTPUT_NAME
+                         else ctx.output_path;
+
+    if (ctx.keepll) {
         const ir_filename = try std.fmt.allocPrint(allocator, "{s}.ll", .{exe_filename});
         defer allocator.free(ir_filename);
+
         code_generator.writeToFile(ir_filename) catch |err| {
             std.debug.print("Error writing LLVM IR to file: {}\n", .{err});
             return 1;
         };
-        std.debug.print("LLVM IR written to {s}\n", .{ir_filename});
 
-        code_generator.compileToExecutable(exe_filename, ctx.arch, ctx.link_objects.items) catch |err| {
-            std.debug.print("Error compiling to executable: {}\n", .{err});
-            return 1;
-        };
-        std.debug.print("Executable compiled to {s}\n", .{exe_filename});
-        if (!ctx.keepll) {
-            const cwd = std.fs.cwd();
-            try cwd.deleteFile(ir_filename);
-        }
+        std.debug.print("LLVM IR written to {s}\n", .{ir_filename});
+    }
+
+    code_generator.compileToExecutable(exe_filename, ctx.arch, ctx.link_objects.items) catch |err| {
+        std.debug.print("Error compiling to executable: {}\n", .{err});
+        return 1;
+    };
+    std.debug.print("Executable compiled to {s}\n", .{exe_filename});
 
     return 0;
 }
