@@ -33,6 +33,7 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "return"    { return TOKEN_RETURN; }
 "break"     { return TOKEN_BREAK; }
 "continue"  { return TOKEN_CONTINUE; }
+"use"       { return TOKEN_USE; }
 "brainfuck"[ \t\n]*"{" { BEGIN(BRAINFUCK); yylval.string = strdup(""); }
 {ARRAY_TYPE} { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
 {PTR_TYPE} { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }

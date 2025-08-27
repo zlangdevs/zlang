@@ -36,6 +36,7 @@ extern void* zig_create_array_initializer(void* elements);
 extern void* zig_create_array_index(const char* array_name, void* index);
 extern void* zig_create_array_assignment(const char* array_name, void* index, void* value);
 extern void* zig_create_c_function_decl(const char* name, const char* return_type, void* params);
+extern void* zig_create_use_stmt(const char* module_path);
 extern void zig_add_to_program(void* program, void* function);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
@@ -57,7 +58,7 @@ void* ast_root = NULL;
 
 %token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING TOKEN_BRAINFUCK
 
-%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE
+%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_USE
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT TOKEN_DECREMENT TOKEN_INCREMENT
@@ -86,8 +87,8 @@ void* ast_root = NULL;
 %type <node> var_declaration function_call return_statement assignment brainfuck_statement
 %type <node> expression logical_or_expression logical_and_expression additive_expression multiplicative_expression unary_expression primary_expression argument_list arguments
 %type <node> comparison_expression simple_term c_for_statement for_increment
-%type <node> array_initializer array_assignment c_function_decl c_function_decl_statement
-%type <string> type_name function_name string_literal complex_type_name
+%type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement
+%type <string> type_name function_name string_literal complex_type_name module_path
 
 %start program
 
@@ -110,16 +111,25 @@ function_list:
         }
         zig_add_to_program(ast_root, $1);
     }
-  | function_list function {
+   | function_list function {
         zig_add_to_program(ast_root, $2);
     }
-  | c_function_decl_statement {
+   | c_function_decl_statement {
         if (ast_root == NULL) {
             ast_root = zig_create_program();
         }
         zig_add_to_program(ast_root, $1);
     }
-  | function_list c_function_decl_statement {
+   | function_list c_function_decl_statement {
+        zig_add_to_program(ast_root, $2);
+    }
+   | use_statement {
+        if (ast_root == NULL) {
+            ast_root = zig_create_program();
+        }
+        zig_add_to_program(ast_root, $1);
+    }
+   | function_list use_statement {
         zig_add_to_program(ast_root, $2);
     }
 ;
@@ -201,17 +211,18 @@ statement_list:
 
 statement:
     var_declaration TOKEN_SEMICOLON { $$ = $1; }
-  | assignment TOKEN_SEMICOLON { $$ = $1; }
-  | array_assignment TOKEN_SEMICOLON { $$ = $1; }
-  | return_statement TOKEN_SEMICOLON { $$ = $1; }
-  | brainfuck_statement TOKEN_SEMICOLON { $$ = $1; }
-  | if_statement { $$ = $1; }
-  | for_statement { $$ = $1; }
-  | c_for_statement { $$ = $1; }
-  | break_statement TOKEN_SEMICOLON { $$ = $1; }
-  | continue_statement TOKEN_SEMICOLON { $$ = $1; }
-  | c_function_decl TOKEN_SEMICOLON { $$ = $1; }
-  | expression_statement { $$ = $1; }
+   | assignment TOKEN_SEMICOLON { $$ = $1; }
+   | array_assignment TOKEN_SEMICOLON { $$ = $1; }
+   | return_statement TOKEN_SEMICOLON { $$ = $1; }
+   | brainfuck_statement TOKEN_SEMICOLON { $$ = $1; }
+   | if_statement { $$ = $1; }
+   | for_statement { $$ = $1; }
+   | c_for_statement { $$ = $1; }
+   | break_statement TOKEN_SEMICOLON { $$ = $1; }
+   | continue_statement TOKEN_SEMICOLON { $$ = $1; }
+   | c_function_decl TOKEN_SEMICOLON { $$ = $1; }
+   | use_statement { $$ = $1; }
+   | expression_statement { $$ = $1; }
 ;
 
 expression_statement:
@@ -407,6 +418,17 @@ primary_expression:
 
 string_literal:
     TOKEN_STRING { $$ = strdup($1); }
+;
+
+use_statement:
+    TOKEN_USE module_path {
+        $$ = zig_create_use_stmt($2);
+        free($2);
+    }
+;
+
+module_path:
+    TOKEN_IDENTIFIER { $$ = strdup($1); }
 ;
 
 %%
