@@ -25,6 +25,7 @@ pub const NodeType = enum {
     array_index,
     array_assignment,
     c_function_decl,
+    use_stmt,
 };
 
 pub const BinaryOp = struct {
@@ -152,6 +153,10 @@ pub const CFunctionDecl = struct {
     parameters: std.ArrayList(Parameter),
 };
 
+pub const UseStmt = struct {
+    module_path: []const u8,
+};
+
 pub const NodeData = union(NodeType) {
     program: Program,
     function: Function,
@@ -177,6 +182,7 @@ pub const NodeData = union(NodeType) {
     array_index: ArrayIndex,
     array_assignment: ArrayAssignment,
     c_function_decl: CFunctionDecl,
+    use_stmt: UseStmt,
 };
 
 pub const Node = struct {
@@ -274,6 +280,9 @@ pub const Node = struct {
             .array_assignment => |arr_ass| {
                 arr_ass.index.destroy();
                 arr_ass.value.destroy();
+            },
+            .use_stmt => |use_stmt| {
+                self.allocator.free(use_stmt.module_path);
             },
             else => {},
         }
@@ -497,6 +506,9 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             } else {
                 std.debug.print("🔗 C Function Decl: \x1b[32m{s}\x1b[0m() -> \x1b[33m{s}\x1b[0m\n", .{c_func.name, c_func.return_type});
             }
+        },
+        .use_stmt => |use_stmt| {
+            std.debug.print("📦 Use Statement: \x1b[35m{s}\x1b[0m\n", .{use_stmt.module_path});
         },
     }
 }
