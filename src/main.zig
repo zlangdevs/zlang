@@ -24,20 +24,19 @@ pub fn read_file(file_name: []const u8) anyerror![]const u8 {
         defer file.close();
         const buffer = try file.readToEndAlloc(allocator, consts.MAX_BUFF_SIZE);
         return buffer;
-    } else if (file_stat.kind == .directory) {
-        return errors.ReadFileError.InvalidPath;
     }
-    return "";
+
+    return errors.ReadFileError.InvalidPath;
 }
 
 const Context = struct {
     input_path: []const u8,
     output_path: []const u8,
     arch: []const u8,
-    keepll: bool = false,
+    keepll: bool,
     link_objects: std.ArrayList([]const u8),
 
-    pub fn init(_: std.mem.Allocator) Context {
+    pub fn init() Context {
         return Context{
             .input_path = "",
             .output_path = "",
@@ -67,11 +66,10 @@ const Context = struct {
     }
 };
 
-
-
-fn parseArgs(alloc: std.mem.Allocator, args: [][:0] u8) anyerror!Context {
-    var context = Context.init(alloc);
+fn parseArgs(args: [][:0] u8) anyerror!Context {
+    var context = Context.init();
     errdefer context.deinit();
+
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         switch (args[i][0]) {
@@ -79,19 +77,23 @@ fn parseArgs(alloc: std.mem.Allocator, args: [][:0] u8) anyerror!Context {
                 const flag = args[i];
                 if (std.mem.eql(u8, flag, "-keepll")) {
                     context.keepll = true;
-                } else if (std.mem.eql(u8, flag, "-o")) {
+                }
+                else if (std.mem.eql(u8, flag, "-o")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoOutputPath;
                     context.output_path = args[i];
-                } else if (std.mem.eql(u8, flag, "-arch")) {
+                }
+                else if (std.mem.eql(u8, flag, "-arch")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoArch;
                     context.arch = args[i];
-                } else if (std.mem.eql(u8, flag, "-link")) {
+                }
+                else if (std.mem.eql(u8, flag, "-link")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.InvalidArgument;
                     try context.link_objects.append(args[i]);
-                } else {
+                }
+                else {
                     return errors.CLIError.InvalidArgument;
                 }
             },
@@ -112,7 +114,7 @@ fn parseArgs(alloc: std.mem.Allocator, args: [][:0] u8) anyerror!Context {
 
 pub fn main() !u8 {
     const args = try std.process.argsAlloc(allocator);
-    var ctx = parseArgs(allocator, args) catch |err| {
+    var ctx = parseArgs(args) catch |err| {
         const error_msg = switch(err) {
             errors.CLIError.NoInputPath => "No input path specified",
             errors.CLIError.NoOutputPath => "No output path specified after -o",
@@ -123,6 +125,7 @@ pub fn main() !u8 {
         std.debug.print("Error: {s}\n", .{error_msg});
         return 1;
     };
+
     ctx.print();
     defer ctx.deinit();
     defer std.process.argsFree(allocator, args);
@@ -130,6 +133,7 @@ pub fn main() !u8 {
         std.debug.print("Usage: zlang <path to file>", .{});
         return 1;
     }
+
     const input_file = ctx.input_path;
     const input = read_file(input_file) catch |err| {
         const error_msg = switch (err) {
@@ -143,6 +147,7 @@ pub fn main() !u8 {
         std.debug.print("Error: {s}\n", .{error_msg});
         return 1;
     };
+
     std.debug.print("Content of input file:\n{s}\n", .{input});
 
     const ast_root = parser.parse(allocator, input) catch |err| {
@@ -171,8 +176,8 @@ pub fn main() !u8 {
             std.debug.print("Error initializing codegen: {s}\n", .{error_msg});
             return 1;
         };
-        defer code_generator.deinit();
 
+        defer code_generator.deinit();
         code_generator.generateCode(root) catch |err| {
             const error_msg = switch (err) {
                 error.FunctionCreationFailed => "Failed to create function.",
@@ -189,26 +194,28 @@ pub fn main() !u8 {
         };
 
         const exe_filename = if (ctx.output_path.len == 0) consts.DEFAULT_OUTPUT_NAME
-            else ctx.output_path;
-        const ir_filename = try std.fmt.allocPrint(allocator, "{s}.ll", .{exe_filename});
-        defer allocator.free(ir_filename);
-        code_generator.writeToFile(ir_filename) catch |err| {
-            std.debug.print("Error writing LLVM IR to file: {}\n", .{err});
-            return 1;
-        };
-        std.debug.print("LLVM IR written to {s}\n", .{ir_filename});
+                             else ctx.output_path;
+
+        if (ctx.keepll) {
+            const ir_filename = try std.fmt.allocPrint(allocator, "{s}.ll", .{exe_filename});
+            defer allocator.free(ir_filename);
+
+            code_generator.writeToFile(ir_filename) catch |err| {
+                std.debug.print("Error writing LLVM IR to file: {}\n", .{err});
+                return 1;
+            };
+
+            std.debug.print("LLVM IR written to {s}\n", .{ir_filename});
+        }
 
         code_generator.compileToExecutable(exe_filename, ctx.arch, ctx.link_objects.items) catch |err| {
             std.debug.print("Error compiling to executable: {}\n", .{err});
             return 1;
         };
         std.debug.print("Executable compiled to {s}\n", .{exe_filename});
-        if (!ctx.keepll) {
-            const cwd = std.fs.cwd();
-            try cwd.deleteFile(ir_filename);
-        }
-    } else {
-        std.debug.print("No AST generated.\n", .{});
+    }
+    else {
+        std.debug.print("No AST generated. \n", .{});
     }
 
     return 0;
