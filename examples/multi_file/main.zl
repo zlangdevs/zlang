@@ -1,0 +1,9 @@
+use utils
+
+fun main() >> i32 {
+    i32 result = add(5, 3);
+    @printf("5 + 3 = %d\n", result);
+    result = multiply(result, 2);
+    @printf("doubled result: %d\n", result);
+    return result;
+}
