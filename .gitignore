@@ -1,10 +1,12 @@
 .zig-cache
 zig-out
 test
-test.in
+test.zl
 src/lexer/lexer.c
 src/parser/parser.c
 src/parser/parser.h
 output.ll
 output
 convert.sh
+examples/multi_file_c/cfunc
+examples/multi_file_c/multi_file_c_example

@@ -543,6 +543,23 @@ export fn zig_create_c_function_decl(name_ptr: [*c]const u8, return_type_ptr: [*
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_use_stmt(module_path_ptr: [*c]const u8) ?*anyopaque {
+    const module_path = std.mem.span(module_path_ptr);
+    const module_path_copy = global_allocator.dupe(u8, module_path) catch return null;
+
+    const use_stmt_data = ast.NodeData{
+        .use_stmt = ast.UseStmt{
+            .module_path = module_path_copy,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, use_stmt_data) catch {
+        global_allocator.free(module_path_copy);
+        return null;
+    };
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!?*ast.Node {
     global_allocator = allocator;
     ast_root = null;
