@@ -174,6 +174,7 @@ const Context = struct {
     output_path: []const u8,
     arch: []const u8,
     keepll: bool,
+    optimize: bool,
     link_objects: std.ArrayList([]const u8),
 
     pub fn init(alloc: std.mem.Allocator) Context {
@@ -182,6 +183,7 @@ const Context = struct {
             .output_path = "",
             .arch = "",
             .keepll = false,
+            .optimize = false,
             .link_objects = std.ArrayList([]const u8).init(alloc),
         };
     }
@@ -202,6 +204,7 @@ const Context = struct {
         std.debug.print("Output path: {s}\n", .{self.output_path});
         std.debug.print("Architecture: {s}\n", .{self.arch});
         std.debug.print("Keep ll: {s}\n", .{if (self.keepll) "yes" else "no"});
+        std.debug.print("Optimize: {s}\n", .{if (self.optimize) "yes" else "no"});
         std.debug.print("Link objects: ", .{});
         for (self.link_objects.items, 0..) |obj, i| {
             if (i > 0) std.debug.print(", ", .{});
@@ -223,6 +226,8 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                 const flag = args[i];
                 if (std.mem.eql(u8, flag, "-keepll")) {
                     context.keepll = true;
+                } else if (std.mem.eql(u8, flag, "-optimize")) {
+                    context.optimize = true;
                 } else if (std.mem.eql(u8, flag, "-o")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoOutputPath;
@@ -344,24 +349,59 @@ pub fn main() !u8 {
     };
 
     const exe_filename = if (ctx.output_path.len == 0) consts.DEFAULT_OUTPUT_NAME else ctx.output_path;
+    const ir_filename = try std.fmt.allocPrint(allocator, "{s}.ll", .{exe_filename});
+    defer allocator.free(ir_filename);
 
-    if (ctx.keepll) {
-        const ir_filename = try std.fmt.allocPrint(allocator, "{s}.ll", .{exe_filename});
-        defer allocator.free(ir_filename);
+    code_generator.writeToFile(ir_filename) catch |err| {
+        std.debug.print("Error writing LLVM IR to file: {}\n", .{err});
+        return 1;
+    };
 
-        code_generator.writeToFile(ir_filename) catch |err| {
-            std.debug.print("Error writing LLVM IR to file: {}\n", .{err});
-            return 1;
-        };
-
+    if (ctx.keepll and !ctx.optimize) {
         std.debug.print("LLVM IR written to {s}\n", .{ir_filename});
     }
 
-    code_generator.compileToExecutable(exe_filename, ctx.arch, ctx.link_objects.items) catch |err| {
-        std.debug.print("Error compiling to executable: {}\n", .{err});
-        return 1;
-    };
-    std.debug.print("Executable compiled to {s}\n", .{exe_filename});
+    if (ctx.optimize) {
+        const opt_command = try std.fmt.allocPrint(allocator, "opt -O3 {s} -o {s}_opt.ll", .{ ir_filename, exe_filename });
+        defer allocator.free(opt_command);
+
+        var opt_process = std.process.Child.init(&[_][]const u8{ "sh", "-c", opt_command }, allocator);
+        const opt_result = try opt_process.spawnAndWait();
+        if (opt_result.Exited != 0) {
+            std.debug.print("Error optimizing LLVM IR (exit code: {})\n", .{opt_result.Exited});
+            return 1;
+        }
+        std.debug.print("LLVM IR optimized with -O3\n", .{});
+        const clang_command = try std.fmt.allocPrint(allocator, "clang -O3 {s}_opt.ll -o {s} -lstdc++", .{ exe_filename, exe_filename });
+        defer allocator.free(clang_command);
+
+        var clang_process = std.process.Child.init(&[_][]const u8{ "sh", "-c", clang_command }, allocator);
+        const clang_result = try clang_process.spawnAndWait();
+
+        if (clang_result.Exited != 0) {
+            std.debug.print("Error compiling optimized IR with clang (exit code: {})\n", .{clang_result.Exited});
+            return 1;
+        }
+
+        std.debug.print("Optimized executable compiled to {s}\n", .{exe_filename});
+        if (!ctx.keepll) {
+            std.fs.cwd().deleteFile(ir_filename) catch {};
+            const opt_ir_filename = try std.fmt.allocPrint(allocator, "{s}_opt.ll", .{exe_filename});
+            defer allocator.free(opt_ir_filename);
+            std.fs.cwd().deleteFile(opt_ir_filename) catch {};
+        } else {
+            std.debug.print("LLVM IR written to {s}\n", .{ir_filename});
+            const opt_ir_filename = try std.fmt.allocPrint(allocator, "{s}_opt.ll", .{exe_filename});
+            defer allocator.free(opt_ir_filename);
+            std.debug.print("Optimized LLVM IR written to {s}\n", .{opt_ir_filename});
+        }
+    } else {
+        code_generator.compileToExecutable(exe_filename, ctx.arch, ctx.link_objects.items) catch |err| {
+            std.debug.print("Error compiling to executable: {}\n", .{err});
+            return 1;
+        };
+        std.debug.print("Executable compiled to {s}\n", .{exe_filename});
+    }
 
     return 0;
 }
