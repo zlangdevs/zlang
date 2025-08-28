@@ -4,13 +4,13 @@ const errors = @import("../errors.zig");
 
 pub const ControlFlowAnalyzer = struct {
     allocator: std.mem.Allocator,
-    
+
     pub fn init(allocator: std.mem.Allocator) ControlFlowAnalyzer {
         return ControlFlowAnalyzer{
             .allocator = allocator,
         };
     }
-    
+
     pub fn analyzeFunction(self: *ControlFlowAnalyzer, func: *ast.Node) errors.CodegenError!bool {
         switch (func.data) {
             .function => |f| {
@@ -22,7 +22,7 @@ pub const ControlFlowAnalyzer = struct {
             else => return errors.CodegenError.TypeMismatch,
         }
     }
-    
+
     fn analyzeStatementList(self: *ControlFlowAnalyzer, statements: []const *ast.Node) errors.CodegenError!bool {
         if (statements.len == 0) return false;
         var i: usize = 0;
@@ -44,7 +44,7 @@ pub const ControlFlowAnalyzer = struct {
                     std.debug.print("Warning: Unreachable code detected after return statement\n", .{});
                 }
             }
-            
+
             if (self.isIfStatement(stmt)) {
                 const all_paths_return = try self.analyzeIfStatement(stmt);
                 if (all_paths_return and i == statements.len - 1) {
@@ -61,7 +61,7 @@ pub const ControlFlowAnalyzer = struct {
         if (statements.len == 0) return false;
         return self.analyzeControlFlow(statements, 0, false);
     }
-    
+
     fn analyzeControlFlow(self: *ControlFlowAnalyzer, statements: []const *ast.Node, index: usize, in_unreachable: bool) errors.CodegenError!bool {
         if (index >= statements.len) return false;
         const stmt = statements[index];
@@ -85,7 +85,7 @@ pub const ControlFlowAnalyzer = struct {
                 return self.analyzeControlFlow(statements, index + 1, false);
             }
         }
-        
+
         if (self.isUnconditionalTerminator(stmt)) {
             if (index == statements.len - 1) {
                 return true;
@@ -94,7 +94,7 @@ pub const ControlFlowAnalyzer = struct {
         }
         return self.analyzeControlFlow(statements, index + 1, false);
     }
-    
+
     fn analyzeIfStatementEnhanced(self: *ControlFlowAnalyzer, stmt: *ast.Node) errors.CodegenError!bool {
         switch (stmt.data) {
             .if_stmt => |if_stmt| {
@@ -109,7 +109,7 @@ pub const ControlFlowAnalyzer = struct {
             else => return errors.CodegenError.TypeMismatch,
         }
     }
-    
+
     fn isReturnStatement(self: *ControlFlowAnalyzer, stmt: *ast.Node) bool {
         _ = self;
         return switch (stmt.data) {
@@ -117,7 +117,7 @@ pub const ControlFlowAnalyzer = struct {
             else => false,
         };
     }
-    
+
     fn isIfStatement(self: *ControlFlowAnalyzer, stmt: *ast.Node) bool {
         _ = self;
         return switch (stmt.data) {
@@ -125,7 +125,7 @@ pub const ControlFlowAnalyzer = struct {
             else => false,
         };
     }
-    
+
     fn isUnconditionalTerminator(self: *ControlFlowAnalyzer, stmt: *ast.Node) bool {
         _ = self;
         return switch (stmt.data) {
@@ -133,7 +133,7 @@ pub const ControlFlowAnalyzer = struct {
             else => false,
         };
     }
-    
+
     fn analyzeIfStatement(self: *ControlFlowAnalyzer, stmt: *ast.Node) errors.CodegenError!bool {
         switch (stmt.data) {
             .if_stmt => |if_stmt| {
@@ -148,7 +148,7 @@ pub const ControlFlowAnalyzer = struct {
             else => return errors.CodegenError.TypeMismatch,
         }
     }
-    
+
     pub fn analyzeIfElseChain(self: *ControlFlowAnalyzer, statements: []const *ast.Node) errors.CodegenError!bool {
         if (statements.len == 0) {
             return false;
@@ -156,10 +156,10 @@ pub const ControlFlowAnalyzer = struct {
         var i: usize = 0;
         var has_else = false;
         var all_branches_return = true;
-        
+
         while (i < statements.len) : (i += 1) {
             const stmt = statements[i];
-            
+
             if (self.isIfStatement(stmt)) {
                 switch (stmt.data) {
                     .if_stmt => |if_stmt| {
@@ -186,7 +186,7 @@ pub const ControlFlowAnalyzer = struct {
         }
         return has_else and all_branches_return;
     }
-    
+
     fn isBooleanLiteral(self: *ControlFlowAnalyzer, node: *ast.Node) bool {
         _ = self;
         return switch (node.data) {
@@ -195,7 +195,7 @@ pub const ControlFlowAnalyzer = struct {
             else => false,
         };
     }
-    
+
     fn isTrueLiteral(self: *ControlFlowAnalyzer, node: *ast.Node) bool {
         _ = self;
         return switch (node.data) {
@@ -204,7 +204,7 @@ pub const ControlFlowAnalyzer = struct {
             else => false,
         };
     }
-    
+
     fn isFalseLiteral(self: *ControlFlowAnalyzer, node: *ast.Node) bool {
         _ = self;
         return switch (node.data) {
@@ -213,7 +213,7 @@ pub const ControlFlowAnalyzer = struct {
             else => false,
         };
     }
-    
+
     pub fn analyzeConditionalStructure(self: *ControlFlowAnalyzer, statements: []const *ast.Node) errors.CodegenError!bool {
         if (statements.len == 0) {
             return false;
@@ -227,7 +227,7 @@ pub const ControlFlowAnalyzer = struct {
         var i: usize = 0;
         while (i < statements.len) : (i += 1) {
             const stmt = statements[i];
-            
+
             if (self.isIfStatement(stmt)) {
                 switch (stmt.data) {
                     .if_stmt => |if_stmt| {
@@ -236,8 +236,7 @@ pub const ControlFlowAnalyzer = struct {
                             if (then_returns and i == statements.len - 1) {
                                 return true;
                             }
-                        }
-                        else if (self.isFalseLiteral(if_stmt.condition)) {
+                        } else if (self.isFalseLiteral(if_stmt.condition)) {
                             if (if_stmt.else_body) |else_body| {
                                 const else_returns = try self.analyzeStatementList(else_body.items);
                                 if (else_returns and i == statements.len - 1) {
@@ -252,7 +251,7 @@ pub const ControlFlowAnalyzer = struct {
                 }
             }
         }
-        
+
         return false;
     }
 };

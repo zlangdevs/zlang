@@ -109,11 +109,11 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
     }
     for (ctx.input_files.items) |input_file| {
         const input = read_file(input_file) catch |err| {
-            std.debug.print("Error reading file {s}: {}\n", .{input_file, err});
+            std.debug.print("Error reading file {s}: {}\n", .{ input_file, err });
             return err;
         };
         const ast_root = parser.parse(alloc, input) catch |err| {
-            std.debug.print("Error parsing file {s}: {}\n", .{input_file, err});
+            std.debug.print("Error parsing file {s}: {}\n", .{ input_file, err });
             return err;
         };
         if (ast_root) |root| {
@@ -201,7 +201,7 @@ const Context = struct {
         std.debug.print("\n", .{});
         std.debug.print("Output path: {s}\n", .{self.output_path});
         std.debug.print("Architecture: {s}\n", .{self.arch});
-        std.debug.print("Keep ll: {s}\n", .{ if (self.keepll) "yes" else "no" });
+        std.debug.print("Keep ll: {s}\n", .{if (self.keepll) "yes" else "no"});
         std.debug.print("Link objects: ", .{});
         for (self.link_objects.items, 0..) |obj, i| {
             if (i > 0) std.debug.print(", ", .{});
@@ -212,7 +212,7 @@ const Context = struct {
     }
 };
 
-fn parseArgs(args: [][:0] u8) anyerror!Context {
+fn parseArgs(args: [][:0]u8) anyerror!Context {
     var context = Context.init(allocator);
     errdefer context.deinit();
 
@@ -223,23 +223,19 @@ fn parseArgs(args: [][:0] u8) anyerror!Context {
                 const flag = args[i];
                 if (std.mem.eql(u8, flag, "-keepll")) {
                     context.keepll = true;
-                }
-                else if (std.mem.eql(u8, flag, "-o")) {
+                } else if (std.mem.eql(u8, flag, "-o")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoOutputPath;
                     context.output_path = args[i];
-                }
-                else if (std.mem.eql(u8, flag, "-arch")) {
+                } else if (std.mem.eql(u8, flag, "-arch")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoArch;
                     context.arch = args[i];
-                }
-                else if (std.mem.eql(u8, flag, "-link")) {
+                } else if (std.mem.eql(u8, flag, "-link")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.InvalidArgument;
                     try context.link_objects.append(args[i]);
-                }
-                else {
+                } else {
                     return errors.CLIError.InvalidArgument;
                 }
             },
@@ -268,7 +264,8 @@ fn parseArgs(args: [][:0] u8) anyerror!Context {
 
     return if (context.input_files.items.len == 0)
         errors.CLIError.NoInputPath
-    else context;
+    else
+        context;
 }
 
 fn collectZlFilesFromDir(alloc: std.mem.Allocator, dir_path: []const u8, files_list: *std.ArrayList([]const u8)) !void {
@@ -291,12 +288,12 @@ fn collectZlFilesFromDir(alloc: std.mem.Allocator, dir_path: []const u8, files_l
 pub fn main() !u8 {
     const args = try std.process.argsAlloc(allocator);
     var ctx = parseArgs(args) catch |err| {
-        const error_msg = switch(err) {
+        const error_msg = switch (err) {
             errors.CLIError.NoInputPath => "No input path specified",
             errors.CLIError.NoOutputPath => "No output path specified after -o",
             errors.CLIError.NoArch => "No target specified after -arch",
             errors.CLIError.InvalidArgument => "Unrecognized argument",
-            else => "Unknown error while parsing arguments"
+            else => "Unknown error while parsing arguments",
         };
         std.debug.print("Error: {s}\n", .{error_msg});
         return 1;
@@ -346,8 +343,7 @@ pub fn main() !u8 {
         return 1;
     };
 
-    const exe_filename = if (ctx.output_path.len == 0) consts.DEFAULT_OUTPUT_NAME
-                         else ctx.output_path;
+    const exe_filename = if (ctx.output_path.len == 0) consts.DEFAULT_OUTPUT_NAME else ctx.output_path;
 
     if (ctx.keepll) {
         const ir_filename = try std.fmt.allocPrint(allocator, "{s}.ll", .{exe_filename});
