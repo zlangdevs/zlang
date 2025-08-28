@@ -65,7 +65,7 @@ void* ast_root = NULL;
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT TOKEN_DECREMENT TOKEN_INCREMENT
-%token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_AND TOKEN_OR TOKEN_NOT TOKEN_AMPERSAND
+%token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_MODULUS TOKEN_AND TOKEN_OR TOKEN_NOT TOKEN_AMPERSAND
 
 %type <node> if_statement
 %type <node> for_statement
@@ -395,6 +395,7 @@ multiplicative_expression:
     unary_expression { $$ = $1; }
   | multiplicative_expression TOKEN_MULTIPLY unary_expression { $$ = zig_create_binary_op('*', $1, $3); }
   | multiplicative_expression TOKEN_DIVIDE unary_expression { $$ = zig_create_binary_op('/', $1, $3); }
+  | multiplicative_expression TOKEN_MODULUS unary_expression { $$ = zig_create_binary_op('%', $1, $3); }
 ;
 
 unary_expression:

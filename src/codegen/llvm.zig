@@ -1601,24 +1601,35 @@ pub const CodeGenerator = struct {
         }
 
         return switch (bin_op.op) {
-            '+' => if (is_float_op)
-                c.LLVMBuildFAdd(self.builder, casted_lhs, casted_rhs, "fadd")
-            else
-                c.LLVMBuildAdd(self.builder, casted_lhs, casted_rhs, "add"),
-            '-' => if (is_float_op)
-                c.LLVMBuildFSub(self.builder, casted_lhs, casted_rhs, "fsub")
-            else
-                c.LLVMBuildSub(self.builder, casted_lhs, casted_rhs, "sub"),
-            '*' => if (is_float_op)
-                c.LLVMBuildFMul(self.builder, casted_lhs, casted_rhs, "fmul")
-            else
-                c.LLVMBuildMul(self.builder, casted_lhs, casted_rhs, "mul"),
-            '/' => if (is_float_op)
-                c.LLVMBuildFDiv(self.builder, casted_lhs, casted_rhs, "fdiv")
-            else if (isUnsignedType(self.getTypeNameFromLLVMType(result_type)))
-                c.LLVMBuildUDiv(self.builder, casted_lhs, casted_rhs, "udiv")
-            else
-                c.LLVMBuildSDiv(self.builder, casted_lhs, casted_rhs, "sdiv"),
+            '+' =>
+                if (is_float_op)
+                    c.LLVMBuildFAdd(self.builder, casted_lhs, casted_rhs, "fadd")
+                else
+                    c.LLVMBuildAdd(self.builder, casted_lhs, casted_rhs, "add"),
+            '-' =>
+                if (is_float_op)
+                    c.LLVMBuildFSub(self.builder, casted_lhs, casted_rhs, "fsub")
+                else
+                    c.LLVMBuildSub(self.builder, casted_lhs, casted_rhs, "sub"),
+            '*' =>
+                if (is_float_op)
+                    c.LLVMBuildFMul(self.builder, casted_lhs, casted_rhs, "fmul")
+                else
+                    c.LLVMBuildMul(self.builder, casted_lhs, casted_rhs, "mul"),
+            '/' =>
+                if (is_float_op)
+                    c.LLVMBuildFDiv(self.builder, casted_lhs, casted_rhs, "fdiv")
+                else if (isUnsignedType(self.getTypeNameFromLLVMType(result_type)))
+                    c.LLVMBuildUDiv(self.builder, casted_lhs, casted_rhs, "udiv")
+                else
+                    c.LLVMBuildSDiv(self.builder, casted_lhs, casted_rhs, "sdiv"),
+            '%' =>
+                if (is_float_op)
+                    c.LLVMBuildFRem(self.builder, casted_lhs, casted_rhs, "frem")
+                else if (isUnsignedType(self.getTypeNameFromLLVMType(result_type)))
+                    c.LLVMBuildURem(self.builder, casted_lhs, casted_rhs, "urem")
+                else
+                    c.LLVMBuildSRem(self.builder, casted_lhs, casted_rhs, "srem"),
             '&' => self.generateLogicalAnd(bin_op.lhs, bin_op.rhs),
             '|' => self.generateLogicalOr(bin_op.lhs, bin_op.rhs),
             else => {
