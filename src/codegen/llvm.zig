@@ -121,7 +121,7 @@ pub const CodeGenerator = struct {
 
     fn getLLVMType(self: *CodeGenerator, type_name: []const u8) c.LLVMTypeRef {
         if (std.mem.startsWith(u8, type_name, "ptr<") and std.mem.endsWith(u8, type_name, ">")) {
-            const inner_type_name = type_name[4..type_name.len-1];
+            const inner_type_name = type_name[4 .. type_name.len - 1];
             const inner_type = self.getLLVMType(inner_type_name);
             return c.LLVMPointerType(inner_type, 0);
         } else if (std.mem.eql(u8, type_name, "i8")) {
@@ -699,10 +699,7 @@ pub const CodeGenerator = struct {
 
         const element_type = c.LLVMGetElementType(var_info.type_ref);
 
-        var indices = [_]c.LLVMValueRef{
-            c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0),
-            index_value
-        };
+        var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
         const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
 
         const casted_value = self.castToType(value, element_type);
@@ -718,10 +715,7 @@ pub const CodeGenerator = struct {
                     const element_value = try self.generateExpression(element);
                     const element_type = c.LLVMGetElementType(var_info.type_ref);
 
-                    var indices = [_]c.LLVMValueRef{
-                        c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0),
-                        c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(idx)), 0)
-                    };
+                    var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(idx)), 0) };
                     const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
 
                     const casted_value = self.castToType(element_value, element_type);
@@ -731,12 +725,12 @@ pub const CodeGenerator = struct {
             else => {
                 std.debug.print("Error: invalid array re-assignment\n", .{});
                 return errors.CodegenError.TypeMismatch;
-            }
+            },
         }
     }
 
     fn generateArrayDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.CodegenError!void {
-        const inner = decl.type_name[4..decl.type_name.len-1];
+        const inner = decl.type_name[4 .. decl.type_name.len - 1];
         var comma_pos: ?usize = null;
         var search_idx: usize = inner.len;
         while (search_idx > 0) {
@@ -750,7 +744,7 @@ pub const CodeGenerator = struct {
         if (comma_pos) |pos| {
             const element_type_part = inner[0..pos];
             const element_type_name = std.mem.trim(u8, element_type_part, " \t");
-            const size_part = inner[pos + 1..];
+            const size_part = inner[pos + 1 ..];
             const size_str = std.mem.trim(u8, size_part, " \t");
             const array_size = std.fmt.parseInt(usize, size_str, 10) catch {
                 std.debug.print("Error: invalid array size\\n", .{});
@@ -769,10 +763,7 @@ pub const CodeGenerator = struct {
                     .array_initializer => |init_list| {
                         for (init_list.elements.items, 0..) |element, idx| {
                             const element_value = try self.generateExpression(element);
-                            var indices = [_]c.LLVMValueRef{
-                                c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0),
-                                c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(idx)), 0)
-                            };
+                            var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(idx)), 0) };
                             const element_ptr = c.LLVMBuildGEP2(self.builder, array_type, alloca, &indices[0], 2, "array_element_ptr");
                             const casted_value = self.castToType(element_value, element_type);
                             _ = c.LLVMBuildStore(self.builder, casted_value, element_ptr);
@@ -781,7 +772,7 @@ pub const CodeGenerator = struct {
                     else => {
                         std.debug.print("Error: invalid array initializer\\n", .{});
                         return errors.CodegenError.TypeMismatch;
-                    }
+                    },
                 }
             }
         } else {
@@ -975,17 +966,17 @@ pub const CodeGenerator = struct {
                         const llvm_type = self.getLLVMType(type_name);
                         if (std.mem.startsWith(u8, type_name, "u")) {
                             if (std.mem.startsWith(u8, num.value, "-")) {
-                                std.debug.print("Error: Cannot assign negative value '{s}' to unsigned type {s}\n", .{num.value, type_name});
+                                std.debug.print("Error: Cannot assign negative value '{s}' to unsigned type {s}\n", .{ num.value, type_name });
                                 return errors.CodegenError.TypeMismatch;
                             }
                             const value = std.fmt.parseInt(u64, num.value, 10) catch {
-                                std.debug.print("Error: Invalid unsigned value '{s}' for type {s}\n", .{num.value, type_name});
+                                std.debug.print("Error: Invalid unsigned value '{s}' for type {s}\n", .{ num.value, type_name });
                                 return errors.CodegenError.TypeMismatch;
                             };
                             return c.LLVMConstInt(llvm_type, @as(c_ulonglong, @intCast(value)), 0);
                         } else {
                             const value = std.fmt.parseInt(i64, num.value, 10) catch {
-                                std.debug.print("Error: Invalid signed value '{s}' for type {s}\n", .{num.value, type_name});
+                                std.debug.print("Error: Invalid signed value '{s}' for type {s}\n", .{ num.value, type_name });
                                 return errors.CodegenError.TypeMismatch;
                             };
                             return c.LLVMConstInt(llvm_type, @as(c_ulonglong, @intCast(value)), 0);
@@ -1158,7 +1149,7 @@ pub const CodeGenerator = struct {
                             std.debug.print("Error: Increment operator can only be applied to variables\n", .{});
                             return errors.CodegenError.TypeMismatch;
                         }
-                        
+
                         const ident = un.operand.data.identifier;
                         if (self.variables.get(ident.name)) |var_info| {
                             const var_type_name = self.getTypeNameFromLLVMType(var_info.type_ref);
@@ -1176,7 +1167,7 @@ pub const CodeGenerator = struct {
                             }
                             const var_ptr = var_info.value;
                             const var_type = var_info.type_ref;
-                        
+
                             const current_val = c.LLVMBuildLoad2(self.builder, var_type, var_ptr, "load_for_inc");
 
                             const new_val = switch (c.LLVMGetTypeKind(var_type)) {
@@ -1325,10 +1316,7 @@ pub const CodeGenerator = struct {
                 const var_info = self.variables.get(arr_idx.array_name) orelse return errors.CodegenError.UndefinedVariable;
                 const index_value = try self.generateExpression(arr_idx.index);
                 const element_type = c.LLVMGetElementType(var_info.type_ref);
-                var indices = [_]c.LLVMValueRef{
-                    c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0),
-                    index_value
-                };
+                var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
                 const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
 
                 return c.LLVMBuildLoad2(self.builder, element_type, element_ptr, "array_element");
@@ -1431,9 +1419,7 @@ pub const CodeGenerator = struct {
                     return c.LLVMBuildFCmp(self.builder, c.LLVMRealOLT, casted_lhs, casted_rhs, "fcmp_lt");
                 } else {
                     const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(result_type));
-                    return c.LLVMBuildICmp(self.builder,
-                        if (is_unsigned) c.LLVMIntULT else c.LLVMIntSLT,
-                        casted_lhs, casted_rhs, "icmp_lt");
+                    return c.LLVMBuildICmp(self.builder, if (is_unsigned) c.LLVMIntULT else c.LLVMIntSLT, casted_lhs, casted_rhs, "icmp_lt");
                 }
             },
             '>' => {
@@ -1441,9 +1427,7 @@ pub const CodeGenerator = struct {
                     return c.LLVMBuildFCmp(self.builder, c.LLVMRealOGT, casted_lhs, casted_rhs, "fcmp_gt");
                 } else {
                     const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(result_type));
-                    return c.LLVMBuildICmp(self.builder,
-                        if (is_unsigned) c.LLVMIntUGT else c.LLVMIntSGT,
-                        casted_lhs, casted_rhs, "icmp_gt");
+                    return c.LLVMBuildICmp(self.builder, if (is_unsigned) c.LLVMIntUGT else c.LLVMIntSGT, casted_lhs, casted_rhs, "icmp_gt");
                 }
             },
             'L' => {
@@ -1451,9 +1435,7 @@ pub const CodeGenerator = struct {
                     return c.LLVMBuildFCmp(self.builder, c.LLVMRealOLE, casted_lhs, casted_rhs, "fcmp_le");
                 } else {
                     const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(result_type));
-                    return c.LLVMBuildICmp(self.builder,
-                        if (is_unsigned) c.LLVMIntULE else c.LLVMIntSLE,
-                        casted_lhs, casted_rhs, "icmp_le");
+                    return c.LLVMBuildICmp(self.builder, if (is_unsigned) c.LLVMIntULE else c.LLVMIntSLE, casted_lhs, casted_rhs, "icmp_le");
                 }
             },
             'G' => {
@@ -1461,9 +1443,7 @@ pub const CodeGenerator = struct {
                     return c.LLVMBuildFCmp(self.builder, c.LLVMRealOGE, casted_lhs, casted_rhs, "fcmp_ge");
                 } else {
                     const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(result_type));
-                    return c.LLVMBuildICmp(self.builder,
-                        if (is_unsigned) c.LLVMIntUGE else c.LLVMIntSGE,
-                        casted_lhs, casted_rhs, "icmp_ge");
+                    return c.LLVMBuildICmp(self.builder, if (is_unsigned) c.LLVMIntUGE else c.LLVMIntSGE, casted_lhs, casted_rhs, "icmp_ge");
                 }
             },
             else => return errors.CodegenError.UnsupportedOperation,
@@ -1490,11 +1470,11 @@ pub const CodeGenerator = struct {
         }
 
         const is_lhs_float = lhs_kind == c.LLVMFloatTypeKind or
-                             lhs_kind == c.LLVMDoubleTypeKind or
-                             lhs_kind == c.LLVMHalfTypeKind;
+            lhs_kind == c.LLVMDoubleTypeKind or
+            lhs_kind == c.LLVMHalfTypeKind;
         const is_rhs_float = rhs_kind == c.LLVMFloatTypeKind or
-                             rhs_kind == c.LLVMDoubleTypeKind or
-                             rhs_kind == c.LLVMHalfTypeKind;
+            rhs_kind == c.LLVMDoubleTypeKind or
+            rhs_kind == c.LLVMHalfTypeKind;
         const is_float_op = is_lhs_float or is_rhs_float;
         const result_type = if (is_float_op) blk: {
             if (lhs_kind == c.LLVMDoubleTypeKind or rhs_kind == c.LLVMDoubleTypeKind) {

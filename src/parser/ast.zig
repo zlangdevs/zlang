@@ -321,7 +321,7 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
                 std.debug.print("⚡ Function: \x1b[32m{s}\x1b[0m(", .{func.name});
                 for (func.parameters.items, 0..) |param, i| {
                     if (i > 0) std.debug.print(", ", .{});
-                    std.debug.print("\x1b[36m{s}\x1b[0m: \x1b[33m{s}\x1b[0m", .{param.name, param.type_name});
+                    std.debug.print("\x1b[36m{s}\x1b[0m: \x1b[33m{s}\x1b[0m", .{ param.name, param.type_name });
                 }
                 std.debug.print(") -> \x1b[33m{s}\x1b[0m ({} statement{s})\n", .{ func.return_type, func.body.items.len, if (func.body.items.len == 1) @as([]const u8, "") else "s" });
             } else {
@@ -390,11 +390,11 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
                 const is_line_last = i == line_list.items.len - 1;
                 printIndent(indent + 1, is_line_last, false);
                 if (std.mem.startsWith(u8, line, "?") and std.mem.endsWith(u8, line, "?")) {
-                    const content = line[1..line.len-1];
+                    const content = line[1 .. line.len - 1];
                     if (std.mem.indexOf(u8, content, " ")) |space_idx| {
                         const key = content[0..space_idx];
-                        const value = content[space_idx+1..];
-                        std.debug.print("\x1b[90m{s}: {s}\x1b[0m\n", .{key, value});
+                        const value = content[space_idx + 1 ..];
+                        std.debug.print("\x1b[90m{s}: {s}\x1b[0m\n", .{ key, value });
                     } else {
                         std.debug.print("\x1b[90m{s}\x1b[0m\n", .{content});
                     }
@@ -500,11 +500,11 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
                 std.debug.print("🔗 C Function Decl: \x1b[32m{s}\x1b[0m(", .{c_func.name});
                 for (c_func.parameters.items, 0..) |param, i| {
                     if (i > 0) std.debug.print(", ", .{});
-                    std.debug.print("\x1b[36m{s}\x1b[0m: \x1b[33m{s}\x1b[0m", .{param.name, param.type_name});
+                    std.debug.print("\x1b[36m{s}\x1b[0m: \x1b[33m{s}\x1b[0m", .{ param.name, param.type_name });
                 }
                 std.debug.print(") -> \x1b[33m{s}\x1b[0m\n", .{c_func.return_type});
             } else {
-                std.debug.print("🔗 C Function Decl: \x1b[32m{s}\x1b[0m() -> \x1b[33m{s}\x1b[0m\n", .{c_func.name, c_func.return_type});
+                std.debug.print("🔗 C Function Decl: \x1b[32m{s}\x1b[0m() -> \x1b[33m{s}\x1b[0m\n", .{ c_func.name, c_func.return_type });
             }
         },
         .use_stmt => |use_stmt| {
