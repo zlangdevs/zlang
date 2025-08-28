@@ -54,16 +54,16 @@ export fn zig_create_program() ?*anyopaque {
 export fn zig_create_parameter(name_ptr: [*c]const u8, type_ptr: [*c]const u8) ?*anyopaque {
     const name = std.mem.span(name_ptr);
     const type_name = std.mem.span(type_ptr);
-    
+
     const name_copy = global_allocator.dupe(u8, name) catch return null;
     const type_copy = global_allocator.dupe(u8, type_name) catch return null;
-    
+
     const param = global_allocator.create(ast.Parameter) catch return null;
     param.* = ast.Parameter{
         .name = name_copy,
         .type_name = type_copy,
     };
-    
+
     return @as(*anyopaque, @ptrCast(param));
 }
 
@@ -75,10 +75,10 @@ export fn zig_create_param_list() ?*anyopaque {
 
 export fn zig_add_to_param_list(list_ptr: ?*anyopaque, param_ptr: ?*anyopaque) void {
     if (list_ptr == null or param_ptr == null) return;
-    
+
     const param_list = @as(*ParameterList, @ptrFromInt(@intFromPtr(list_ptr.?)));
     const param = @as(*ast.Parameter, @ptrFromInt(@intFromPtr(param_ptr.?)));
-    
+
     param_list.items.append(param.*) catch return;
 }
 
@@ -117,7 +117,7 @@ export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const
 export fn zig_create_comparison(op: u8, lhs_ptr: *anyopaque, rhs_ptr: *anyopaque) ?*anyopaque {
     const lhs = @as(*ast.Node, @ptrFromInt(@intFromPtr(lhs_ptr)));
     const rhs = @as(*ast.Node, @ptrFromInt(@intFromPtr(rhs_ptr)));
-    
+
     const comp_data = ast.NodeData{
         .comparison = ast.Comparison{
             .op = op,
@@ -133,7 +133,7 @@ export fn zig_create_comparison(op: u8, lhs_ptr: *anyopaque, rhs_ptr: *anyopaque
 export fn zig_create_binary_op(op: u8, lhs_ptr: *anyopaque, rhs_ptr: *anyopaque) ?*anyopaque {
     const lhs = @as(*ast.Node, @ptrFromInt(@intFromPtr(lhs_ptr)));
     const rhs = @as(*ast.Node, @ptrFromInt(@intFromPtr(rhs_ptr)));
-    
+
     const binary_op_data = ast.NodeData{
         .binary_op = ast.BinaryOp{
             .op = op,
@@ -375,7 +375,7 @@ export fn zig_create_if_stmt(condition_ptr: ?*anyopaque, then_body_ptr: ?*anyopa
     const condition = @as(*ast.Node, @ptrFromInt(@intFromPtr(condition_ptr.?)));
     const then_node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(then_body_ptr.?)));
     const then_body = then_node_list.items;
-    
+
     var else_body_opt: ?std.ArrayList(*ast.Node) = null;
     if (else_body_ptr) |ptr| {
         const else_node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
@@ -421,7 +421,7 @@ export fn zig_create_c_for_stmt(init_ptr: ?*anyopaque, cond_ptr: ?*anyopaque, in
     var init: ?*ast.Node = null;
     var cond: ?*ast.Node = null;
     var increment: ?*ast.Node = null;
-    
+
     if (init_ptr) |ptr| init = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
     if (cond_ptr) |ptr| cond = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
     if (inc_ptr) |ptr| increment = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));

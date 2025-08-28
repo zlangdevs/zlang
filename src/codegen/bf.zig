@@ -19,7 +19,7 @@ const BrainfuckContext = struct {
         stdout.print("🔢 Cell size: {d} bits\n", .{self.cell_size}) catch return;
         stdout.print("🔀 Signed cells: {s}\n", .{if (self.cell_signed) "✅ yes" else "❌ no"}) catch return;
         stdout.print("📏 Tape length: {d}\n", .{self.len}) catch return;
-        
+
         if (self.requests.items.len > 0) {
             stdout.print("\n📦 Load requests:\n", .{}) catch return;
             for (self.requests.items) |req| {
@@ -64,13 +64,13 @@ pub fn ParseBfContext(allocator: std.mem.Allocator, input: []const u8) Brainfuck
             if (start_pos >= trimmed.len) break;
             const directive_end = std.mem.indexOfScalarPos(u8, trimmed, start_pos + 1, '?');
             if (directive_end == null) break;
-            
+
             const end_pos = directive_end.?;
             if (end_pos <= start_pos + 1) {
                 line_pos = end_pos + 1;
                 continue;
             }
-            const content = trimmed[start_pos + 1..end_pos];
+            const content = trimmed[start_pos + 1 .. end_pos];
             const content_trimmed = std.mem.trim(u8, content, " \t");
             var parts = std.mem.splitSequence(u8, content_trimmed, " ");
             const arg_name = parts.next() orelse {
