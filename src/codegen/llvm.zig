@@ -134,10 +134,9 @@ pub const CodeGenerator = struct {
     }
 
     fn popScope(self: *CodeGenerator) void {
-        if (self.variable_scopes.items.len > 1) { // Keep at least the global scope
-            _ = self.variable_scopes.pop();
-            // TODO: Properly deinit the popped scope to avoid memory leaks
-            // For now, we'll leak the scope to get the scoping logic working
+        if (self.variable_scopes.items.len > 1) {
+            var scope = self.variable_scopes.pop().?;
+            scope.deinit();
         }
     }
 
