@@ -82,6 +82,7 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "||"        { return TOKEN_OR; }
 "*"         { return TOKEN_MULTIPLY; }
 "/"         { return TOKEN_DIVIDE; }
+"%"         { return TOKEN_MODULUS; }
 "++"        { return TOKEN_INCREMENT; }
 "--"        { return TOKEN_DECREMENT; }
 "+"         { return TOKEN_PLUS; }

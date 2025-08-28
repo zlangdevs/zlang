@@ -1,0 +1,26 @@
+fun main() >> i32 {
+    i32 a = 2;
+    @printf("(expected 0): %i\n", a % 2);
+    i32 b = 44;
+    @printf("(expected 2): %i\n", b % 3);
+
+    u16 c = 2;
+    @printf("(expected 0): %i\n", a % 2);
+    u16 d = 44;
+    @printf("(expected 2): %i\n", a % 3);
+
+    i64 e = 2;
+    @printf("(expected 0): %i\n", a % 2);
+    i64 f = 44;
+    @printf("(expected 2): %i\n", a % 3);
+
+    ?? It should work but it doesn't. fix
+    ?? f32 flo = 2.001222;
+    ?? @printf("%f\n", flo % 2.011);
+    ?? return 0;
+
+    i32 g = 41;
+    @printf("(expected 1): %i", g % -2); ?? Why would you do that?
+
+    return 0;
+}
