@@ -285,6 +285,17 @@ export fn zig_create_number_literal(value_ptr: [*c]const u8) ?*anyopaque {
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_char_literal(value: c_int) ?*anyopaque {
+    const char_data = ast.NodeData{
+        .char_literal = ast.CharLiteral{
+            .value = value,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, char_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_create_string_literal(value_ptr: [*c]const u8) ?*anyopaque {
     const value = std.mem.span(value_ptr);
     const value_copy = global_allocator.dupe(u8, value) catch return null;

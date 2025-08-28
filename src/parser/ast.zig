@@ -11,6 +11,7 @@ pub const NodeType = enum {
     unary_op,
     float_literal,
     number_literal,
+    char_literal,
     string_literal,
     bool_literal,
     binary_op,
@@ -53,6 +54,10 @@ pub const FloatLiteral = struct {
 
 pub const NumberLiteral = struct {
     value: []const u8,
+};
+
+pub const CharLiteral = struct {
+    value: i32,
 };
 
 pub const StringLiteral = struct {
@@ -168,6 +173,7 @@ pub const NodeData = union(NodeType) {
     unary_op: UnaryOp,
     float_literal: FloatLiteral,
     number_literal: NumberLiteral,
+    char_literal: CharLiteral,
     string_literal: StringLiteral,
     bool_literal: BoolLiteral,
     binary_op: BinaryOp,
@@ -411,6 +417,13 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         },
         .number_literal => |num| {
             std.debug.print("🔢 Number: \x1b[31m{s}\x1b[0m\n", .{num.value});
+        },
+        .char_literal => |char| {
+            if (char.value >= 32 and char.value <= 126) {
+                std.debug.print("🔤 Char: \x1b[35m'{c}'\x1b[0m ({d})\n", .{ @as(u8, @intCast(char.value)), char.value });
+            } else {
+                std.debug.print("🔤 Char: \x1b[35m{d}\x1b[0m\n", .{char.value});
+            }
         },
         .string_literal => |str| {
             std.debug.print("💬 String: \x1b[32m\"{s}\"\x1b[0m\n", .{str.value});

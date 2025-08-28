@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # Use this script to format your code before every commit, and ensure that all tests are passed, and nothing broke
+clear
 zig fmt .
+clear
 ./run_tests.sh
 ./zig-out/bin/zlang examples/brainfuck.zl 
 echo "++++++[>++++++++<-]>." | ./output 
