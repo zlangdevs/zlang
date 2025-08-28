@@ -1,18 +1,24 @@
 fun main() >> i32 {
     u8 inp;
-    arr<u8, 300> mem;
-    arr<u8, 300> code;
-    u8 mem_ptr = 0;
+    arr<u8, 200000> mem;
+    arr<u8, 100000> code;
+    u16 mem_ptr = 0;
     u16 code_ptr = 0;
-    for i32 inc = 0; inc < 300; inc++ {
+    for i32 inc = 0; inc < 100000; inc++ {
         code[inc] = 0;
-        mem[inc] = 0;
+    }
+    for i32 inc2 = 0; inc2 < 200000; inc2++ {
+        mem[inc2] = 0;
     }
     
     @printf("Paste Brainfuck code and press enter:\n");
     for {
-        @scanf("%c", &inp);
+        if @scanf("%c", &inp) != 1 {break;}  ?? Check scanf return value
         if inp == 10 {break;}
+        if code_ptr >= 100000 {
+            @printf("Error: Code input exceeded maximum size (100000)\n");
+            return 1;
+        }
         code[code_ptr] = inp;
         code_ptr++;
     }
@@ -20,22 +26,39 @@ fun main() >> i32 {
     @printf("\nInput code:\n");
     code_ptr = 0;
     for {
+        if code_ptr >= 100000 {break;}
         if code[code_ptr] == 0 {break;}
         @printf("%c", code[code_ptr]);
         code_ptr++;
     }
     @printf("\n\nProcessing\n\n");
     code_ptr = 0;
-    u8 loop_stack = 0;
+    u16 loop_stack = 0;
     
     for {
+        if code_ptr >= 100000 {
+            @printf("Error: Code pointer exceeded maximum\n");
+            return 1;
+        }
         u8 c = code[code_ptr];
         if c == 0 {break;}
         else if c == '+' {mem[mem_ptr]++;} ?? +
         else if c == '-' {mem[mem_ptr]--;} ?? -
-        else if c == '<' {mem_ptr--;} ?? <
-        else if c == '>' {mem_ptr++;} ?? >
-        else if c == ',' {@scanf("%c", mem[mem_ptr]);} ?? ,
+        else if c == '<' {
+            if mem_ptr > 0 {mem_ptr--;}
+            else {@printf("Error: Memory pointer went below 0\n"); return 1;}
+        } ?? <
+        else if c == '>' {
+            if mem_ptr < 199999 {mem_ptr++;}
+            else {@printf("Error: Memory pointer exceeded maximum (199999)\n"); return 1;}
+        } ?? >
+        else if c == ',' {
+            if @scanf("%c", &inp) == 1 {
+                mem[mem_ptr] = inp;
+            } else {
+                mem[mem_ptr] = 0;  ?? EOF, set to 0
+            }
+        } ?? ,
         else if c == '.' {@printf("%c", mem[mem_ptr]);} ?? .
         else if c == '[' {
             if mem[mem_ptr] == 0 {
