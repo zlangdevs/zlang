@@ -17,6 +17,7 @@ IDENT    {LETTER}({LETTER}|{DIGIT})*
 ARRAY_TYPE arr<[a-zA-Z_][a-zA-Z0-9_]*,[ \t]*[0-9]+>
 PTR_TYPE ptr<[^>]*>
 STRING   \"([^"\\]|\\.)*\"
+CHAR     '([^'\\]|\\.)'
 INTEGER  {DIGIT}+
 FLOAT_BASIC  {DIGIT}+\.{DIGIT}+
 EXPONENT [eE][+-]?{DIGIT}+
@@ -44,6 +45,39 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 {FLOAT_BASIC}    { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
 {INTEGER}        { yylval.string = strdup(yytext); return TOKEN_NUMBER; }
 {STRING}    { yylval.string = strndup(yytext+1, yyleng-2); return TOKEN_STRING; }
+{CHAR}      {
+    char *content = strndup(yytext+1, yyleng-2);
+    int len = strlen(content);
+    if (len == 0) {
+        fprintf(stderr, "Error: Empty character literal\n");
+        free(content);
+        return 0;
+    } else if (len > 1) {
+        fprintf(stderr, "Error: Character literal too long: '%s'\n", content);
+        free(content);
+        return 0;
+    }
+    char actual_char;
+    if (content[0] == '\\') {
+        switch (content[1]) {
+            case 'n': actual_char = '\n'; break;
+            case 't': actual_char = '\t'; break;
+            case 'r': actual_char = '\r'; break;
+            case '\\': actual_char = '\\'; break;
+            case '\'': actual_char = '\''; break;
+            case '"': actual_char = '"'; break;
+            default:
+                fprintf(stderr, "Error: Unknown escape sequence: \\%c\n", content[1]);
+                free(content);
+                return 0;
+        }
+    } else {
+        actual_char = content[0];
+    }
+    free(content);
+    yylval.number = (int)actual_char;
+    return TOKEN_CHAR;
+}
 "&&"        { return TOKEN_AND; }
 "||"        { return TOKEN_OR; }
 "*"         { return TOKEN_MULTIPLY; }

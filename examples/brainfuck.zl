@@ -31,13 +31,13 @@ fun main() >> i32 {
     for {
         u8 c = code[code_ptr];
         if c == 0 {break;}
-        else if c == 43 {mem[mem_ptr]++;} ?? +
-        else if c == 45 {mem[mem_ptr]--;} ?? -
-        else if c == 60 {mem_ptr--;} ?? <
-        else if c == 62 {mem_ptr++;} ?? >
-        else if c == 44 {@scanf("%c", mem[mem_ptr]);} ?? ,
-        else if c == 46 {@printf("%c", mem[mem_ptr]);} ?? .
-        else if c == 91 {
+        else if c == '+' {mem[mem_ptr]++;} ?? +
+        else if c == '-' {mem[mem_ptr]--;} ?? -
+        else if c == '<' {mem_ptr--;} ?? <
+        else if c == '>' {mem_ptr++;} ?? >
+        else if c == ',' {@scanf("%c", mem[mem_ptr]);} ?? ,
+        else if c == '.' {@printf("%c", mem[mem_ptr]);} ?? .
+        else if c == '[' {
             if mem[mem_ptr] == 0 {
                 loop_stack = 1;
                 code_ptr++;
@@ -50,7 +50,7 @@ fun main() >> i32 {
                 }
             }
         }
-        else if c == 93 {
+        else if c == ']' {
             if mem[mem_ptr] != 0 {
                 loop_stack = 1;
                 code_ptr--;

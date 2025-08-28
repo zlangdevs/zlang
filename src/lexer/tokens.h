@@ -27,6 +27,7 @@ typedef enum {
     TOKEN_COMMA,
     TOKEN_COLON,
     TOKEN_STRING,
+    TOKEN_CHAR,
     TOKEN_BRAINFUCK,
     TOKEN_LESS,
     TOKEN_GREATER,

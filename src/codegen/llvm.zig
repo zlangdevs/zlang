@@ -978,6 +978,9 @@ pub const CodeGenerator = struct {
                     }
                 }
             },
+            .char_literal => |char| {
+                return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(char.value)), 0);
+            },
             .identifier => |ident| {
                 if (std.mem.eql(u8, ident.name, "true")) {
                     return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 1, 0);
@@ -1023,6 +1026,9 @@ pub const CodeGenerator = struct {
                     const value = std.fmt.parseInt(i64, num.value, 10) catch 0;
                     return c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
                 }
+            },
+            .char_literal => |char| {
+                return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(char.value)), 0);
             },
             .bool_literal => |bool_val| {
                 return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), if (bool_val.value) 1 else 0, 0);
