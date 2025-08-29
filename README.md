@@ -1,2 +1,0 @@
-# lang
-Empire starts here 😈
