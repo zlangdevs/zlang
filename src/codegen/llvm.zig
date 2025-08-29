@@ -71,6 +71,7 @@ pub const CodeGenerator = struct {
     control_flow_analyzer: control_flow.ControlFlowAnalyzer,
     loop_context_stack: std.ArrayList(LoopContext),
     variable_scopes: std.ArrayList(std.HashMap([]const u8, VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage)),
+    uses_float_modulo: bool,
 
     const VariableInfo = struct {
         value: c.LLVMValueRef,
@@ -111,6 +112,7 @@ pub const CodeGenerator = struct {
             .control_flow_analyzer = control_flow_analyzer,
             .loop_context_stack = std.ArrayList(LoopContext).init(allocator),
             .variable_scopes = variable_scopes,
+            .uses_float_modulo = false,
         };
     }
 
@@ -1623,13 +1625,27 @@ pub const CodeGenerator = struct {
                     c.LLVMBuildUDiv(self.builder, casted_lhs, casted_rhs, "udiv")
                 else
                     c.LLVMBuildSDiv(self.builder, casted_lhs, casted_rhs, "sdiv"),
-            '%' =>
-                if (is_float_op)
-                    c.LLVMBuildFRem(self.builder, casted_lhs, casted_rhs, "frem")
-                else if (isUnsignedType(self.getTypeNameFromLLVMType(result_type)))
-                    c.LLVMBuildURem(self.builder, casted_lhs, casted_rhs, "urem")
-                else
-                    c.LLVMBuildSRem(self.builder, casted_lhs, casted_rhs, "srem"),
+            '%' => {
+                if (is_float_op) {
+                    self.uses_float_modulo = true;
+                    return c.LLVMBuildFRem(self.builder, casted_lhs, casted_rhs, "frem");
+                } else {
+                    const result_type_kind = c.LLVMGetTypeKind(result_type);
+                    if (result_type_kind != c.LLVMIntegerTypeKind) {
+                        std.debug.print("Error: Modulo operator not supported for non-integer types\n", .{});
+                        return errors.CodegenError.UnsupportedOperation;
+                    }
+                    const width = c.LLVMGetIntTypeWidth(result_type);
+                    if (width != 8 and width != 16 and width != 32 and width != 64) {
+                        std.debug.print("Error: Modulo operator only supported for 8, 16, 32, and 64-bit integers\n", .{});
+                        return errors.CodegenError.UnsupportedOperation;
+                    }
+                    if (isUnsignedType(self.getTypeNameFromLLVMType(result_type)))
+                        return c.LLVMBuildURem(self.builder, casted_lhs, casted_rhs, "urem")
+                    else
+                        return c.LLVMBuildSRem(self.builder, casted_lhs, casted_rhs, "srem");
+                }
+            },
             '&' => self.generateLogicalAnd(bin_op.lhs, bin_op.rhs),
             '|' => self.generateLogicalOr(bin_op.lhs, bin_op.rhs),
             else => {
@@ -2021,6 +2037,10 @@ pub const CodeGenerator = struct {
 
         for (link_objects) |obj| {
             try clang_args_list.append(obj);
+        }
+
+        if (self.uses_float_modulo) {
+            try clang_args_list.append("-lm");
         }
 
         try clang_args_list.append("-lc");
