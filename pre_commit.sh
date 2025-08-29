@@ -6,7 +6,7 @@ zig fmt .
 clear
 ./run_tests.sh
 ./zig-out/bin/zlang examples/brainfuck.zl -optimize
-cat ~/mandelbrot.bf | ./output
+cat thirdparties/mandelbrot.bf | ./output
 echo "++++++[>++++++++<-]>." | ./output 
 cd examples/multi_file_c
 ./build.sh
