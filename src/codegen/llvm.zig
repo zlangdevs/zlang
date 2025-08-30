@@ -157,18 +157,19 @@ pub const CodeGenerator = struct {
                 return var_info;
             }
         }
+        if (self.variables.get(name)) |var_info| {
+            return var_info;
+        }
         return null;
     }
 
     fn putVariable(self: *CodeGenerator, name: []const u8, var_info: VariableInfo) !void {
-        // Only check for redeclaration in the current (innermost) scope
         const current_scope = &self.variable_scopes.items[self.variable_scopes.items.len - 1];
         if (current_scope.contains(name)) {
             std.debug.print("Error: variable '{s}' is already declared in current scope (scope count: {})\n", .{ name, self.variable_scopes.items.len });
             return errors.CodegenError.RedeclaredVariable;
         }
 
-        // Store only in current scope - global variables map is no longer needed
         try current_scope.put(name, var_info);
     }
 
@@ -312,6 +313,11 @@ pub const CodeGenerator = struct {
     pub fn generateCode(self: *CodeGenerator, program: *ast.Node) errors.CodegenError!void {
         switch (program.data) {
             .program => |prog| {
+                for (prog.functions.items) |func| {
+                    if (func.data == .enum_decl) {
+                        try self.generateEnumDeclaration(func.data.enum_decl);
+                    }
+                }
                 for (prog.functions.items) |func| {
                     if (func.data == .c_function_decl) {
                         std.debug.print("Processing C function declaration: {s}\n", .{func.data.c_function_decl.name});
@@ -540,6 +546,9 @@ pub const CodeGenerator = struct {
             },
             .c_function_decl => |c_func| {
                 try self.generateCFunctionDeclaration(c_func);
+            },
+            .enum_decl => |enum_decl| {
+                try self.generateEnumDeclaration(enum_decl);
             },
             .unary_op => {
                 _ = try self.generateExpression(stmt);
@@ -813,6 +822,78 @@ pub const CodeGenerator = struct {
         c.LLVMSetLinkage(llvm_func, c.LLVMExternalLinkage);
     }
 
+    fn processGlobalEnums(self: *CodeGenerator, func_node: *ast.Node) errors.CodegenError!void {
+        switch (func_node.data) {
+            .function => |func| {
+                std.debug.print("Processing global enums for function: {s}\n", .{func.name});
+                for (func.body.items) |stmt| {
+                    try self.findAndProcessEnums(stmt);
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn findAndProcessEnums(self: *CodeGenerator, node: *ast.Node) errors.CodegenError!void {
+        switch (node.data) {
+            .enum_decl => |enum_decl| {
+                std.debug.print("Found enum declaration: {s}\n", .{enum_decl.name});
+                try self.generateEnumDeclaration(enum_decl);
+            },
+            .if_stmt => |if_stmt| {
+                for (if_stmt.then_body.items) |stmt| {
+                    try self.findAndProcessEnums(stmt);
+                }
+                if (if_stmt.else_body) |else_body| {
+                    for (else_body.items) |stmt| {
+                        try self.findAndProcessEnums(stmt);
+                    }
+                }
+            },
+            .for_stmt => |for_stmt| {
+                for (for_stmt.body.items) |stmt| {
+                    try self.findAndProcessEnums(stmt);
+                }
+            },
+            .c_for_stmt => |c_for_stmt| {
+                for (c_for_stmt.body.items) |stmt| {
+                    try self.findAndProcessEnums(stmt);
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn generateEnumDeclaration(self: *CodeGenerator, enum_decl: ast.EnumDecl) errors.CodegenError!void {
+        var current_value: i32 = 0;
+        for (enum_decl.values.items) |enum_value| {
+            var value: i32 = current_value;
+            if (enum_value.value) |expr| {
+                const const_value = try self.generateExpression(expr);
+                if (c.LLVMIsConstant(const_value) == 0) {
+                    std.debug.print("Error: enum value '{s}' must be a constant expression\n", .{enum_value.name});
+                    return errors.CodegenError.TypeMismatch;
+                }
+                const int_value = c.LLVMConstIntGetSExtValue(const_value);
+                value = @intCast(int_value);
+            }
+            const enum_const = c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
+            const enum_name_z = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ enum_decl.name, enum_value.name });
+            defer self.allocator.free(enum_name_z);
+            const enum_name_z_null = try self.allocator.dupeZ(u8, enum_name_z);
+            defer self.allocator.free(enum_name_z_null);
+            const global_var = c.LLVMAddGlobal(self.module, c.LLVMInt32TypeInContext(self.context), enum_name_z_null.ptr);
+            c.LLVMSetInitializer(global_var, enum_const);
+            c.LLVMSetLinkage(global_var, c.LLVMExternalLinkage);
+            c.LLVMSetGlobalConstant(global_var, 1);
+            try self.variables.put(try self.allocator.dupe(u8, enum_name_z), VariableInfo{
+                .value = global_var,
+                .type_ref = c.LLVMInt32TypeInContext(self.context),
+            });
+            current_value = value + 1;
+        }
+    }
+
     pub fn castToType(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef) c.LLVMValueRef {
         const value_type = c.LLVMTypeOf(value);
 
@@ -1012,6 +1093,15 @@ pub const CodeGenerator = struct {
                 }
 
                 if (self.getVariable(ident.name)) |var_info| {
+                    return c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load");
+                }
+                return errors.CodegenError.UndefinedVariable;
+            },
+            .qualified_identifier => |qual_id| {
+                const combined_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ qual_id.qualifier, qual_id.name });
+                defer self.allocator.free(combined_name);
+
+                if (self.getVariable(combined_name)) |var_info| {
                     return c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load");
                 }
                 return errors.CodegenError.UndefinedVariable;
@@ -1603,28 +1693,24 @@ pub const CodeGenerator = struct {
         }
 
         return switch (bin_op.op) {
-            '+' =>
-                if (is_float_op)
-                    c.LLVMBuildFAdd(self.builder, casted_lhs, casted_rhs, "fadd")
-                else
-                    c.LLVMBuildAdd(self.builder, casted_lhs, casted_rhs, "add"),
-            '-' =>
-                if (is_float_op)
-                    c.LLVMBuildFSub(self.builder, casted_lhs, casted_rhs, "fsub")
-                else
-                    c.LLVMBuildSub(self.builder, casted_lhs, casted_rhs, "sub"),
-            '*' =>
-                if (is_float_op)
-                    c.LLVMBuildFMul(self.builder, casted_lhs, casted_rhs, "fmul")
-                else
-                    c.LLVMBuildMul(self.builder, casted_lhs, casted_rhs, "mul"),
-            '/' =>
-                if (is_float_op)
-                    c.LLVMBuildFDiv(self.builder, casted_lhs, casted_rhs, "fdiv")
-                else if (isUnsignedType(self.getTypeNameFromLLVMType(result_type)))
-                    c.LLVMBuildUDiv(self.builder, casted_lhs, casted_rhs, "udiv")
-                else
-                    c.LLVMBuildSDiv(self.builder, casted_lhs, casted_rhs, "sdiv"),
+            '+' => if (is_float_op)
+                c.LLVMBuildFAdd(self.builder, casted_lhs, casted_rhs, "fadd")
+            else
+                c.LLVMBuildAdd(self.builder, casted_lhs, casted_rhs, "add"),
+            '-' => if (is_float_op)
+                c.LLVMBuildFSub(self.builder, casted_lhs, casted_rhs, "fsub")
+            else
+                c.LLVMBuildSub(self.builder, casted_lhs, casted_rhs, "sub"),
+            '*' => if (is_float_op)
+                c.LLVMBuildFMul(self.builder, casted_lhs, casted_rhs, "fmul")
+            else
+                c.LLVMBuildMul(self.builder, casted_lhs, casted_rhs, "mul"),
+            '/' => if (is_float_op)
+                c.LLVMBuildFDiv(self.builder, casted_lhs, casted_rhs, "fdiv")
+            else if (isUnsignedType(self.getTypeNameFromLLVMType(result_type)))
+                c.LLVMBuildUDiv(self.builder, casted_lhs, casted_rhs, "udiv")
+            else
+                c.LLVMBuildSDiv(self.builder, casted_lhs, casted_rhs, "sdiv"),
             '%' => {
                 if (is_float_op) {
                     self.uses_float_modulo = true;
