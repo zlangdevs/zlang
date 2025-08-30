@@ -10,6 +10,11 @@ enum Status {
     ERROR = 500,
 }
 
+fun is_red(c: Color) >> bool {
+    if c == Color.RED {return true;}
+    return false;
+}
+
 fun main() >> i32 {
     @printf("RED = (expected 0):%d\n", Color.RED);
     @printf("GREEN = (expected 1):%d\n", Color.GREEN);
@@ -20,6 +25,7 @@ fun main() >> i32 {
     @printf("ERROR = (expected 500):%d\n", Status.ERROR);
     
     Color a = Color.RED;
+    @printf("(expected 1):%d\n", is_red(a));
     @printf("(expected 1):");
     if a == Color.RED && a == 0 {@printf("1\n");} else {@printf("0\n");}
     u32 sum = 0;
