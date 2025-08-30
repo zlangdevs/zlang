@@ -644,6 +644,7 @@ pub const CodeGenerator = struct {
 
     fn generateCForStatement(self: *CodeGenerator, c_for_stmt: ast.CForStmt) errors.CodegenError!void {
         const current_function = self.current_function orelse return errors.CodegenError.TypeMismatch;
+        try self.pushScope();
         if (c_for_stmt.init) |cinit| {
             try self.generateStatement(cinit);
         }
@@ -667,11 +668,9 @@ pub const CodeGenerator = struct {
         };
         try self.loop_context_stack.append(loop_context);
         c.LLVMPositionBuilderAtEnd(self.builder, body_bb);
-        try self.pushScope();
         for (c_for_stmt.body.items) |stmt| {
             try self.generateStatement(stmt);
         }
-        self.popScope();
         if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
             _ = c.LLVMBuildBr(self.builder, increment_bb);
         }
@@ -682,6 +681,7 @@ pub const CodeGenerator = struct {
         _ = c.LLVMBuildBr(self.builder, condition_bb);
         c.LLVMPositionBuilderAtEnd(self.builder, exit_bb);
         _ = self.loop_context_stack.pop();
+        self.popScope();
     }
 
     fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignment) errors.CodegenError!void {
