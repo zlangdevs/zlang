@@ -28,6 +28,7 @@ pub const NodeType = enum {
     c_function_decl,
     use_stmt,
     enum_decl,
+    struct_decl,
     qualified_identifier,
 };
 
@@ -174,6 +175,16 @@ pub const EnumDecl = struct {
     values: std.ArrayList(EnumValue),
 };
 
+pub const StructField = struct {
+    name: []const u8,
+    type_name: []const u8,
+};
+
+pub const StructDecl = struct {
+    name: []const u8,
+    fields: std.ArrayList(StructField),
+};
+
 pub const QualifiedIdentifier = struct {
     qualifier: []const u8,
     name: []const u8,
@@ -207,6 +218,7 @@ pub const NodeData = union(NodeType) {
     c_function_decl: CFunctionDecl,
     use_stmt: UseStmt,
     enum_decl: EnumDecl,
+    struct_decl: StructDecl,
     qualified_identifier: QualifiedIdentifier,
 };
 
@@ -318,6 +330,14 @@ pub const Node = struct {
                     }
                 }
                 enum_decl.values.deinit();
+            },
+            .struct_decl => |struct_decl| {
+                self.allocator.free(struct_decl.name);
+                for (struct_decl.fields.items) |*field| {
+                    self.allocator.free(field.name);
+                    self.allocator.free(field.type_name);
+                }
+                struct_decl.fields.deinit();
             },
             .qualified_identifier => |qual_id| {
                 self.allocator.free(qual_id.qualifier);
@@ -571,6 +591,14 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
                 } else {
                     std.debug.print("\n", .{});
                 }
+            }
+        },
+        .struct_decl => |struct_decl| {
+            std.debug.print("🏗️  Struct Declaration: \x1b[32m{s}\x1b[0m ({} fields)\n", .{ struct_decl.name, struct_decl.fields.items.len });
+            for (struct_decl.fields.items, 0..) |field, i| {
+                const is_last_field = i == struct_decl.fields.items.len - 1;
+                printIndent(indent + 1, is_last_field, false);
+                std.debug.print("Field: \x1b[36m{s}\x1b[0m: \x1b[33m{s}\x1b[0m\n", .{ field.name, field.type_name });
             }
         },
     }

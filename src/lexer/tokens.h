@@ -42,6 +42,7 @@ typedef enum {
     TOKEN_DECREMENT,
     TOKEN_USE,
     TOKEN_ENUM,
+    TOKEN_STRUCT,
     TOKEN_DOT,
     TOKEN_EOF = 0
 } TokenType;
