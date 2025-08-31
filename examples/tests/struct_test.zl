@@ -10,6 +10,30 @@ struct Point {
     y i32
 }
 
+struct Line {
+    start Point,
+    end Point
+}
+
+fun print_info(p: Person) >> void {
+    @printf("====Info====\nName: %s\nAge: %d\nMale: ", p.name, p.age);
+    if p.is_male {@printf("yes\n");} else {@printf("no\n");}
+    @printf("ID: %d\n", p.id);
+}
+
+fun gen_line(x1: i32, y1: i32, x2: i32, y2: i32) >> Line {
+    Point lstart;
+    lstart.x = x1;
+    lstart.y = y1;
+    Point lend;
+    lend.x = x2;
+    lend.y = y2;
+    Line res;
+    res.start = lstart;
+    res.end = lend;
+    return res;
+} 
+
 fun main() >> i32 {
     Person alex;
     Point origin;
@@ -28,5 +52,11 @@ fun main() >> i32 {
     i32 current_age = alex.age;
     i32 point_x = origin.x;
     @printf("(expected 35):%d\n", current_age + point_x);
+    
+    print_info(alex);
+    Line tline = gen_line(0, 1, 2, 3);
+    ?? @printf("Line start: %d, %d", tline.start.x, tline.start.y); doen't work yet
+    Point start = tline.start;
+    @printf("Line start: %d, %d\n", start.x, start.y); 
     return 0;
 }
