@@ -146,9 +146,13 @@ export fn zig_create_binary_op(op: u8, lhs_ptr: *anyopaque, rhs_ptr: *anyopaque)
     return @as(*anyopaque, @ptrCast(node));
 }
 
-export fn zig_create_assignment(name_ptr: [*c]const u8, value_ptr: ?*anyopaque) ?*anyopaque {
-    const name = std.mem.span(name_ptr);
-    const name_copy = global_allocator.dupe(u8, name) catch return null;
+export fn zig_create_assignment(target_ptr: ?*anyopaque, value_ptr: ?*anyopaque) ?*anyopaque {
+    var target: ?*ast.Node = null;
+    if (target_ptr) |ptr| {
+        target = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
+    } else {
+        return null;
+    }
     var value: ?*ast.Node = null;
     if (value_ptr) |ptr| {
         value = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
@@ -157,7 +161,7 @@ export fn zig_create_assignment(name_ptr: [*c]const u8, value_ptr: ?*anyopaque) 
     }
     const assignment_data = ast.NodeData{
         .assignment = ast.Assignment{
-            .name = name_copy,
+            .target = target.?,
             .value = value.?,
         },
     };
@@ -241,23 +245,25 @@ export fn zig_create_identifier(name_ptr: [*c]const u8) ?*anyopaque {
     return @as(*anyopaque, @ptrCast(node));
 }
 
-export fn zig_create_qualified_identifier(qualifier_ptr: [*c]const u8, name_ptr: [*c]const u8) ?*anyopaque {
-    const qualifier = std.mem.span(qualifier_ptr);
-    const name = std.mem.span(name_ptr);
-
-    const qualifier_copy = global_allocator.dupe(u8, qualifier) catch return null;
-    const name_copy = global_allocator.dupe(u8, name) catch return null;
+export fn zig_create_qualified_identifier(base_ptr: ?*anyopaque, field_ptr: [*c]const u8) ?*anyopaque {
+    var base: ?*ast.Node = null;
+    if (base_ptr) |ptr| {
+        base = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
+    } else {
+        return null;
+    }
+    const field = std.mem.span(field_ptr);
+    const field_copy = global_allocator.dupe(u8, field) catch return null;
 
     const qualified_identifier_data = ast.NodeData{
         .qualified_identifier = ast.QualifiedIdentifier{
-            .qualifier = qualifier_copy,
-            .name = name_copy,
+            .base = base.?,
+            .field = field_copy,
         },
     };
 
     const node = ast.Node.create(global_allocator, qualified_identifier_data) catch {
-        global_allocator.free(qualifier_copy);
-        global_allocator.free(name_copy);
+        global_allocator.free(field_copy);
         return null;
     };
     return @as(*anyopaque, @ptrCast(node));

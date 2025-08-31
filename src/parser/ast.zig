@@ -72,7 +72,7 @@ pub const BoolLiteral = struct {
 };
 
 pub const Assignment = struct {
-    name: []const u8,
+    target: *Node,
     value: *Node,
 };
 
@@ -186,8 +186,8 @@ pub const StructDecl = struct {
 };
 
 pub const QualifiedIdentifier = struct {
-    qualifier: []const u8,
-    name: []const u8,
+    base: *Node,
+    field: []const u8,
 };
 
 pub const NodeData = union(NodeType) {
@@ -266,6 +266,10 @@ pub const Node = struct {
             .unary_op => |un| {
                 un.operand.destroy();
             },
+            .assignment => |as| {
+                as.target.destroy();
+                as.value.destroy();
+            },
             .var_decl => |decl| {
                 if (decl.initializer) |init| {
                     init.destroy();
@@ -340,8 +344,8 @@ pub const Node = struct {
                 struct_decl.fields.deinit();
             },
             .qualified_identifier => |qual_id| {
-                self.allocator.free(qual_id.qualifier);
-                self.allocator.free(qual_id.name);
+                qual_id.base.destroy();
+                self.allocator.free(qual_id.field);
             },
             else => {},
         }
@@ -392,8 +396,11 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             }
         },
         .assignment => |as| {
-            std.debug.print("➡️  Assignment: \x1b[36m{s}\x1b[0m =\n", .{as.name});
-            printAST(as.value, indent + 1, true, false);
+            std.debug.print("➡️  Assignment:\n", .{});
+            printAST(as.target, indent + 1, false, false);
+            printIndent(indent + 1, true, false);
+            std.debug.print("= \n", .{});
+            printAST(as.value, indent + 2, true, false);
         },
         .var_decl => |decl| {
             if (decl.initializer) |init| {
@@ -466,7 +473,10 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             std.debug.print("🔤 Identifier: \x1b[36m{s}\x1b[0m\n", .{ident.name});
         },
         .qualified_identifier => |qual_id| {
-            std.debug.print("🔗 Qualified Identifier: \x1b[36m{s}\x1b[0m.\x1b[36m{s}\x1b[0m\n", .{ qual_id.qualifier, qual_id.name });
+            std.debug.print("🔗 Qualified Identifier: \n", .{});
+            printAST(qual_id.base, indent + 1, false, false);
+            printIndent(indent + 1, true, false);
+            std.debug.print(".\x1b[36m{s}\x1b[0m\n", .{qual_id.field});
         },
         .float_literal => |float| {
             std.debug.print("🔢 Float: \x1b[31m{s}\x1b[0m\n", .{float.value});
