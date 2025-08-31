@@ -11,3 +11,4 @@ convert.sh
 examples/multi_file_c/cfunc
 examples/multi_file_c/multi_file_c_example
 examples/multi_file_c/multi_file_c_example.ll
+*.ll
