@@ -27,6 +27,8 @@ pub const NodeType = enum {
     array_assignment,
     c_function_decl,
     use_stmt,
+    enum_decl,
+    qualified_identifier,
 };
 
 pub const BinaryOp = struct {
@@ -162,6 +164,21 @@ pub const UseStmt = struct {
     module_path: []const u8,
 };
 
+pub const EnumValue = struct {
+    name: []const u8,
+    value: ?*Node,
+};
+
+pub const EnumDecl = struct {
+    name: []const u8,
+    values: std.ArrayList(EnumValue),
+};
+
+pub const QualifiedIdentifier = struct {
+    qualifier: []const u8,
+    name: []const u8,
+};
+
 pub const NodeData = union(NodeType) {
     program: Program,
     function: Function,
@@ -189,6 +206,8 @@ pub const NodeData = union(NodeType) {
     array_assignment: ArrayAssignment,
     c_function_decl: CFunctionDecl,
     use_stmt: UseStmt,
+    enum_decl: EnumDecl,
+    qualified_identifier: QualifiedIdentifier,
 };
 
 pub const Node = struct {
@@ -289,6 +308,20 @@ pub const Node = struct {
             },
             .use_stmt => |use_stmt| {
                 self.allocator.free(use_stmt.module_path);
+            },
+            .enum_decl => |enum_decl| {
+                self.allocator.free(enum_decl.name);
+                for (enum_decl.values.items) |*value| {
+                    self.allocator.free(value.name);
+                    if (value.value) |val| {
+                        val.destroy();
+                    }
+                }
+                enum_decl.values.deinit();
+            },
+            .qualified_identifier => |qual_id| {
+                self.allocator.free(qual_id.qualifier);
+                self.allocator.free(qual_id.name);
             },
             else => {},
         }
@@ -412,6 +445,9 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         .identifier => |ident| {
             std.debug.print("🔤 Identifier: \x1b[36m{s}\x1b[0m\n", .{ident.name});
         },
+        .qualified_identifier => |qual_id| {
+            std.debug.print("🔗 Qualified Identifier: \x1b[36m{s}\x1b[0m.\x1b[36m{s}\x1b[0m\n", .{ qual_id.qualifier, qual_id.name });
+        },
         .float_literal => |float| {
             std.debug.print("🔢 Float: \x1b[31m{s}\x1b[0m\n", .{float.value});
         },
@@ -522,6 +558,20 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         },
         .use_stmt => |use_stmt| {
             std.debug.print("📦 Use Statement: \x1b[35m{s}\x1b[0m\n", .{use_stmt.module_path});
+        },
+        .enum_decl => |enum_decl| {
+            std.debug.print("🔢 Enum Declaration: \x1b[32m{s}\x1b[0m ({} values)\n", .{ enum_decl.name, enum_decl.values.items.len });
+            for (enum_decl.values.items, 0..) |value, i| {
+                const is_last_value = i == enum_decl.values.items.len - 1;
+                printIndent(indent + 1, is_last_value, false);
+                std.debug.print("Value: \x1b[36m{s}\x1b[0m", .{value.name});
+                if (value.value) |val| {
+                    std.debug.print(" = \n", .{});
+                    printAST(val, indent + 2, true, false);
+                } else {
+                    std.debug.print("\n", .{});
+                }
+            }
         },
     }
 }

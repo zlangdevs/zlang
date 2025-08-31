@@ -38,6 +38,10 @@ extern void* zig_create_array_index(const char* array_name, void* index);
 extern void* zig_create_array_assignment(const char* array_name, void* index, void* value);
 extern void* zig_create_c_function_decl(const char* name, const char* return_type, void* params);
 extern void* zig_create_use_stmt(const char* module_path);
+extern void* zig_create_enum_decl(const char* name, void* values);
+extern void* zig_create_qualified_identifier(const char* qualifier, const char* name);
+extern void* zig_create_enum_value_list(void);
+extern void zig_add_enum_value(void* list, const char* name, void* value);
 extern void zig_add_to_program(void* program, void* function);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
@@ -61,7 +65,7 @@ void* ast_root = NULL;
 %token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING TOKEN_BRAINFUCK
 %token <number> TOKEN_CHAR
 
-%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_USE
+%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_USE TOKEN_ENUM TOKEN_DOT
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_PLUS_ASSIGN TOKEN_MINUS_ASSIGN TOKEN_MULTIPLY_ASSIGN TOKEN_DIVIDE_ASSIGN TOKEN_MODULUS_ASSIGN
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
@@ -74,10 +78,10 @@ void* ast_root = NULL;
 %type <node> continue_statement
 %type <node> expression_statement
 
-%left TOKEN_EQUAL TOKEN_NON_EQUAL
-%left TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %left TOKEN_OR
 %left TOKEN_AND
+%left TOKEN_EQUAL TOKEN_NON_EQUAL
+%left TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %left TOKEN_PLUS TOKEN_MINUS
 %left TOKEN_MULTIPLY TOKEN_DIVIDE
 %left TOKEN_LBRACKET TOKEN_LPAREN
@@ -89,9 +93,10 @@ void* ast_root = NULL;
 %type <node> parameter_list parameters parameter
 %type <node> program function_list function statement_list statement
 %type <node> var_declaration function_call return_statement assignment brainfuck_statement
-%type <node> expression logical_or_expression logical_and_expression additive_expression multiplicative_expression unary_expression primary_expression argument_list arguments
+%type <node> expression logical_or_expression logical_and_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression argument_list arguments
 %type <node> comparison_expression simple_term c_for_statement for_increment
-%type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement
+%type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement enum_declaration
+%type <node> enum_values enum_value_list
 %type <string> type_name function_name string_literal complex_type_name module_path
 
 %start program
@@ -134,8 +139,17 @@ function_list:
         zig_add_to_program(ast_root, $1);
     }
    | function_list use_statement {
-        zig_add_to_program(ast_root, $2);
-    }
+       zig_add_to_program(ast_root, $2);
+   }
+   | enum_declaration {
+       if (ast_root == NULL) {
+           ast_root = zig_create_program();
+       }
+       zig_add_to_program(ast_root, $1);
+   }
+   | function_list enum_declaration {
+       zig_add_to_program(ast_root, $2);
+   }
 ;
 
 c_function_decl:
@@ -383,12 +397,6 @@ simple_term:
 
 expression:
     logical_or_expression { $$ = $1; }
-  | expression TOKEN_EQUAL logical_or_expression { $$ = zig_create_comparison('=', $1, $3); }
-  | expression TOKEN_NON_EQUAL logical_or_expression { $$ = zig_create_comparison('!', $1, $3); }
-  | expression TOKEN_LESS logical_or_expression { $$ = zig_create_comparison('<', $1, $3); }
-  | expression TOKEN_GREATER logical_or_expression { $$ = zig_create_comparison('>', $1, $3); }
-  | expression TOKEN_EQ_LESS logical_or_expression { $$ = zig_create_comparison('L', $1, $3); }
-  | expression TOKEN_EQ_GREATER logical_or_expression { $$ = zig_create_comparison('G', $1, $3); }
 ;
 
 logical_or_expression:
@@ -397,8 +405,22 @@ logical_or_expression:
 ;
 
 logical_and_expression:
+    equality_expression { $$ = $1; }
+  | logical_and_expression TOKEN_AND equality_expression { $$ = zig_create_binary_op('&', $1, $3); }
+;
+
+equality_expression:
+    relational_expression { $$ = $1; }
+  | equality_expression TOKEN_EQUAL relational_expression { $$ = zig_create_comparison('=', $1, $3); }
+  | equality_expression TOKEN_NON_EQUAL relational_expression { $$ = zig_create_comparison('!', $1, $3); }
+;
+
+relational_expression:
     additive_expression { $$ = $1; }
-  | logical_and_expression TOKEN_AND additive_expression { $$ = zig_create_binary_op('&', $1, $3); }
+  | relational_expression TOKEN_LESS additive_expression { $$ = zig_create_comparison('<', $1, $3); }
+  | relational_expression TOKEN_GREATER additive_expression { $$ = zig_create_comparison('>', $1, $3); }
+  | relational_expression TOKEN_EQ_LESS additive_expression { $$ = zig_create_comparison('L', $1, $3); }
+  | relational_expression TOKEN_EQ_GREATER additive_expression { $$ = zig_create_comparison('G', $1, $3); }
 ;
 
 additive_expression:
@@ -427,6 +449,7 @@ unary_expression:
 
 primary_expression:
     TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
+  | TOKEN_IDENTIFIER TOKEN_DOT TOKEN_IDENTIFIER { $$ = zig_create_qualified_identifier($1, $3); free($1); free($3); }
   | TOKEN_IDENTIFIER TOKEN_LBRACKET expression TOKEN_RBRACKET { $$ = zig_create_array_index($1, $3); }
   | array_initializer { $$ = $1; }
   | TOKEN_FLOAT { $$ = zig_create_float_literal($1); }
@@ -445,6 +468,45 @@ use_statement:
     TOKEN_USE module_path {
         $$ = zig_create_use_stmt($2);
         free($2);
+    }
+;
+
+enum_declaration:
+    TOKEN_ENUM TOKEN_IDENTIFIER TOKEN_LBRACE enum_values TOKEN_RBRACE {
+        $$ = zig_create_enum_decl($2, $4);
+        free($2);
+    }
+;
+
+enum_values:
+   /* empty */ { $$ = zig_create_enum_value_list(); }
+   | enum_value_list { $$ = $1; }
+;
+
+enum_value_list:
+    TOKEN_IDENTIFIER {
+        $$ = zig_create_enum_value_list();
+        zig_add_enum_value($$, $1, NULL);
+        free($1);
+    }
+    | TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
+        $$ = zig_create_enum_value_list();
+        zig_add_enum_value($$, $1, $3);
+        free($1);
+    }
+    | enum_value_list TOKEN_COMMA TOKEN_IDENTIFIER {
+        zig_add_enum_value($1, $3, NULL);
+        free($3);
+        $$ = $1;
+    }
+    | enum_value_list TOKEN_COMMA TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
+        zig_add_enum_value($1, $3, $5);
+        free($3);
+        $$ = $1;
+    }
+    | enum_value_list TOKEN_COMMA {
+        /* Allow trailing comma */
+        $$ = $1;
     }
 ;
 
