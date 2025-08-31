@@ -241,6 +241,28 @@ export fn zig_create_identifier(name_ptr: [*c]const u8) ?*anyopaque {
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_qualified_identifier(qualifier_ptr: [*c]const u8, name_ptr: [*c]const u8) ?*anyopaque {
+    const qualifier = std.mem.span(qualifier_ptr);
+    const name = std.mem.span(name_ptr);
+
+    const qualifier_copy = global_allocator.dupe(u8, qualifier) catch return null;
+    const name_copy = global_allocator.dupe(u8, name) catch return null;
+
+    const qualified_identifier_data = ast.NodeData{
+        .qualified_identifier = ast.QualifiedIdentifier{
+            .qualifier = qualifier_copy,
+            .name = name_copy,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, qualified_identifier_data) catch {
+        global_allocator.free(qualifier_copy);
+        global_allocator.free(name_copy);
+        return null;
+    };
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_create_unary_op(op: u8, operand_ptr: ?*anyopaque) ?*anyopaque {
     if (operand_ptr == null) return null;
 
@@ -307,6 +329,60 @@ export fn zig_create_string_literal(value_ptr: [*c]const u8) ?*anyopaque {
     };
 
     const node = ast.Node.create(global_allocator, string_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+const EnumValueList = struct {
+    items: std.ArrayList(ast.EnumValue),
+
+    fn init(allocator: std.mem.Allocator) EnumValueList {
+        return EnumValueList{
+            .items = std.ArrayList(ast.EnumValue).init(allocator),
+        };
+    }
+};
+
+export fn zig_create_enum_value_list() ?*anyopaque {
+    const enum_value_list = global_allocator.create(EnumValueList) catch return null;
+    enum_value_list.* = EnumValueList.init(global_allocator);
+    return @as(*anyopaque, @ptrCast(enum_value_list));
+}
+
+export fn zig_add_enum_value(list_ptr: ?*anyopaque, name_ptr: [*c]const u8, value_ptr: ?*anyopaque) void {
+    if (list_ptr == null) return;
+    const enum_value_list = @as(*EnumValueList, @ptrFromInt(@intFromPtr(list_ptr.?)));
+    const name = std.mem.span(name_ptr);
+    const name_copy = global_allocator.dupe(u8, name) catch return;
+    var value: ?*ast.Node = null;
+    if (value_ptr) |ptr| {
+        value = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
+    }
+    const enum_value = ast.EnumValue{
+        .name = name_copy,
+        .value = value,
+    };
+
+    enum_value_list.items.append(enum_value) catch return;
+}
+
+export fn zig_create_enum_decl(name_ptr: [*c]const u8, values_ptr: ?*anyopaque) ?*anyopaque {
+    const name = std.mem.span(name_ptr);
+    const name_copy = global_allocator.dupe(u8, name) catch return null;
+    var values = std.ArrayList(ast.EnumValue).init(global_allocator);
+    if (values_ptr) |ptr| {
+        const enum_value_list = @as(*EnumValueList, @ptrFromInt(@intFromPtr(ptr)));
+        values = enum_value_list.items;
+    }
+    const enum_decl_data = ast.NodeData{
+        .enum_decl = ast.EnumDecl{
+            .name = name_copy,
+            .values = values,
+        },
+    };
+    const node = ast.Node.create(global_allocator, enum_decl_data) catch {
+        global_allocator.free(name_copy);
+        return null;
+    };
     return @as(*anyopaque, @ptrCast(node));
 }
 
