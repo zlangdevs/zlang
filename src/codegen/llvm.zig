@@ -2011,26 +2011,27 @@ pub const CodeGenerator = struct {
         }
     }
 
-    pub fn compileToExecutable(self: *CodeGenerator, output_filename: []const u8, arch: []const u8, link_objects: []const []const u8) !void {
-        const temp_ir_file = "temp_output.ll";
-        try self.writeToFile(temp_ir_file);
-
-        const output_filename_z = try self.allocator.dupeZ(u8, output_filename);
-        defer self.allocator.free(output_filename_z);
-
+    pub fn compileToExecutable(
+        self: *CodeGenerator, output: []const u8, arch: []const u8, link_objects: []const []const u8, keep_ll: bool, optimize: bool
+    ) !void {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
+        const ir_file = try std.fmt.allocPrint(arena_alloc, "{s}.ll", .{output});
+        defer arena_alloc.free(ir_file);
+        try self.writeToFile(ir_file);
+
         var clang_args_list = std.ArrayList([]const u8).init(arena_alloc);
         try clang_args_list.appendSlice(&[_][]const u8{
             "clang",
-            temp_ir_file,
+            ir_file,
             "-o",
-            output_filename,
+            output,
+            "-lc"
         });
 
-        if (!std.mem.eql(u8, arch, "")) {
+        if (arch.len != 0) {
             const march_flag: []const u8 = try std.fmt.allocPrint(arena_alloc, "--target={s}", .{arch});
             try clang_args_list.append(march_flag);
         }
@@ -2043,7 +2044,29 @@ pub const CodeGenerator = struct {
             try clang_args_list.append("-lm");
         }
 
-        try clang_args_list.append("-lc");
+        if (optimize) {
+            // Optimize llvm ir
+            var opt_args_list = std.ArrayList([]const u8).init(arena_alloc);
+            try opt_args_list.appendSlice(&[_][]const u8{
+                "opt",
+                "-O3",
+                ir_file,
+                "-o",
+                ir_file, // Owerwrite previous one
+            });
+
+            var opt_child_process = std.process.Child.init(opt_args_list.items, arena_alloc);
+            opt_child_process.stdout_behavior = .Pipe;
+            opt_child_process.stderr_behavior = .Pipe;
+            try opt_child_process.spawn();
+
+            const result = try opt_child_process.wait();
+            if (result != .Exited or result.Exited != 0) {
+                return error.CompilationFailed;
+            }
+
+            try clang_args_list.append("-O3"); // Append additional flag to clang (+100% fps)
+        }
 
         var child = std.process.Child.init(clang_args_list.items, arena_alloc);
         child.stdout_behavior = .Pipe;
@@ -2052,10 +2075,11 @@ pub const CodeGenerator = struct {
         try child.spawn();
         const result = try child.wait();
 
-        std.fs.cwd().deleteFile(temp_ir_file) catch {};
+        if (!keep_ll) {
+            std.fs.cwd().deleteFile(ir_file) catch {};
+        }
 
         if (result != .Exited or result.Exited != 0) {
-            std.debug.print("Clang compilation failed\n", .{});
             return error.CompilationFailed;
         }
     }
