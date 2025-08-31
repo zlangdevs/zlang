@@ -1,0 +1,23 @@
+fun main() >> i32 {
+    i8 o = 1;
+    o *= 8;
+    @printf("(expected 8):%d\n", o);
+
+    i32 a = 0;
+    a += 2;
+    @printf("(expected 2):%d\n", a);
+
+    i64 b = 6;
+    b -= 8;
+    @printf("(expected -2):%d\n", b);
+
+    f32 z = 12.5;
+    z /= 2.5;
+    @printf("(expected 5.0):%.01f\n", z);
+
+    f32 g = 19.5;
+    g %= 8;
+    @printf("(expected 3.5):%.01f\n", g);
+
+    return 0;
+}

@@ -80,13 +80,18 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 }
 "&&"        { return TOKEN_AND; }
 "||"        { return TOKEN_OR; }
+"++"        { return TOKEN_INCREMENT; }
+"--"        { return TOKEN_DECREMENT; }
+"+="        { return TOKEN_PLUS_ASSIGN; }
+"-="        { return TOKEN_MINUS_ASSIGN; }
+"*="        { return TOKEN_MULTIPLY_ASSIGN; }
+"/="        { return TOKEN_DIVIDE_ASSIGN; }
+"%="        { return TOKEN_MODULUS_ASSIGN; }
+"+"         { return TOKEN_PLUS; }
+"-"         { return TOKEN_MINUS; }
 "*"         { return TOKEN_MULTIPLY; }
 "/"         { return TOKEN_DIVIDE; }
 "%"         { return TOKEN_MODULUS; }
-"++"        { return TOKEN_INCREMENT; }
-"--"        { return TOKEN_DECREMENT; }
-"+"         { return TOKEN_PLUS; }
-"-"         { return TOKEN_MINUS; }
 "<="        { return TOKEN_EQ_LESS; }
 ">="        { return TOKEN_EQ_GREATER; }
 "!="        { return TOKEN_NON_EQUAL; }
