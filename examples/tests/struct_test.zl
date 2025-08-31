@@ -55,8 +55,8 @@ fun main() >> i32 {
     
     print_info(alex);
     Line tline = gen_line(0, 1, 2, 3);
-    ?? @printf("Line start: %d, %d", tline.start.x, tline.start.y); doen't work yet
-    Point start = tline.start;
-    @printf("Line start: %d, %d\n", start.x, start.y); 
+    @printf("Line start: %d, %d\n", tline.start.x, tline.start.y);
+    tline.start.x = 10;
+    @printf("After assignment: %d, %d\n", tline.start.x, tline.start.y);
     return 0;
 }

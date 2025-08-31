@@ -161,29 +161,71 @@ pub const CodeGenerator = struct {
         }
     }
 
-    fn generateStructFieldAssignment(self: *CodeGenerator, as: ast.Assignment, dot_pos: usize) errors.CodegenError!void {
-        const struct_name = as.name[0..dot_pos];
-        const field_name = as.name[dot_pos + 1 ..];
-        const struct_var_info = self.getVariable(struct_name) orelse return errors.CodegenError.UndefinedVariable;
-        const var_type_kind = c.LLVMGetTypeKind(struct_var_info.type_ref);
-        if (var_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.UndefinedVariable;
-        const struct_type = self.struct_types.get(struct_var_info.type_name) orelse return errors.CodegenError.TypeMismatch;
-        const field_map = self.struct_fields.get(struct_var_info.type_name) orelse return errors.CodegenError.TypeMismatch;
-        const field_index = field_map.get(field_name) orelse return errors.CodegenError.TypeMismatch;
-        const field_count = c.LLVMCountStructElementTypes(struct_type);
-        if (field_index >= field_count) {
-            return errors.CodegenError.TypeMismatch;
+    fn buildQualifiedName(self: *CodeGenerator, node: *ast.Node) ![]const u8 {
+        switch (node.data) {
+            .identifier => |ident| {
+                return try self.allocator.dupe(u8, ident.name);
+            },
+            .qualified_identifier => |qual_id| {
+                const base_name = try self.buildQualifiedName(qual_id.base);
+                defer self.allocator.free(base_name);
+                return try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ base_name, qual_id.field });
+            },
+            else => return errors.CodegenError.TypeMismatch,
         }
-        const field_ptr = try self.getStructFieldPointer(struct_type, struct_var_info.value, field_index);
-        const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
-        try self.assignToField(field_ptr, field_type, as.value);
+    }
+
+    fn getBaseIdentifierName(self: *CodeGenerator, node: *ast.Node) ![]const u8 {
+        switch (node.data) {
+            .identifier => |ident| return try self.allocator.dupe(u8, ident.name),
+            .qualified_identifier => |qual_id| return try self.getBaseIdentifierName(qual_id.base),
+            else => return errors.CodegenError.TypeMismatch,
+        }
+    }
+
+    fn generateStructFieldAssignment(self: *CodeGenerator, struct_name: []const u8, field_path: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
+        const struct_var_info = self.getVariable(struct_name) orelse return errors.CodegenError.UndefinedVariable;
+        var current_struct_type = struct_var_info.type_ref;
+        var current_struct_value = struct_var_info.value;
+        var current_struct_name = struct_var_info.type_name;
+        var path_iter = std.mem.splitScalar(u8, field_path, '.');
+        var last_field_ptr: c.LLVMValueRef = undefined;
+        var last_field_type: c.LLVMTypeRef = undefined;
+        while (path_iter.next()) |field_name| {
+            const var_type_kind = c.LLVMGetTypeKind(current_struct_type);
+            if (var_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
+            const struct_type = self.struct_types.get(current_struct_name) orelse return errors.CodegenError.TypeMismatch;
+            const field_map = self.struct_fields.get(current_struct_name) orelse return errors.CodegenError.TypeMismatch;
+            const field_index = field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable;
+            const field_count = c.LLVMCountStructElementTypes(struct_type);
+            if (field_index >= field_count) {
+                return errors.CodegenError.TypeMismatch;
+            }
+            const field_ptr = try self.getStructFieldPointer(struct_type, current_struct_value, field_index);
+            const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+            const field_type_kind = c.LLVMGetTypeKind(field_type);
+            if (path_iter.peek() != null) {
+                if (field_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
+                current_struct_value = field_ptr;
+                current_struct_type = field_type;
+                const name_ptr = c.LLVMGetStructName(field_type);
+                if (name_ptr == null) return errors.CodegenError.TypeMismatch;
+                current_struct_name = std.mem.span(name_ptr);
+            } else {
+                last_field_ptr = field_ptr;
+                last_field_type = field_type;
+                break;
+            }
+        }
+        try self.assignToField(last_field_ptr, last_field_type, value_expr);
     }
 
     fn generateRegularVariableAssignment(self: *CodeGenerator, as: ast.Assignment) errors.CodegenError!void {
-        const var_info = self.getVariable(as.name) orelse return errors.CodegenError.UndefinedVariable;
+        const ident = as.target.data.identifier;
+        const var_info = self.getVariable(ident.name) orelse return errors.CodegenError.UndefinedVariable;
         const var_type_kind = c.LLVMGetTypeKind(var_info.type_ref);
         if (var_type_kind == c.LLVMArrayTypeKind) {
-            try self.generateArrayReassignment(as.name, as.value);
+            try self.generateArrayReassignment(ident.name, as.value);
         } else {
             const value = try self.generateExpression(as.value);
             const casted_value = self.castToType(value, var_info.type_ref);
@@ -233,26 +275,42 @@ pub const CodeGenerator = struct {
         _ = c.LLVMBuildCall2(self.builder, c.LLVMGlobalGetValueType(memcpy_func), memcpy_func, &memcpy_args[0], 3, "");
     }
 
-    fn generateStructFieldAccess(self: *CodeGenerator, struct_var_info: VariableInfo, field_name: []const u8) errors.CodegenError!c.LLVMValueRef {
-        const var_type_kind = c.LLVMGetTypeKind(struct_var_info.type_ref);
-        if (var_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.UndefinedVariable;
-        const struct_type = self.struct_types.get(struct_var_info.type_name) orelse return errors.CodegenError.TypeMismatch;
-        const field_map = self.struct_fields.get(struct_var_info.type_name) orelse return errors.CodegenError.TypeMismatch;
-        const field_index = field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable;
-        const field_count = c.LLVMCountStructElementTypes(struct_type);
-        if (field_index >= field_count) {
-            return errors.CodegenError.TypeMismatch;
+    fn generateStructFieldAccess(self: *CodeGenerator, struct_var_info: VariableInfo, field_path: []const u8) errors.CodegenError!c.LLVMValueRef {
+        var current_struct_type = struct_var_info.type_ref;
+        var current_struct_value = struct_var_info.value;
+        var current_struct_name = struct_var_info.type_name;
+        var path_iter = std.mem.splitScalar(u8, field_path, '.');
+        while (path_iter.next()) |field_name| {
+            const var_type_kind = c.LLVMGetTypeKind(current_struct_type);
+            if (var_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
+            const struct_type = self.struct_types.get(current_struct_name) orelse return errors.CodegenError.TypeMismatch;
+            const field_map = self.struct_fields.get(current_struct_name) orelse return errors.CodegenError.TypeMismatch;
+            const field_index = field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable;
+            const field_count = c.LLVMCountStructElementTypes(struct_type);
+            if (field_index >= field_count) {
+                return errors.CodegenError.TypeMismatch;
+            }
+            const field_ptr = try self.getStructFieldPointer(struct_type, current_struct_value, field_index);
+            const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+            const field_type_kind = c.LLVMGetTypeKind(field_type);
+            if (path_iter.peek() != null) {
+                if (field_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
+                current_struct_value = field_ptr;
+                current_struct_type = field_type;
+                const name_ptr = c.LLVMGetStructName(field_type);
+                if (name_ptr == null) return errors.CodegenError.TypeMismatch;
+                current_struct_name = std.mem.span(name_ptr);
+            } else {
+                if (field_type_kind == c.LLVMArrayTypeKind) {
+                    return field_ptr;
+                }
+                const load_instr = c.LLVMBuildLoad2(self.builder, field_type, field_ptr, "struct_field");
+                const alignment = self.getAlignmentForType(field_type);
+                c.LLVMSetAlignment(load_instr, alignment);
+                return load_instr;
+            }
         }
-        const field_ptr = try self.getStructFieldPointer(struct_type, struct_var_info.value, field_index);
-        const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
-        const field_type_kind = c.LLVMGetTypeKind(field_type);
-        if (field_type_kind == c.LLVMArrayTypeKind) {
-            return field_ptr;
-        }
-        const load_instr = c.LLVMBuildLoad2(self.builder, field_type, field_ptr, "struct_field");
-        const alignment = self.getAlignmentForType(field_type);
-        c.LLVMSetAlignment(load_instr, alignment);
-        return load_instr;
+        return errors.CodegenError.TypeMismatch;
     }
 
     fn getVariable(self: *CodeGenerator, name: []const u8) ?VariableInfo {
@@ -670,11 +728,20 @@ pub const CodeGenerator = struct {
     fn generateStatement(self: *CodeGenerator, stmt: *ast.Node) errors.CodegenError!void {
         switch (stmt.data) {
             .assignment => |as| {
-                if (std.mem.indexOf(u8, as.name, ".")) |dot_pos| {
-                    try self.generateStructFieldAssignment(as, dot_pos);
-                    return;
+                switch (as.target.data) {
+                    .identifier => {
+                        try self.generateRegularVariableAssignment(as);
+                    },
+                    .qualified_identifier => {
+                        const struct_name = try self.getBaseIdentifierName(as.target);
+                        defer self.allocator.free(struct_name);
+                        const full_name = try self.buildQualifiedName(as.target);
+                        defer self.allocator.free(full_name);
+                        const field_path = full_name[struct_name.len + 1 ..];
+                        try self.generateStructFieldAssignment(struct_name, field_path, as.value);
+                    },
+                    else => return errors.CodegenError.TypeMismatch,
                 }
-                try self.generateRegularVariableAssignment(as);
             },
             .var_decl => |decl| {
                 if (std.mem.eql(u8, decl.type_name, "void")) {
@@ -1309,15 +1376,20 @@ pub const CodeGenerator = struct {
                 }
                 return errors.CodegenError.UndefinedVariable;
             },
-            .qualified_identifier => |qual_id| {
-                const combined_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ qual_id.qualifier, qual_id.name });
-                defer self.allocator.free(combined_name);
-
-                if (self.getVariable(combined_name)) |var_info| {
+            .qualified_identifier => {
+                const full_name = try self.buildQualifiedName(expr);
+                defer self.allocator.free(full_name);
+                const enum_name = try std.mem.replaceOwned(u8, self.allocator, full_name, ".", "_");
+                defer self.allocator.free(enum_name);
+                if (self.getVariable(enum_name)) |var_info| {
                     return c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load");
                 }
-                if (self.getVariable(qual_id.qualifier)) |struct_var_info| {
-                    return try self.generateStructFieldAccess(struct_var_info, qual_id.name);
+                const struct_name = try self.getBaseIdentifierName(expr);
+                defer self.allocator.free(struct_name);
+                const field_path = full_name[struct_name.len + 1 ..];
+
+                if (self.getVariable(struct_name)) |struct_var_info| {
+                    return try self.generateStructFieldAccess(struct_var_info, field_path);
                 }
 
                 return errors.CodegenError.UndefinedVariable;
