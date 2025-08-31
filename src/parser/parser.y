@@ -63,6 +63,7 @@ void* ast_root = NULL;
 
 %token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_USE
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
+%token TOKEN_PLUS_ASSIGN TOKEN_MINUS_ASSIGN TOKEN_MULTIPLY_ASSIGN TOKEN_DIVIDE_ASSIGN TOKEN_MODULUS_ASSIGN
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT TOKEN_DECREMENT TOKEN_INCREMENT
 %token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_MODULUS TOKEN_AND TOKEN_OR TOKEN_NOT TOKEN_AMPERSAND
@@ -291,6 +292,21 @@ brainfuck_statement:
 assignment:
     TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
         $$ = zig_create_assignment($1, $3);
+    }
+  | TOKEN_IDENTIFIER TOKEN_PLUS_ASSIGN expression {
+        $$ = zig_create_assignment($1, zig_create_binary_op('+', zig_create_identifier($1), $3));
+    }
+  | TOKEN_IDENTIFIER TOKEN_MINUS_ASSIGN expression {
+        $$ = zig_create_assignment($1, zig_create_binary_op('-', zig_create_identifier($1), $3));
+    }
+  | TOKEN_IDENTIFIER TOKEN_MULTIPLY_ASSIGN expression {
+        $$ = zig_create_assignment($1, zig_create_binary_op('*', zig_create_identifier($1), $3));
+    }
+  | TOKEN_IDENTIFIER TOKEN_DIVIDE_ASSIGN expression {
+        $$ = zig_create_assignment($1, zig_create_binary_op('/', zig_create_identifier($1), $3));
+    }
+  | TOKEN_IDENTIFIER TOKEN_MODULUS_ASSIGN expression {
+        $$ = zig_create_assignment($1, zig_create_binary_op('%', zig_create_identifier($1), $3));
     }
 ;
 
