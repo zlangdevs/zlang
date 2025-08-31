@@ -342,6 +342,16 @@ const EnumValueList = struct {
     }
 };
 
+const StructFieldList = struct {
+    items: std.ArrayList(ast.StructField),
+
+    fn init(allocator: std.mem.Allocator) StructFieldList {
+        return StructFieldList{
+            .items = std.ArrayList(ast.StructField).init(allocator),
+        };
+    }
+};
+
 export fn zig_create_enum_value_list() ?*anyopaque {
     const enum_value_list = global_allocator.create(EnumValueList) catch return null;
     enum_value_list.* = EnumValueList.init(global_allocator);
@@ -380,6 +390,51 @@ export fn zig_create_enum_decl(name_ptr: [*c]const u8, values_ptr: ?*anyopaque) 
         },
     };
     const node = ast.Node.create(global_allocator, enum_decl_data) catch {
+        global_allocator.free(name_copy);
+        return null;
+    };
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_struct_field_list() ?*anyopaque {
+    const struct_field_list = global_allocator.create(StructFieldList) catch return null;
+    struct_field_list.* = StructFieldList.init(global_allocator);
+    return @as(*anyopaque, @ptrCast(struct_field_list));
+}
+
+export fn zig_add_struct_field(list_ptr: ?*anyopaque, name_ptr: [*c]const u8, type_name_ptr: [*c]const u8) void {
+    if (list_ptr == null) return;
+    const struct_field_list = @as(*StructFieldList, @ptrFromInt(@intFromPtr(list_ptr.?)));
+    const name = std.mem.span(name_ptr);
+    const type_name = std.mem.span(type_name_ptr);
+    const name_copy = global_allocator.dupe(u8, name) catch return;
+    const type_name_copy = global_allocator.dupe(u8, type_name) catch {
+        global_allocator.free(name_copy);
+        return;
+    };
+    const struct_field = ast.StructField{
+        .name = name_copy,
+        .type_name = type_name_copy,
+    };
+
+    struct_field_list.items.append(struct_field) catch return;
+}
+
+export fn zig_create_struct_decl(name_ptr: [*c]const u8, fields_ptr: ?*anyopaque) ?*anyopaque {
+    const name = std.mem.span(name_ptr);
+    const name_copy = global_allocator.dupe(u8, name) catch return null;
+    var fields = std.ArrayList(ast.StructField).init(global_allocator);
+    if (fields_ptr) |ptr| {
+        const struct_field_list = @as(*StructFieldList, @ptrFromInt(@intFromPtr(ptr)));
+        fields = struct_field_list.items;
+    }
+    const struct_decl_data = ast.NodeData{
+        .struct_decl = ast.StructDecl{
+            .name = name_copy,
+            .fields = fields,
+        },
+    };
+    const node = ast.Node.create(global_allocator, struct_decl_data) catch {
         global_allocator.free(name_copy);
         return null;
     };

@@ -45,13 +45,7 @@ pub const CodegenError = error{
     RedeclaredVariable,
 };
 
-pub const CLIError = error{
-    NoInputPath,
-    NoOutputPath,
-    NoArch,
-    InvalidArgument,
-    NoHelp
-};
+pub const CLIError = error{ NoInputPath, NoOutputPath, NoArch, InvalidArgument, NoHelp };
 
 pub const GenericError = error{
     Unknown,
