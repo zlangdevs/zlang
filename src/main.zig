@@ -26,6 +26,56 @@ const ModuleInfo = struct {
     }
 };
 
+pub const Context = struct {
+    input_files: std.ArrayList([]const u8),
+    output: []const u8,
+    arch: []const u8,
+    keepll: bool,
+    show_ast: bool,
+    optimize: bool,
+    verbose: bool,
+    link_objects: std.ArrayList([]const u8),
+
+    pub fn init(alloc: std.mem.Allocator) Context {
+        return Context{
+            .input_files = std.ArrayList([]const u8).init(alloc),
+            .output = consts.DEFAULT_OUTPUT_NAME,
+            .arch = "",
+            .keepll = false,
+            .show_ast = false,
+            .optimize = false,
+            .verbose = false,
+            .link_objects = std.ArrayList([]const u8).init(alloc),
+        };
+    }
+
+    pub fn deinit(self: *Context) void {
+        self.input_files.deinit();
+        self.link_objects.deinit();
+    }
+
+    pub fn print(self: *const Context) void {
+        std.debug.print("========Compilation context=======\n", .{});
+        std.debug.print("Input files: ", .{});
+        for (self.input_files.items, 0..) |file, i| {
+            if (i > 0) std.debug.print(", ", .{});
+            std.debug.print("{s}", .{file});
+        }
+        std.debug.print("\n", .{});
+        std.debug.print("Output path: {s}\n", .{self.output});
+        std.debug.print("Architecture: {s}\n", .{self.arch});
+        std.debug.print("Keep ll: {s}\n", .{if (self.keepll) "yes" else "no"});
+        std.debug.print("Optimize: {s}\n", .{if (self.optimize) "yes" else "no"});
+        std.debug.print("Link objects: ", .{});
+        for (self.link_objects.items, 0..) |obj, i| {
+            if (i > 0) std.debug.print(", ", .{});
+            std.debug.print("{s}", .{obj});
+        }
+        std.debug.print("\n", .{});
+        std.debug.print("==================================\n", .{});
+    }
+};
+
 fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8)) void {
     switch (node.data) {
         .program => |prog| {
@@ -169,52 +219,6 @@ pub fn read_file(file_name: []const u8) anyerror![]const u8 {
     return errors.ReadFileError.InvalidPath;
 }
 
-const Context = struct {
-    input_files: std.ArrayList([]const u8),
-    output_path: []const u8,
-    arch: []const u8,
-    keepll: bool,
-    optimize: bool,
-    link_objects: std.ArrayList([]const u8),
-
-    pub fn init(alloc: std.mem.Allocator) Context {
-        return Context{
-            .input_files = std.ArrayList([]const u8).init(alloc),
-            .output_path = "",
-            .arch = "",
-            .keepll = false,
-            .optimize = false,
-            .link_objects = std.ArrayList([]const u8).init(alloc),
-        };
-    }
-
-    pub fn deinit(self: *Context) void {
-        self.input_files.deinit();
-        self.link_objects.deinit();
-    }
-
-    pub fn print(self: *const Context) void {
-        std.debug.print("========Compilation context=======\n", .{});
-        std.debug.print("Input files: ", .{});
-        for (self.input_files.items, 0..) |file, i| {
-            if (i > 0) std.debug.print(", ", .{});
-            std.debug.print("{s}", .{file});
-        }
-        std.debug.print("\n", .{});
-        std.debug.print("Output path: {s}\n", .{self.output_path});
-        std.debug.print("Architecture: {s}\n", .{self.arch});
-        std.debug.print("Keep ll: {s}\n", .{if (self.keepll) "yes" else "no"});
-        std.debug.print("Optimize: {s}\n", .{if (self.optimize) "yes" else "no"});
-        std.debug.print("Link objects: ", .{});
-        for (self.link_objects.items, 0..) |obj, i| {
-            if (i > 0) std.debug.print(", ", .{});
-            std.debug.print("{s}", .{obj});
-        }
-        std.debug.print("\n", .{});
-        std.debug.print("==================================\n", .{});
-    }
-};
-
 fn parseArgs(args: [][:0]u8) anyerror!Context {
     var context = Context.init(allocator);
     errdefer context.deinit();
@@ -226,12 +230,17 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                 const flag = args[i];
                 if (std.mem.eql(u8, flag, "-keepll")) {
                     context.keepll = true;
+                } else if (std.mem.eql(u8, flag, "-dast")) {
+                    context.show_ast = true;
+                } else if (std.mem.eql(u8, flag, "-verbose")) {
+                    context.show_ast = true;
+                    context.verbose = true;
                 } else if (std.mem.eql(u8, flag, "-optimize")) {
                     context.optimize = true;
                 } else if (std.mem.eql(u8, flag, "-o")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoOutputPath;
-                    context.output_path = args[i];
+                    context.output = args[i];
                 } else if (std.mem.eql(u8, flag, "-arch")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoArch;
@@ -240,6 +249,8 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.InvalidArgument;
                     try context.link_objects.append(args[i]);
+                } else if (std.mem.eql(u8, flag, "-help")) {
+                    return errors.CLIError.NoHelp;
                 } else {
                     return errors.CLIError.InvalidArgument;
                 }
@@ -266,7 +277,6 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
             },
         }
     }
-
     return if (context.input_files.items.len == 0)
         errors.CLIError.NoInputPath
     else
@@ -292,25 +302,25 @@ fn collectZlFilesFromDir(alloc: std.mem.Allocator, dir_path: []const u8, files_l
 
 pub fn main() !u8 {
     const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+    if (args.len < 2) {
+        std.debug.print("Usage: zlang <path to file or directory>", .{});
+        return 1;
+    }
+
     var ctx = parseArgs(args) catch |err| {
         const error_msg = switch (err) {
             errors.CLIError.NoInputPath => "No input path specified",
             errors.CLIError.NoOutputPath => "No output path specified after -o",
             errors.CLIError.NoArch => "No target specified after -arch",
             errors.CLIError.InvalidArgument => "Unrecognized argument",
+            errors.CLIError.NoHelp => "Ahahahha, help message? I wont help you",
             else => "Unknown error while parsing arguments",
         };
-        std.debug.print("Error: {s}\n", .{error_msg});
+        std.debug.print("{s}\n", .{error_msg});
         return 1;
     };
-
-    ctx.print();
     defer ctx.deinit();
-    defer std.process.argsFree(allocator, args);
-    if (args.len < 2) {
-        std.debug.print("Usage: zlang <path to file or directory>", .{});
-        return 1;
-    }
 
     const ast_root = parseMultiFile(&ctx, allocator) catch |err| {
         std.debug.print("Error parsing files: {}\n", .{err});
@@ -318,7 +328,9 @@ pub fn main() !u8 {
     };
 
     defer ast_root.destroy();
-    ast.printASTTree(ast_root);
+    if (ctx.show_ast) {
+        ast.printASTTree(ast_root);
+    }
 
     // Generate LLVM IR and compile to executable
     var code_generator = codegen.CodeGenerator.init(allocator) catch |err| {
@@ -348,60 +360,13 @@ pub fn main() !u8 {
         return 1;
     };
 
-    const exe_filename = if (ctx.output_path.len == 0) consts.DEFAULT_OUTPUT_NAME else ctx.output_path;
-    const ir_filename = try std.fmt.allocPrint(allocator, "{s}.ll", .{exe_filename});
-    defer allocator.free(ir_filename);
-
-    code_generator.writeToFile(ir_filename) catch |err| {
-        std.debug.print("Error writing LLVM IR to file: {}\n", .{err});
+    code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize) catch |err| {
+        std.debug.print("Error compiling to executable: {}\n", .{err});
         return 1;
     };
 
-    if (ctx.keepll and !ctx.optimize) {
-        std.debug.print("LLVM IR written to {s}\n", .{ir_filename});
+    if (ctx.verbose) {
+        std.debug.print("Executable compiled to {s}\n", .{ctx.output});
     }
-
-    if (ctx.optimize) {
-        const opt_command = try std.fmt.allocPrint(allocator, "opt -O3 {s} -o {s}_opt.ll", .{ ir_filename, exe_filename });
-        defer allocator.free(opt_command);
-
-        var opt_process = std.process.Child.init(&[_][]const u8{ "sh", "-c", opt_command }, allocator);
-        const opt_result = try opt_process.spawnAndWait();
-        if (opt_result.Exited != 0) {
-            std.debug.print("Error optimizing LLVM IR (exit code: {})\n", .{opt_result.Exited});
-            return 1;
-        }
-        std.debug.print("LLVM IR optimized with -O3\n", .{});
-        const clang_command = try std.fmt.allocPrint(allocator, "clang -O3 {s}_opt.ll -o {s} -lstdc++", .{ exe_filename, exe_filename });
-        defer allocator.free(clang_command);
-
-        var clang_process = std.process.Child.init(&[_][]const u8{ "sh", "-c", clang_command }, allocator);
-        const clang_result = try clang_process.spawnAndWait();
-
-        if (clang_result.Exited != 0) {
-            std.debug.print("Error compiling optimized IR with clang (exit code: {})\n", .{clang_result.Exited});
-            return 1;
-        }
-
-        std.debug.print("Optimized executable compiled to {s}\n", .{exe_filename});
-        if (!ctx.keepll) {
-            std.fs.cwd().deleteFile(ir_filename) catch {};
-            const opt_ir_filename = try std.fmt.allocPrint(allocator, "{s}_opt.ll", .{exe_filename});
-            defer allocator.free(opt_ir_filename);
-            std.fs.cwd().deleteFile(opt_ir_filename) catch {};
-        } else {
-            std.debug.print("LLVM IR written to {s}\n", .{ir_filename});
-            const opt_ir_filename = try std.fmt.allocPrint(allocator, "{s}_opt.ll", .{exe_filename});
-            defer allocator.free(opt_ir_filename);
-            std.debug.print("Optimized LLVM IR written to {s}\n", .{opt_ir_filename});
-        }
-    } else {
-        code_generator.compileToExecutable(exe_filename, ctx.arch, ctx.link_objects.items) catch |err| {
-            std.debug.print("Error compiling to executable: {}\n", .{err});
-            return 1;
-        };
-        std.debug.print("Executable compiled to {s}\n", .{exe_filename});
-    }
-
     return 0;
 }
