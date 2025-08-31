@@ -39,9 +39,12 @@ extern void* zig_create_array_assignment(const char* array_name, void* index, vo
 extern void* zig_create_c_function_decl(const char* name, const char* return_type, void* params);
 extern void* zig_create_use_stmt(const char* module_path);
 extern void* zig_create_enum_decl(const char* name, void* values);
+extern void* zig_create_struct_decl(const char* name, void* fields);
 extern void* zig_create_qualified_identifier(const char* qualifier, const char* name);
 extern void* zig_create_enum_value_list(void);
 extern void zig_add_enum_value(void* list, const char* name, void* value);
+extern void* zig_create_struct_field_list(void);
+extern void zig_add_struct_field(void* list, const char* name, const char* type_name);
 extern void zig_add_to_program(void* program, void* function);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
@@ -65,7 +68,7 @@ void* ast_root = NULL;
 %token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING TOKEN_BRAINFUCK
 %token <number> TOKEN_CHAR
 
-%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_USE TOKEN_ENUM TOKEN_DOT
+%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_USE TOKEN_ENUM TOKEN_STRUCT TOKEN_DOT
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_PLUS_ASSIGN TOKEN_MINUS_ASSIGN TOKEN_MULTIPLY_ASSIGN TOKEN_DIVIDE_ASSIGN TOKEN_MODULUS_ASSIGN
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
@@ -95,8 +98,8 @@ void* ast_root = NULL;
 %type <node> var_declaration function_call return_statement assignment brainfuck_statement
 %type <node> expression logical_or_expression logical_and_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression argument_list arguments
 %type <node> comparison_expression simple_term c_for_statement for_increment
-%type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement enum_declaration
-%type <node> enum_values enum_value_list
+%type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration
+%type <node> enum_values enum_value_list struct_fields struct_field_list
 %type <string> type_name function_name string_literal complex_type_name module_path
 
 %start program
@@ -148,6 +151,15 @@ function_list:
        zig_add_to_program(ast_root, $1);
    }
    | function_list enum_declaration {
+       zig_add_to_program(ast_root, $2);
+   }
+   | struct_declaration {
+       if (ast_root == NULL) {
+           ast_root = zig_create_program();
+       }
+       zig_add_to_program(ast_root, $1);
+   }
+   | function_list struct_declaration {
        zig_add_to_program(ast_root, $2);
    }
 ;
@@ -307,19 +319,26 @@ assignment:
     TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
         $$ = zig_create_assignment($1, $3);
     }
-  | TOKEN_IDENTIFIER TOKEN_PLUS_ASSIGN expression {
+   | TOKEN_IDENTIFIER TOKEN_DOT TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
+        char* qualified_name = malloc(strlen($1) + strlen($3) + 2);
+        sprintf(qualified_name, "%s.%s", $1, $3);
+        $$ = zig_create_assignment(qualified_name, $5);
+        free($1);
+        free($3);
+    }
+   | TOKEN_IDENTIFIER TOKEN_PLUS_ASSIGN expression {
         $$ = zig_create_assignment($1, zig_create_binary_op('+', zig_create_identifier($1), $3));
     }
-  | TOKEN_IDENTIFIER TOKEN_MINUS_ASSIGN expression {
+   | TOKEN_IDENTIFIER TOKEN_MINUS_ASSIGN expression {
         $$ = zig_create_assignment($1, zig_create_binary_op('-', zig_create_identifier($1), $3));
     }
-  | TOKEN_IDENTIFIER TOKEN_MULTIPLY_ASSIGN expression {
+   | TOKEN_IDENTIFIER TOKEN_MULTIPLY_ASSIGN expression {
         $$ = zig_create_assignment($1, zig_create_binary_op('*', zig_create_identifier($1), $3));
     }
-  | TOKEN_IDENTIFIER TOKEN_DIVIDE_ASSIGN expression {
+   | TOKEN_IDENTIFIER TOKEN_DIVIDE_ASSIGN expression {
         $$ = zig_create_assignment($1, zig_create_binary_op('/', zig_create_identifier($1), $3));
     }
-  | TOKEN_IDENTIFIER TOKEN_MODULUS_ASSIGN expression {
+   | TOKEN_IDENTIFIER TOKEN_MODULUS_ASSIGN expression {
         $$ = zig_create_assignment($1, zig_create_binary_op('%', zig_create_identifier($1), $3));
     }
 ;
@@ -478,6 +497,13 @@ enum_declaration:
     }
 ;
 
+struct_declaration:
+    TOKEN_STRUCT TOKEN_IDENTIFIER TOKEN_LBRACE struct_fields TOKEN_RBRACE {
+        $$ = zig_create_struct_decl($2, $4);
+        free($2);
+    }
+;
+
 enum_values:
    /* empty */ { $$ = zig_create_enum_value_list(); }
    | enum_value_list { $$ = $1; }
@@ -505,6 +531,30 @@ enum_value_list:
         $$ = $1;
     }
     | enum_value_list TOKEN_COMMA {
+        /* Allow trailing comma */
+        $$ = $1;
+    }
+;
+
+struct_fields:
+   /* empty */ { $$ = zig_create_struct_field_list(); }
+   | struct_field_list { $$ = $1; }
+;
+
+struct_field_list:
+    TOKEN_IDENTIFIER type_name {
+        $$ = zig_create_struct_field_list();
+        zig_add_struct_field($$, $1, $2);
+        free($1);
+        free($2);
+    }
+    | struct_field_list TOKEN_COMMA TOKEN_IDENTIFIER type_name {
+        zig_add_struct_field($1, $3, $4);
+        free($3);
+        free($4);
+        $$ = $1;
+    }
+    | struct_field_list TOKEN_COMMA {
         /* Allow trailing comma */
         $$ = $1;
     }

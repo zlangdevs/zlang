@@ -1,0 +1,32 @@
+struct Person {
+    name arr<u8, 15>,
+    age i32,
+    is_male bool,
+    id u64
+}
+
+struct Point {
+    x i32,
+    y i32
+}
+
+fun main() >> i32 {
+    Person alex;
+    Point origin;
+
+    alex.name = "Alex Johnson";
+    alex.age = 25;
+    alex.id = 12345;
+    alex.is_male = true;
+
+    origin.x = 10;
+    origin.y = 20;
+
+    @printf("Name: %s\n", alex.name);
+    @printf("Age: (expected 25):%d\n", alex.age);
+
+    i32 current_age = alex.age;
+    i32 point_x = origin.x;
+    @printf("(expected 35):%d\n", current_age + point_x);
+    return 0;
+}
