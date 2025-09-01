@@ -171,6 +171,9 @@ pub const CodeGenerator = struct {
                 defer self.allocator.free(base_name);
                 return try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ base_name, qual_id.field });
             },
+            .array_index => |arr_idx| {
+                return try self.buildQualifiedName(arr_idx.array);
+            },
             else => return errors.CodegenError.TypeMismatch,
         }
     }
@@ -179,45 +182,135 @@ pub const CodeGenerator = struct {
         switch (node.data) {
             .identifier => |ident| return try self.allocator.dupe(u8, ident.name),
             .qualified_identifier => |qual_id| return try self.getBaseIdentifierName(qual_id.base),
+            .array_index => |arr_idx| return try self.getBaseIdentifierName(arr_idx.array),
             else => return errors.CodegenError.TypeMismatch,
         }
     }
 
-    fn generateStructFieldAssignment(self: *CodeGenerator, struct_name: []const u8, field_path: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
-        const struct_var_info = self.getVariable(struct_name) orelse return errors.CodegenError.UndefinedVariable;
-        var current_struct_type = struct_var_info.type_ref;
-        var current_struct_value = struct_var_info.value;
-        var current_struct_name = struct_var_info.type_name;
-        var path_iter = std.mem.splitScalar(u8, field_path, '.');
-        var last_field_ptr: c.LLVMValueRef = undefined;
-        var last_field_type: c.LLVMTypeRef = undefined;
-        while (path_iter.next()) |field_name| {
-            const var_type_kind = c.LLVMGetTypeKind(current_struct_type);
-            if (var_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
-            const struct_type = self.struct_types.get(current_struct_name) orelse return errors.CodegenError.TypeMismatch;
-            const field_map = self.struct_fields.get(current_struct_name) orelse return errors.CodegenError.TypeMismatch;
-            const field_index = field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable;
-            const field_count = c.LLVMCountStructElementTypes(struct_type);
-            if (field_index >= field_count) {
-                return errors.CodegenError.TypeMismatch;
-            }
-            const field_ptr = try self.getStructFieldPointer(struct_type, current_struct_value, field_index);
-            const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
-            const field_type_kind = c.LLVMGetTypeKind(field_type);
-            if (path_iter.peek() != null) {
-                if (field_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
-                current_struct_value = field_ptr;
-                current_struct_type = field_type;
-                const name_ptr = c.LLVMGetStructName(field_type);
-                if (name_ptr == null) return errors.CodegenError.TypeMismatch;
-                current_struct_name = std.mem.span(name_ptr);
-            } else {
-                last_field_ptr = field_ptr;
-                last_field_type = field_type;
-                break;
+    fn containsArrayIndex(self: *CodeGenerator, node: *ast.Node) !bool {
+        switch (node.data) {
+            .array_index => return true,
+            .qualified_identifier => |qual_id| return try self.containsArrayIndex(qual_id.base),
+            else => return false,
+        }
+    }
+
+    fn extractArrayIndex(self: *CodeGenerator, node: *ast.Node) !ast.ArrayIndex {
+        switch (node.data) {
+            .array_index => |arr_idx| return arr_idx,
+            .qualified_identifier => |qual_id| return try self.extractArrayIndex(qual_id.base),
+            else => return errors.CodegenError.TypeMismatch,
+        }
+    }
+
+    fn generateArrayElementFieldAssignment(self: *CodeGenerator, array_index: ast.ArrayIndex, field_path: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
+        const array_name = try self.getBaseIdentifierName(array_index.array);
+        defer self.allocator.free(array_name);
+        const array_var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
+        const index_value = try self.generateExpression(array_index.index);
+        const element_type = c.LLVMGetElementType(array_var_info.type_ref);
+        const element_type_kind = c.LLVMGetTypeKind(element_type);
+        if (element_type_kind != c.LLVMStructTypeKind) {
+            return errors.CodegenError.TypeMismatch;
+        }
+        const struct_name = try self.getStructTypeName(element_type);
+        defer self.allocator.free(struct_name);
+        var array_indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
+        const array_element_ptr = c.LLVMBuildGEP2(self.builder, array_var_info.type_ref, array_var_info.value, &array_indices[0], 2, "array_element_ptr");
+        try self.generateRecursiveFieldAssignment(array_element_ptr, element_type, struct_name, field_path, value_expr);
+    }
+
+    fn getStructTypeName(self: *CodeGenerator, struct_type: c.LLVMTypeRef) ![]const u8 {
+        const name_ptr = c.LLVMGetStructName(struct_type);
+        if (name_ptr != null) {
+            return try self.allocator.dupe(u8, std.mem.span(name_ptr));
+        }
+        var it = self.struct_types.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* == struct_type) {
+                return try self.allocator.dupe(u8, entry.key_ptr.*);
             }
         }
-        try self.assignToField(last_field_ptr, last_field_type, value_expr);
+        return try self.allocator.dupe(u8, "anonymous_struct");
+    }
+
+    fn generateRecursiveFieldAssignment(self: *CodeGenerator, base_value: c.LLVMValueRef, base_type: c.LLVMTypeRef, base_type_name: []const u8, field_path: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
+        var current_value = base_value;
+        var current_type = base_type;
+        var current_type_name = base_type_name;
+        var path = field_path;
+
+        while (path.len > 0) {
+            if (std.mem.startsWith(u8, path, "[")) {
+                const close_bracket_pos = std.mem.indexOfScalar(u8, path, ']') orelse return errors.CodegenError.TypeMismatch;
+                const index_str = path[1..close_bracket_pos];
+                const index_expr = if (self.getVariable(index_str)) |var_info| blk: {
+                    break :blk c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "index_var");
+                } else blk: {
+                    break :blk try self.generateExpressionFromString(index_str);
+                };
+                const var_type_kind = c.LLVMGetTypeKind(current_type);
+                if (var_type_kind != c.LLVMArrayTypeKind) return errors.CodegenError.TypeMismatch;
+                const element_type = c.LLVMGetElementType(current_type);
+                var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_expr };
+                const element_ptr = c.LLVMBuildGEP2(self.builder, current_type, current_value, &indices[0], 2, "array_element_ptr");
+                current_value = element_ptr;
+                current_type = element_type;
+                const elem_type_kind = c.LLVMGetTypeKind(element_type);
+                if (elem_type_kind == c.LLVMStructTypeKind) {
+                    const name_ptr = c.LLVMGetStructName(element_type);
+                    if (name_ptr != null) {
+                        current_type_name = std.mem.span(name_ptr);
+                    }
+                }
+                path = path[close_bracket_pos + 1..];
+                if (std.mem.startsWith(u8, path, ".")) {
+                    path = path[1..];
+                }
+            } else {
+                const dot_pos = std.mem.indexOfScalar(u8, path, '.');
+                const field_name_len = if (dot_pos) |pos| pos else path.len;
+                const field_name = path[0..field_name_len];
+                const var_type_kind = c.LLVMGetTypeKind(current_type);
+                if (var_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
+                const struct_type = self.struct_types.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
+                const field_map = self.struct_fields.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
+                const field_index = field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable;
+                const field_count = c.LLVMCountStructElementTypes(struct_type);
+                if (field_index >= field_count) {
+                    return errors.CodegenError.TypeMismatch;
+                }
+                const field_ptr = try self.getStructFieldPointer(struct_type, current_value, field_index);
+                const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+                if (dot_pos != null) {
+                    const field_type_kind = c.LLVMGetTypeKind(field_type);
+                    if (field_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
+                    current_value = field_ptr;
+                    current_type = field_type;
+                    const name_ptr = c.LLVMGetStructName(field_type);
+                    if (name_ptr == null) return errors.CodegenError.TypeMismatch;
+                    current_type_name = std.mem.span(name_ptr);
+                    path = path[dot_pos.? + 1..];
+                } else {
+                    try self.assignToField(field_ptr, field_type, value_expr);
+                    return;
+                }
+            }
+        }
+        return errors.CodegenError.TypeMismatch;
+    }
+
+    fn generateStructFieldAssignment(self: *CodeGenerator, struct_name: []const u8, field_path: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
+        const struct_var_info = self.getVariable(struct_name) orelse return errors.CodegenError.UndefinedVariable;
+        return try self.generateRecursiveFieldAssignment(struct_var_info.value, struct_var_info.type_ref, struct_var_info.type_name, field_path, value_expr);
+    }
+
+    fn generateExpressionFromString(self: *CodeGenerator, expr_str: []const u8) errors.CodegenError!c.LLVMValueRef {
+        if (std.fmt.parseInt(i64, expr_str, 10)) |value| {
+            return c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
+        } else |_| {
+            return errors.CodegenError.TypeMismatch;
+        }
     }
 
     fn generateRegularVariableAssignment(self: *CodeGenerator, as: ast.Assignment) errors.CodegenError!void {
@@ -275,42 +368,81 @@ pub const CodeGenerator = struct {
         _ = c.LLVMBuildCall2(self.builder, c.LLVMGlobalGetValueType(memcpy_func), memcpy_func, &memcpy_args[0], 3, "");
     }
 
-    fn generateStructFieldAccess(self: *CodeGenerator, struct_var_info: VariableInfo, field_path: []const u8) errors.CodegenError!c.LLVMValueRef {
-        var current_struct_type = struct_var_info.type_ref;
-        var current_struct_value = struct_var_info.value;
-        var current_struct_name = struct_var_info.type_name;
-        var path_iter = std.mem.splitScalar(u8, field_path, '.');
-        while (path_iter.next()) |field_name| {
-            const var_type_kind = c.LLVMGetTypeKind(current_struct_type);
-            if (var_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
-            const struct_type = self.struct_types.get(current_struct_name) orelse return errors.CodegenError.TypeMismatch;
-            const field_map = self.struct_fields.get(current_struct_name) orelse return errors.CodegenError.TypeMismatch;
-            const field_index = field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable;
-            const field_count = c.LLVMCountStructElementTypes(struct_type);
-            if (field_index >= field_count) {
-                return errors.CodegenError.TypeMismatch;
-            }
-            const field_ptr = try self.getStructFieldPointer(struct_type, current_struct_value, field_index);
-            const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
-            const field_type_kind = c.LLVMGetTypeKind(field_type);
-            if (path_iter.peek() != null) {
-                if (field_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
-                current_struct_value = field_ptr;
-                current_struct_type = field_type;
-                const name_ptr = c.LLVMGetStructName(field_type);
-                if (name_ptr == null) return errors.CodegenError.TypeMismatch;
-                current_struct_name = std.mem.span(name_ptr);
-            } else {
-                if (field_type_kind == c.LLVMArrayTypeKind) {
-                    return field_ptr;
+    fn generateRecursiveFieldAccess(self: *CodeGenerator, base_value: c.LLVMValueRef, base_type: c.LLVMTypeRef, base_type_name: []const u8, field_path: []const u8) errors.CodegenError!c.LLVMValueRef {
+        var current_value = base_value;
+        var current_type = base_type;
+        var current_type_name = base_type_name;
+        var path = field_path;
+        while (path.len > 0) {
+            if (std.mem.startsWith(u8, path, "[")) {
+                const close_bracket_pos = std.mem.indexOfScalar(u8, path, ']') orelse return errors.CodegenError.TypeMismatch;
+                const index_str = path[1..close_bracket_pos];
+                const index_expr = if (self.getVariable(index_str)) |var_info| blk: {
+                    break :blk c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "index_var");
+                } else blk: {
+                    break :blk try self.generateExpressionFromString(index_str);
+                };
+                const var_type_kind = c.LLVMGetTypeKind(current_type);
+                if (var_type_kind != c.LLVMArrayTypeKind) return errors.CodegenError.TypeMismatch;
+                const element_type = c.LLVMGetElementType(current_type);
+                var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_expr };
+                const element_ptr = c.LLVMBuildGEP2(self.builder, current_type, current_value, &indices[0], 2, "array_element_ptr");
+                current_value = element_ptr;
+                current_type = element_type;
+                const elem_type_kind = c.LLVMGetTypeKind(element_type);
+                if (elem_type_kind == c.LLVMStructTypeKind) {
+                    const name_ptr = c.LLVMGetStructName(element_type);
+                    if (name_ptr != null) {
+                        current_type_name = std.mem.span(name_ptr);
+                    }
                 }
-                const load_instr = c.LLVMBuildLoad2(self.builder, field_type, field_ptr, "struct_field");
-                const alignment = self.getAlignmentForType(field_type);
-                c.LLVMSetAlignment(load_instr, alignment);
-                return load_instr;
+                path = path[close_bracket_pos + 1..];
+                if (std.mem.startsWith(u8, path, ".")) {
+                    path = path[1..];
+                }
+            } else {
+                const dot_pos = std.mem.indexOfScalar(u8, path, '.');
+                const field_name_len = if (dot_pos) |pos| pos else path.len;
+                const field_name = path[0..field_name_len];
+                const var_type_kind = c.LLVMGetTypeKind(current_type);
+                if (var_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
+                const struct_type = self.struct_types.get(current_type_name) orelse {
+                    return errors.CodegenError.TypeMismatch;
+                };
+                const field_map = self.struct_fields.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
+                const field_index = field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable;
+                const field_count = c.LLVMCountStructElementTypes(struct_type);
+                if (field_index >= field_count) {
+                    return errors.CodegenError.TypeMismatch;
+                }
+                const field_ptr = try self.getStructFieldPointer(struct_type, current_value, field_index);
+                const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+                if (dot_pos != null) {
+                    const field_type_kind = c.LLVMGetTypeKind(field_type);
+                    if (field_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
+                    current_value = field_ptr;
+                    current_type = field_type;
+                    const name_ptr = c.LLVMGetStructName(field_type);
+                    if (name_ptr == null) return errors.CodegenError.TypeMismatch;
+                    current_type_name = std.mem.span(name_ptr);
+                    path = path[dot_pos.? + 1..];
+                } else {
+                    const field_type_kind = c.LLVMGetTypeKind(field_type);
+                    if (field_type_kind == c.LLVMArrayTypeKind) {
+                        return field_ptr;
+                    }
+                    const load_instr = c.LLVMBuildLoad2(self.builder, field_type, field_ptr, "struct_field");
+                    const alignment = self.getAlignmentForType(field_type);
+                    c.LLVMSetAlignment(load_instr, alignment);
+                    return load_instr;
+                }
             }
         }
         return errors.CodegenError.TypeMismatch;
+    }
+
+    fn generateStructFieldAccess(self: *CodeGenerator, struct_var_info: VariableInfo, field_path: []const u8) errors.CodegenError!c.LLVMValueRef {
+        return try self.generateRecursiveFieldAccess(struct_var_info.value, struct_var_info.type_ref, struct_var_info.type_name, field_path);
     }
 
     fn getVariable(self: *CodeGenerator, name: []const u8) ?VariableInfo {
@@ -733,14 +865,31 @@ pub const CodeGenerator = struct {
                         try self.generateRegularVariableAssignment(as);
                     },
                     .qualified_identifier => {
-                        const struct_name = try self.getBaseIdentifierName(as.target);
-                        defer self.allocator.free(struct_name);
-                        const full_name = try self.buildQualifiedName(as.target);
-                        defer self.allocator.free(full_name);
-                        const field_path = full_name[struct_name.len + 1 ..];
-                        try self.generateStructFieldAssignment(struct_name, field_path, as.value);
+                        const qual_id = as.target.data.qualified_identifier;
+                        const has_array_index = try self.containsArrayIndex(qual_id.base);
+                        if (has_array_index) {
+                            const full_name = try self.buildQualifiedName(as.target);
+                            defer self.allocator.free(full_name);
+                            const array_name = try self.getBaseIdentifierName(as.target);
+                            defer self.allocator.free(array_name);
+                            const field_path = try self.allocator.dupe(u8, full_name[array_name.len + 1 ..]);
+                            defer self.allocator.free(field_path);
+                            const array_index = try self.extractArrayIndex(qual_id.base);
+                            try self.generateArrayElementFieldAssignment(array_index, field_path, as.value);
+                        } else {
+                            const struct_name = try self.getBaseIdentifierName(as.target);
+                            defer self.allocator.free(struct_name);
+                            const full_name = try self.buildQualifiedName(as.target);
+                            defer self.allocator.free(full_name);
+                            const field_path = try self.allocator.dupe(u8, full_name[struct_name.len + 1 ..]);
+                            defer self.allocator.free(field_path);
+
+                            try self.generateStructFieldAssignment(struct_name, field_path, as.value);
+                        }
                     },
-                    else => return errors.CodegenError.TypeMismatch,
+                    else => {
+                        return errors.CodegenError.TypeMismatch;
+                    },
                 }
             },
             .var_decl => |decl| {
@@ -960,7 +1109,9 @@ pub const CodeGenerator = struct {
     }
 
     fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignment) errors.CodegenError!void {
-        const var_info = self.getVariable(arr_ass.array_name) orelse return errors.CodegenError.UndefinedVariable;
+        const array_name = try self.getBaseIdentifierName(arr_ass.array);
+        defer self.allocator.free(array_name);
+        const var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
 
         const index_value = try self.generateExpression(arr_ass.index);
         const value = try self.generateExpression(arr_ass.value);
@@ -1377,22 +1528,108 @@ pub const CodeGenerator = struct {
                 return errors.CodegenError.UndefinedVariable;
             },
             .qualified_identifier => {
-                const full_name = try self.buildQualifiedName(expr);
-                defer self.allocator.free(full_name);
-                const enum_name = try std.mem.replaceOwned(u8, self.allocator, full_name, ".", "_");
-                defer self.allocator.free(enum_name);
-                if (self.getVariable(enum_name)) |var_info| {
-                    return c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load");
+                const qual_id = expr.data.qualified_identifier;
+                if (qual_id.base.data == .identifier) {
+                    const base_name = qual_id.base.data.identifier.name;
+                    const enum_var_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ base_name, qual_id.field });
+                    defer self.allocator.free(enum_var_name);
+                    if (self.getVariable(enum_var_name)) |enum_var_info| {
+                        const load_instr = c.LLVMBuildLoad2(self.builder, enum_var_info.type_ref, enum_var_info.value, "enum_value");
+                        const alignment = self.getAlignmentForType(enum_var_info.type_ref);
+                        c.LLVMSetAlignment(load_instr, alignment);
+                        return load_instr;
+                    }
                 }
-                const struct_name = try self.getBaseIdentifierName(expr);
-                defer self.allocator.free(struct_name);
-                const field_path = full_name[struct_name.len + 1 ..];
-
-                if (self.getVariable(struct_name)) |struct_var_info| {
-                    return try self.generateStructFieldAccess(struct_var_info, field_path);
+                var result_value: c.LLVMValueRef = undefined;
+                var result_type: c.LLVMTypeRef = undefined;
+                var result_type_name: []const u8 = "";
+                switch (qual_id.base.data) {
+                    .identifier => {
+                        const base_name = qual_id.base.data.identifier.name;
+                        const var_info = self.getVariable(base_name) orelse return errors.CodegenError.UndefinedVariable;
+                        result_value = var_info.value;
+                        result_type = var_info.type_ref;
+                        result_type_name = var_info.type_name;
+                    },
+                    .array_index => {
+                        const array_index = qual_id.base.data.array_index;
+                        const array_name = try self.getBaseIdentifierName(qual_id.base);
+                        defer self.allocator.free(array_name);
+                        const array_var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
+                        const index_value = try self.generateExpression(array_index.index);
+                        const element_type = c.LLVMGetElementType(array_var_info.type_ref);
+                        var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
+                        result_value = c.LLVMBuildGEP2(self.builder, array_var_info.type_ref, array_var_info.value, &indices[0], 2, "array_element_ptr");
+                        result_type = element_type;
+                        const elem_type_kind = c.LLVMGetTypeKind(element_type);
+                        if (elem_type_kind == c.LLVMStructTypeKind) {
+                            const name_ptr = c.LLVMGetStructName(element_type);
+                            if (name_ptr != null) {
+                                result_type_name = std.mem.span(name_ptr);
+                            }
+                        }
+                    },
+                    .qualified_identifier => {
+                        result_value = try self.generateExpression(qual_id.base);
+                        result_type = c.LLVMTypeOf(result_value);
+                        const type_kind = c.LLVMGetTypeKind(result_type);
+                        if (type_kind == c.LLVMStructTypeKind) {
+                            const name_ptr = c.LLVMGetStructName(result_type);
+                            if (name_ptr != null) {
+                                result_type_name = std.mem.span(name_ptr);
+                            }
+                        }
+                    },
+                    else => {
+                        result_value = try self.generateExpression(qual_id.base);
+                        result_type = c.LLVMTypeOf(result_value);
+                    },
                 }
-
-                return errors.CodegenError.UndefinedVariable;
+                const type_kind = c.LLVMGetTypeKind(result_type);
+                if (type_kind == c.LLVMStructTypeKind) {
+                    const struct_type = self.struct_types.get(result_type_name) orelse return errors.CodegenError.TypeMismatch;
+                    const field_map = self.struct_fields.get(result_type_name) orelse return errors.CodegenError.TypeMismatch;
+                    const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
+                    var struct_ptr = result_value;
+                    if (c.LLVMGetTypeKind(c.LLVMTypeOf(result_value)) != c.LLVMPointerTypeKind) {
+                        const temp_alloca = c.LLVMBuildAlloca(self.builder, c.LLVMTypeOf(result_value), "temp_struct");
+                        _ = c.LLVMBuildStore(self.builder, result_value, temp_alloca);
+                        struct_ptr = temp_alloca;
+                    }
+                    const field_ptr = try self.getStructFieldPointer(struct_type, struct_ptr, field_index);
+                    const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+                    const field_type_kind = c.LLVMGetTypeKind(field_type);
+                    if (field_type_kind == c.LLVMArrayTypeKind) {
+                        return field_ptr;
+                    }
+                    const load_instr = c.LLVMBuildLoad2(self.builder, field_type, field_ptr, "struct_field");
+                    const alignment = self.getAlignmentForType(field_type);
+                    c.LLVMSetAlignment(load_instr, alignment);
+                    return load_instr;
+                } else if (type_kind == c.LLVMPointerTypeKind) {
+                    const pointee_type = c.LLVMGetElementType(result_type);
+                    const pointee_type_kind = c.LLVMGetTypeKind(pointee_type);
+                    if (pointee_type_kind == c.LLVMStructTypeKind) {
+                        const name_ptr = c.LLVMGetStructName(pointee_type);
+                        if (name_ptr != null) {
+                            const struct_name = std.mem.span(name_ptr);
+                            const struct_type = self.struct_types.get(struct_name) orelse return errors.CodegenError.TypeMismatch;
+                            const field_map = self.struct_fields.get(struct_name) orelse return errors.CodegenError.TypeMismatch;
+                            const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
+                            const field_ptr = try self.getStructFieldPointer(struct_type, result_value, field_index);
+                            const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+                            const field_type_kind = c.LLVMGetTypeKind(field_type);
+                            if (field_type_kind == c.LLVMArrayTypeKind) {
+                                return field_ptr;
+                            }
+                            const load_instr = c.LLVMBuildLoad2(self.builder, field_type, field_ptr, "struct_field");
+                            const alignment = self.getAlignmentForType(field_type);
+                            c.LLVMSetAlignment(load_instr, alignment);
+                            return load_instr;
+                        }
+                    }
+                }
+                return errors.CodegenError.TypeMismatch;
             },
             .float_literal => |float| {
                 const float_val = std.fmt.parseFloat(f64, float.value) catch 0.0;
@@ -1514,7 +1751,9 @@ pub const CodeGenerator = struct {
                             }
                         } else if (un.operand.data == .array_index) {
                             const arr_idx = un.operand.data.array_index;
-                            if (self.getVariable(arr_idx.array_name)) |var_info| {
+                            const array_name = try self.getBaseIdentifierName(arr_idx.array);
+                            defer self.allocator.free(array_name);
+                            if (self.getVariable(array_name)) |var_info| {
                                 const index_value = try self.generateExpression(arr_idx.index);
                                 const element_type = c.LLVMGetElementType(var_info.type_ref);
 
@@ -1598,7 +1837,9 @@ pub const CodeGenerator = struct {
                             }
                         } else if (un.operand.data == .array_index) {
                             const arr_idx = un.operand.data.array_index;
-                            if (self.getVariable(arr_idx.array_name)) |var_info| {
+                            const array_name = try self.getBaseIdentifierName(arr_idx.array);
+                            defer self.allocator.free(array_name);
+                            if (self.getVariable(array_name)) |var_info| {
                                 const index_value = try self.generateExpression(arr_idx.index);
                                 const element_type = c.LLVMGetElementType(var_info.type_ref);
 
@@ -1768,7 +2009,9 @@ pub const CodeGenerator = struct {
                 }
             },
             .array_index => |arr_idx| {
-                const var_info = self.getVariable(arr_idx.array_name) orelse return errors.CodegenError.UndefinedVariable;
+                const array_name = try self.getBaseIdentifierName(arr_idx.array);
+                defer self.allocator.free(array_name);
+                const var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
                 const index_value = try self.generateExpression(arr_idx.index);
                 const element_type = c.LLVMGetElementType(var_info.type_ref);
                 var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };

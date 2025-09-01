@@ -58,5 +58,14 @@ fun main() >> i32 {
     @printf("Line start: %d, %d\n", tline.start.x, tline.start.y);
     tline.start.x = 10;
     @printf("After assignment: %d, %d\n", tline.start.x, tline.start.y);
+    arr<Line, 5> lines;
+    i32 sum = 0;
+    for i8 i = 0; i < 5; i++ {
+        lines[i] = gen_line(i, i, i, i);
+    }
+    for i8 i = 0; i < 5; i++ {
+        sum += lines[i].start.x;
+    }
+    @printf("(expected 10):%d\n", sum);
     return 0;
 }
