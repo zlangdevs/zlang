@@ -145,12 +145,12 @@ pub const ArrayInitializer = struct {
 };
 
 pub const ArrayIndex = struct {
-    array_name: []const u8,
+    array: *Node,
     index: *Node,
 };
 
 pub const ArrayAssignment = struct {
-    array_name: []const u8,
+    array: *Node,
     index: *Node,
     value: *Node,
 };
@@ -316,9 +316,11 @@ pub const Node = struct {
                 arr_init.elements.deinit();
             },
             .array_index => |arr_idx| {
+                arr_idx.array.destroy();
                 arr_idx.index.destroy();
             },
             .array_assignment => |arr_ass| {
+                arr_ass.array.destroy();
                 arr_ass.index.destroy();
                 arr_ass.value.destroy();
             },
@@ -564,15 +566,22 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             }
         },
         .array_index => |arr_idx| {
-            std.debug.print("🔍 Array Index: \x1b[36m{s}\x1b[0m[\n", .{arr_idx.array_name});
-            printAST(arr_idx.index, indent + 1, true, false);
+            std.debug.print("🔍 Array Index:\n", .{});
+            printAST(arr_idx.array, indent + 1, false, false);
+            printIndent(indent + 1, true, false);
+            std.debug.print("[\n", .{});
+            printAST(arr_idx.index, indent + 2, true, false);
             std.debug.print("    ]\n", .{});
         },
         .array_assignment => |arr_ass| {
-            std.debug.print("🔄 Array Assignment: \x1b[36m{s}\x1b[0m[\n", .{arr_ass.array_name});
-            printAST(arr_ass.index, indent + 1, false, false);
-            std.debug.print("    ] = \n", .{});
-            printAST(arr_ass.value, indent + 1, true, false);
+            std.debug.print("🔄 Array Assignment:\n", .{});
+            printAST(arr_ass.array, indent + 1, false, false);
+            printIndent(indent + 1, false, false);
+            std.debug.print("[\n", .{});
+            printAST(arr_ass.index, indent + 2, false, false);
+            printIndent(indent + 1, true, false);
+            std.debug.print("] = \n", .{});
+            printAST(arr_ass.value, indent + 2, true, false);
         },
         .c_function_decl => |c_func| {
             if (c_func.parameters.items.len > 0) {

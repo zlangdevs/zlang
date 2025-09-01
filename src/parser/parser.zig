@@ -628,16 +628,14 @@ export fn zig_create_array_initializer(elements_ptr: ?*anyopaque) ?*anyopaque {
     return @as(*anyopaque, @ptrCast(node));
 }
 
-export fn zig_create_array_index(array_name_ptr: [*c]const u8, index_ptr: ?*anyopaque) ?*anyopaque {
-    const array_name = std.mem.span(array_name_ptr);
-    const array_name_copy = global_allocator.dupe(u8, array_name) catch return null;
-
-    if (index_ptr == null) return null;
+export fn zig_create_array_index(array_ptr: ?*anyopaque, index_ptr: ?*anyopaque) ?*anyopaque {
+    if (array_ptr == null or index_ptr == null) return null;
+    const array = @as(*ast.Node, @ptrFromInt(@intFromPtr(array_ptr.?)));
     const index = @as(*ast.Node, @ptrFromInt(@intFromPtr(index_ptr.?)));
 
     const array_index_data = ast.NodeData{
         .array_index = ast.ArrayIndex{
-            .array_name = array_name_copy,
+            .array = array,
             .index = index,
         },
     };
@@ -646,17 +644,15 @@ export fn zig_create_array_index(array_name_ptr: [*c]const u8, index_ptr: ?*anyo
     return @as(*anyopaque, @ptrCast(node));
 }
 
-export fn zig_create_array_assignment(array_name_ptr: [*c]const u8, index_ptr: ?*anyopaque, value_ptr: ?*anyopaque) ?*anyopaque {
-    const array_name = std.mem.span(array_name_ptr);
-    const array_name_copy = global_allocator.dupe(u8, array_name) catch return null;
-
-    if (index_ptr == null or value_ptr == null) return null;
+export fn zig_create_array_assignment(array_ptr: ?*anyopaque, index_ptr: ?*anyopaque, value_ptr: ?*anyopaque) ?*anyopaque {
+    if (array_ptr == null or index_ptr == null or value_ptr == null) return null;
+    const array = @as(*ast.Node, @ptrFromInt(@intFromPtr(array_ptr.?)));
     const index = @as(*ast.Node, @ptrFromInt(@intFromPtr(index_ptr.?)));
     const value = @as(*ast.Node, @ptrFromInt(@intFromPtr(value_ptr.?)));
 
     const array_assignment_data = ast.NodeData{
         .array_assignment = ast.ArrayAssignment{
-            .array_name = array_name_copy,
+            .array = array,
             .index = index,
             .value = value,
         },

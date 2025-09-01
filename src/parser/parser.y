@@ -34,8 +34,8 @@ extern void* zig_create_c_for_stmt(void* init, void* condition, void* increment,
 extern void* zig_create_break_stmt(void);
 extern void* zig_create_continue_stmt(void);
 extern void* zig_create_array_initializer(void* elements);
-extern void* zig_create_array_index(const char* array_name, void* index);
-extern void* zig_create_array_assignment(const char* array_name, void* index, void* value);
+extern void* zig_create_array_index(void* array, void* index);
+extern void* zig_create_array_assignment(void* array, void* index, void* value);
 extern void* zig_create_c_function_decl(const char* name, const char* return_type, void* params);
 extern void* zig_create_use_stmt(const char* module_path);
 extern void* zig_create_enum_decl(const char* name, void* values);
@@ -88,6 +88,7 @@ void* ast_root = NULL;
 %left TOKEN_PLUS TOKEN_MINUS
 %left TOKEN_MULTIPLY TOKEN_DIVIDE
 %left TOKEN_LBRACKET TOKEN_LPAREN
+%left TOKEN_DOT
 %left TOKEN_INCREMENT TOKEN_DECREMENT
 %left TOKEN_AT
 %right NOT UMINUS UPLUS
@@ -347,7 +348,8 @@ assignment:
 
 array_assignment:
     TOKEN_IDENTIFIER TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_ASSIGN expression {
-        $$ = zig_create_array_assignment($1, $3, $6);
+        void* arr = zig_create_identifier($1);
+        $$ = zig_create_array_assignment(arr, $3, $6);
     }
 ;
 
@@ -471,7 +473,10 @@ unary_expression:
 primary_expression:
     TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
    | qualified_identifier { $$ = $1; }
-   | TOKEN_IDENTIFIER TOKEN_LBRACKET expression TOKEN_RBRACKET { $$ = zig_create_array_index($1, $3); }
+   | TOKEN_IDENTIFIER TOKEN_LBRACKET expression TOKEN_RBRACKET {
+       void* arr = zig_create_identifier($1);
+       $$ = zig_create_array_index(arr, $3);
+   }
    | array_initializer { $$ = $1; }
    | TOKEN_FLOAT { $$ = zig_create_float_literal($1); }
    | TOKEN_NUMBER { $$ = zig_create_number_literal($1); }
@@ -488,11 +493,18 @@ qualified_identifier:
         $$ = zig_create_qualified_identifier(base_node, field_copy);
         free($1); free($3);
     }
-   | qualified_identifier TOKEN_DOT TOKEN_IDENTIFIER {
-       const char* field_copy = strdup($3);
-       $$ = zig_create_qualified_identifier($1, field_copy);
-       free($3);
-   }
+    | TOKEN_IDENTIFIER TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_DOT TOKEN_IDENTIFIER {
+        void* arr = zig_create_identifier($1);
+        void* array_index = zig_create_array_index(arr, $3);
+        const char* field_copy = strdup($6);
+        $$ = zig_create_qualified_identifier(array_index, field_copy);
+        free($6);
+    }
+    | qualified_identifier TOKEN_DOT TOKEN_IDENTIFIER {
+        const char* field_copy = strdup($3);
+        $$ = zig_create_qualified_identifier($1, field_copy);
+        free($3);
+    }
 ;
 
 string_literal:
