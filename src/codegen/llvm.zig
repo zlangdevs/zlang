@@ -1694,6 +1694,17 @@ pub const CodeGenerator = struct {
                             if (self.getVariable(ident.name)) |var_info| {
                                 return var_info.value;
                             }
+                        } else if (un.operand.data == .qualified_identifier) {
+                            return try self.generateExpression(un.operand);
+                        } else if (un.operand.data == .array_index) {
+                            const arr_idx = un.operand.data.array_index;
+                            const array_name = try self.getBaseIdentifierName(arr_idx.array);
+                            defer self.allocator.free(array_name);
+                            const var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
+                            const index_value = try self.generateExpression(arr_idx.index);
+                            var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
+                            const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
+                            return element_ptr;
                         }
                         return errors.CodegenError.TypeMismatch;
                     },
