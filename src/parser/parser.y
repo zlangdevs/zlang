@@ -87,17 +87,15 @@ void* ast_root = NULL;
 %left TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %left TOKEN_PLUS TOKEN_MINUS
 %left TOKEN_MULTIPLY TOKEN_DIVIDE
-%left TOKEN_LBRACKET TOKEN_LPAREN
-%left TOKEN_DOT
+%left TOKEN_LBRACKET TOKEN_LPAREN TOKEN_DOT
 %left TOKEN_INCREMENT TOKEN_DECREMENT
 %left TOKEN_AT
-%right NOT UMINUS UPLUS
-%right UDEREF
+%right NOT UMINUS UPLUS UAMPERSAND UDEREF
 
 %type <node> parameter_list parameters parameter
 %type <node> program function_list function statement_list statement
 %type <node> var_declaration function_call return_statement assignment brainfuck_statement
-%type <node> expression logical_or_expression logical_and_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression argument_list arguments
+%type <node> expression logical_or_expression logical_and_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression postfix_expression argument_list arguments
 %type <node> comparison_expression simple_term c_for_statement for_increment
 %type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration
 %type <node> enum_values enum_value_list struct_fields struct_field_list qualified_identifier
@@ -460,23 +458,30 @@ multiplicative_expression:
 ;
 
 unary_expression:
-    primary_expression TOKEN_INCREMENT { $$ = zig_create_unary_op('I', $1); }
-  | primary_expression TOKEN_DECREMENT { $$ = zig_create_unary_op('D', $1); }
-  | primary_expression { $$ = $1; }
-  | TOKEN_NOT unary_expression { $$ = zig_create_unary_op('!', $2); }
+    postfix_expression { $$ = $1; }
+  | TOKEN_NOT unary_expression %prec NOT { $$ = zig_create_unary_op('!', $2); }
   | TOKEN_MINUS unary_expression %prec UMINUS { $$ = zig_create_unary_op('-', $2); }
   | TOKEN_PLUS unary_expression %prec UPLUS { $$ = zig_create_unary_op('+', $2); }
-  | TOKEN_AMPERSAND unary_expression { $$ = zig_create_unary_op('&', $2); }
+  | TOKEN_AMPERSAND unary_expression %prec UAMPERSAND { $$ = zig_create_unary_op('&', $2); }
   | TOKEN_MULTIPLY unary_expression %prec UDEREF { $$ = zig_create_unary_op('*', $2); }
+;
+
+postfix_expression:
+    primary_expression { $$ = $1; }
+  | postfix_expression TOKEN_INCREMENT { $$ = zig_create_unary_op('I', $1); }
+  | postfix_expression TOKEN_DECREMENT { $$ = zig_create_unary_op('D', $1); }
+  | postfix_expression TOKEN_LBRACKET expression TOKEN_RBRACKET {
+       $$ = zig_create_array_index($1, $3);
+   }
+  | postfix_expression TOKEN_DOT TOKEN_IDENTIFIER {
+       const char* field_copy = strdup($3);
+       $$ = zig_create_qualified_identifier($1, field_copy);
+       free($3);
+   }
 ;
 
 primary_expression:
     TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
-   | qualified_identifier { $$ = $1; }
-   | TOKEN_IDENTIFIER TOKEN_LBRACKET expression TOKEN_RBRACKET {
-       void* arr = zig_create_identifier($1);
-       $$ = zig_create_array_index(arr, $3);
-   }
    | array_initializer { $$ = $1; }
    | TOKEN_FLOAT { $$ = zig_create_float_literal($1); }
    | TOKEN_NUMBER { $$ = zig_create_number_literal($1); }
