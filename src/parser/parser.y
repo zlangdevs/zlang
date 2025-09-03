@@ -61,6 +61,8 @@ void* ast_root = NULL;
 
 %define parse.error verbose
 
+%glr-parser
+
 %union {
     char* string;
     void* node;
@@ -88,8 +90,9 @@ void* ast_root = NULL;
 %left TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %left TOKEN_PLUS TOKEN_MINUS
 %left TOKEN_MULTIPLY TOKEN_DIVIDE
-%left TOKEN_LBRACKET TOKEN_LPAREN TOKEN_DOT
+%right TOKEN_ASSIGN
 %left TOKEN_INCREMENT TOKEN_DECREMENT
+%left TOKEN_LBRACKET TOKEN_LPAREN TOKEN_DOT
 %left TOKEN_AT
 %right NOT UMINUS UPLUS UAMPERSAND UDEREF
 
@@ -465,8 +468,6 @@ unary_expression:
 
 postfix_expression:
     primary_expression { $$ = $1; }
-  | postfix_expression TOKEN_INCREMENT { $$ = zig_create_unary_op('I', $1); }
-  | postfix_expression TOKEN_DECREMENT { $$ = zig_create_unary_op('D', $1); }
   | postfix_expression TOKEN_LBRACKET expression TOKEN_RBRACKET {
        $$ = zig_create_array_index($1, $3);
    }
@@ -475,6 +476,8 @@ postfix_expression:
        $$ = zig_create_qualified_identifier($1, field_copy);
        free($3);
    }
+  | postfix_expression TOKEN_INCREMENT { $$ = zig_create_unary_op('I', $1); }
+  | postfix_expression TOKEN_DECREMENT { $$ = zig_create_unary_op('D', $1); }
 ;
 
 primary_expression:
@@ -489,20 +492,20 @@ primary_expression:
 ;
 
 qualified_identifier:
-    TOKEN_IDENTIFIER TOKEN_DOT TOKEN_IDENTIFIER {
+    TOKEN_IDENTIFIER TOKEN_DOT TOKEN_IDENTIFIER %prec TOKEN_ASSIGN {
         void* base_node = zig_create_identifier($1);
         const char* field_copy = strdup($3);
         $$ = zig_create_qualified_identifier(base_node, field_copy);
         free($1); free($3);
     }
-    | TOKEN_IDENTIFIER TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_DOT TOKEN_IDENTIFIER {
+    | TOKEN_IDENTIFIER TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_DOT TOKEN_IDENTIFIER %prec TOKEN_ASSIGN {
         void* arr = zig_create_identifier($1);
         void* array_index = zig_create_array_index(arr, $3);
         const char* field_copy = strdup($6);
         $$ = zig_create_qualified_identifier(array_index, field_copy);
         free($6);
     }
-    | qualified_identifier TOKEN_DOT TOKEN_IDENTIFIER {
+    | qualified_identifier TOKEN_DOT TOKEN_IDENTIFIER %prec TOKEN_ASSIGN {
         const char* field_copy = strdup($3);
         $$ = zig_create_qualified_identifier($1, field_copy);
         free($3);
