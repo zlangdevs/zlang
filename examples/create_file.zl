@@ -1,0 +1,11 @@
+fun main() >> i32 {
+    ptr<void> file = @fopen("created_by_zlang", "w");
+    if (!file) {
+        @printf("Error: Could not open file for writing\n");
+        return 1;
+    }
+    @fprintf(file, "Hello, from ZLang");
+    @fclose(file);
+    @printf("File 'created_by_zlang' created successfully with content 'Hello, from ZLang'\n");
+    return 0;
+}
