@@ -57,6 +57,8 @@ extern void* current_scanner;
 void* ast_root = NULL;
 %}
 
+%expect 4
+
 %define parse.error verbose
 
 %union {
@@ -79,7 +81,6 @@ void* ast_root = NULL;
 %type <node> for_statement
 %type <node> break_statement
 %type <node> continue_statement
-%type <node> expression_statement
 
 %left TOKEN_OR
 %left TOKEN_AND
@@ -251,11 +252,7 @@ statement:
    | continue_statement TOKEN_SEMICOLON { $$ = $1; }
    | c_function_decl TOKEN_SEMICOLON { $$ = $1; }
    | use_statement { $$ = $1; }
-   | expression_statement { $$ = $1; }
-;
-
-expression_statement:
-    expression TOKEN_SEMICOLON { $$ = $1; }
+   | expression TOKEN_SEMICOLON { $$ = $1; }
 ;
 
 if_statement:
