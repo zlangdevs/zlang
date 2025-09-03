@@ -263,7 +263,7 @@ pub const CodeGenerator = struct {
                         current_type_name = std.mem.span(name_ptr);
                     }
                 }
-                path = path[close_bracket_pos + 1..];
+                path = path[close_bracket_pos + 1 ..];
                 if (std.mem.startsWith(u8, path, ".")) {
                     path = path[1..];
                 }
@@ -290,7 +290,7 @@ pub const CodeGenerator = struct {
                     const name_ptr = c.LLVMGetStructName(field_type);
                     if (name_ptr == null) return errors.CodegenError.TypeMismatch;
                     current_type_name = std.mem.span(name_ptr);
-                    path = path[dot_pos.? + 1..];
+                    path = path[dot_pos.? + 1 ..];
                 } else {
                     try self.assignToField(field_ptr, field_type, value_expr);
                     return;
@@ -396,7 +396,7 @@ pub const CodeGenerator = struct {
                         current_type_name = std.mem.span(name_ptr);
                     }
                 }
-                path = path[close_bracket_pos + 1..];
+                path = path[close_bracket_pos + 1 ..];
                 if (std.mem.startsWith(u8, path, ".")) {
                     path = path[1..];
                 }
@@ -425,7 +425,7 @@ pub const CodeGenerator = struct {
                     const name_ptr = c.LLVMGetStructName(field_type);
                     if (name_ptr == null) return errors.CodegenError.TypeMismatch;
                     current_type_name = std.mem.span(name_ptr);
-                    path = path[dot_pos.? + 1..];
+                    path = path[dot_pos.? + 1 ..];
                 } else {
                     const field_type_kind = c.LLVMGetTypeKind(field_type);
                     if (field_type_kind == c.LLVMArrayTypeKind) {
