@@ -38,6 +38,7 @@ pub const CodegenError = error{
     BuilderCreationFailed,
     FunctionCreationFailed,
     TypeMismatch,
+    NullNotAllowedInNonPointerType,
     UndefinedFunction,
     UndefinedVariable,
     UnsupportedOperation,

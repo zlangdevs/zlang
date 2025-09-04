@@ -458,6 +458,15 @@ export fn zig_create_bool_literal(value: c_int) ?*anyopaque {
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_null_literal() ?*anyopaque {
+    const null_data = ast.NodeData{
+        .null_literal = ast.NullLiteral{},
+    };
+
+    const node = ast.Node.create(global_allocator, null_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_create_stmt_list() ?*anyopaque {
     const node_list = global_allocator.create(NodeList) catch return null;
     node_list.* = NodeList.init(global_allocator);
