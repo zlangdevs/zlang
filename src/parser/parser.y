@@ -25,6 +25,7 @@ extern void* zig_create_number_literal(const char* value);
 extern void* zig_create_string_literal(const char* value);
 extern void* zig_create_char_literal(int value);
 extern void* zig_create_bool_literal(int value);
+extern void* zig_create_null_literal(void);
 extern void* zig_create_stmt_list(void);
 extern void* zig_create_arg_list(void);
 extern void* zig_create_brainfuck(const char* code);
@@ -72,7 +73,7 @@ void* ast_root = NULL;
 %token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING TOKEN_BRAINFUCK
 %token <number> TOKEN_CHAR
 
-%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_USE TOKEN_ENUM TOKEN_STRUCT TOKEN_DOT
+%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_USE TOKEN_ENUM TOKEN_STRUCT TOKEN_DOT TOKEN_NULL
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_PLUS_ASSIGN TOKEN_MINUS_ASSIGN TOKEN_MULTIPLY_ASSIGN TOKEN_DIVIDE_ASSIGN TOKEN_MODULUS_ASSIGN
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
@@ -481,14 +482,15 @@ postfix_expression:
 ;
 
 primary_expression:
-    TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
-   | array_initializer { $$ = $1; }
-   | TOKEN_FLOAT { $$ = zig_create_float_literal($1); }
-   | TOKEN_NUMBER { $$ = zig_create_number_literal($1); }
-   | TOKEN_CHAR { $$ = zig_create_char_literal($1); }
-   | string_literal { $$ = zig_create_string_literal($1); free($1); }
-   | function_call { $$ = $1; }
-   | TOKEN_LPAREN expression TOKEN_RPAREN { $$ = $2; }
+     TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
+    | array_initializer { $$ = $1; }
+    | TOKEN_FLOAT { $$ = zig_create_float_literal($1); }
+    | TOKEN_NUMBER { $$ = zig_create_number_literal($1); }
+    | TOKEN_CHAR { $$ = zig_create_char_literal($1); }
+    | string_literal { $$ = zig_create_string_literal($1); free($1); }
+    | function_call { $$ = $1; }
+    | TOKEN_LPAREN expression TOKEN_RPAREN { $$ = $2; }
+    | TOKEN_NULL { $$ = zig_create_null_literal(); }
 ;
 
 qualified_identifier:

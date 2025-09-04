@@ -349,9 +349,10 @@ pub fn main() !u8 {
         const error_msg = switch (err) {
             error.FunctionCreationFailed => "Failed to create function.",
             error.TypeMismatch => "Type mismatch in code generation.",
+            error.NullNotAllowedInNonPointerType => "Null can only be assigned to pointer types. Cannot assign null to non-pointer type.",
             error.UndefinedFunction => "Undefined function called.",
             error.UndefinedVariable => "Undefined variable used.",
-            error.UnsupportedOperation => "Unsopported operator used",
+            error.UnsupportedOperation => "Unsupported operator used",
             error.OutOfMemory => "Out of memory during code generation.",
             error.RedeclaredVariable => "Variable reinitialization",
             else => "Unknown code generation error.",

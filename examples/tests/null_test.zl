@@ -1,0 +1,28 @@
+fun main() >> i32 {
+    ?? Test 1: Valid null assignments to pointer types
+    ptr<i32> p1 = null;
+    ptr<i8> p2 = null;
+    ptr<f64> p3 = null;
+    ptr<bool> p4 = null;
+
+    ?? Test 2: Valid null comparisons
+    @printf("(expected 1):");
+    if (p1 == null) {
+        @printf("1\n");
+    } else {@printf("0\n");}
+    
+    @printf("(expected 0):");
+    if (p2 != null) {
+        @printf("1\n");
+    } else {@printf("0\n");}
+
+    ?? Test 3: Valid null reassignments
+    ptr<i32> p5 = p1;
+    p5 = null;
+
+    ?? Test 4: Invalid null assignment to non-pointer (this should cause an error)
+    ?? The line below is commented out because it would cause compilation to fail
+    ?? i32 value = null;
+
+    return 0;
+}

@@ -14,6 +14,7 @@ pub const NodeType = enum {
     char_literal,
     string_literal,
     bool_literal,
+    null_literal,
     binary_op,
     brainfuck,
     comparison,
@@ -70,6 +71,8 @@ pub const StringLiteral = struct {
 pub const BoolLiteral = struct {
     value: bool,
 };
+
+pub const NullLiteral = struct {};
 
 pub const Assignment = struct {
     target: *Node,
@@ -204,6 +207,7 @@ pub const NodeData = union(NodeType) {
     char_literal: CharLiteral,
     string_literal: StringLiteral,
     bool_literal: BoolLiteral,
+    null_literal: NullLiteral,
     binary_op: BinaryOp,
     brainfuck: Brainfuck,
     comparison: Comparison,
@@ -498,6 +502,9 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         },
         .bool_literal => |bool_val| {
             std.debug.print("✅ Boolean: \x1b[35m{s}\x1b[0m\n", .{if (bool_val.value) "true" else "false"});
+        },
+        .null_literal => {
+            std.debug.print("⬛ Null: \x1b[35mnull\x1b[0m\n", .{});
         },
         .if_stmt => |if_stmt| {
             const has_else = if (if_stmt.else_body) |else_body| else_body.items.len > 0 else false;
