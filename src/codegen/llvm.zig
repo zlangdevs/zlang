@@ -1509,6 +1509,19 @@ pub const CodeGenerator = struct {
                 }
                 return errors.CodegenError.UndefinedVariable;
             },
+            .null_literal => {
+                if (expected_type) |type_name| {
+                    if (std.mem.startsWith(u8, type_name, "ptr<")) {
+                        const llvm_type = self.getLLVMType(type_name);
+                        return c.LLVMConstNull(llvm_type);
+                    } else {
+                        return errors.CodegenError.NullNotAllowedInNonPointerType;
+                    }
+                } else {
+                    const void_ptr_type = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+                    return c.LLVMConstNull(void_ptr_type);
+                }
+            },
             else => return self.generateExpression(expr),
         }
     }
@@ -1649,6 +1662,10 @@ pub const CodeGenerator = struct {
             },
             .bool_literal => |bool_val| {
                 return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), if (bool_val.value) 1 else 0, 0);
+            },
+            .null_literal => {
+                const void_ptr_type = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+                return c.LLVMConstNull(void_ptr_type);
             },
             .string_literal => |str| {
                 const parsed_str = try self.parse_escape(str.value);
