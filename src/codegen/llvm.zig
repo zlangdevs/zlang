@@ -444,56 +444,11 @@ pub const CodeGenerator = struct {
     
     pub const getLLVMType = utils.getLLVMType;
 
-    fn isUnsignedType(type_name: []const u8) bool {
-        return std.mem.startsWith(u8, type_name, "u");
-    }
+    pub const isUnsignedType = utils.isUnsignedType;
 
-    fn getAlignmentForType(self: *CodeGenerator, llvm_type: c.LLVMTypeRef) c_uint {
-        const type_kind = c.LLVMGetTypeKind(llvm_type);
-        return switch (type_kind) {
-            c.LLVMIntegerTypeKind => {
-                const bit_width = c.LLVMGetIntTypeWidth(llvm_type);
-                if (bit_width <= 8) return 1;
-                if (bit_width <= 16) return 2;
-                if (bit_width <= 32) return 4;
-                if (bit_width <= 64) return 8;
-                return 8;
-            },
-            c.LLVMFloatTypeKind => 4,
-            c.LLVMDoubleTypeKind => 8,
-            c.LLVMHalfTypeKind => 2,
-            c.LLVMPointerTypeKind => 8,
-            c.LLVMArrayTypeKind => self.getAlignmentForType(c.LLVMGetElementType(llvm_type)),
-            c.LLVMStructTypeKind => 8,
-            else => 4,
-        };
-    }
+    pub const getAlignmentForType = utils.getAlignmentForType;
 
-    fn getTypeNameFromLLVMType(self: *CodeGenerator, llvm_type: c.LLVMTypeRef) []const u8 {
-        _ = self;
-        const type_kind = c.LLVMGetTypeKind(llvm_type);
-        const width = c.LLVMGetIntTypeWidth(llvm_type);
-
-        return switch (type_kind) {
-            c.LLVMIntegerTypeKind => {
-                if (width == 1) {
-                    return "bool";
-                } else {
-                    return switch (width) {
-                        8 => "i8",
-                        16 => "i16",
-                        32 => "i32",
-                        64 => "i64",
-                        else => "i32",
-                    };
-                }
-            },
-            c.LLVMFloatTypeKind => "f32",
-            c.LLVMDoubleTypeKind => "f64",
-            c.LLVMHalfTypeKind => "f16",
-            else => "i32",
-        };
-    }
+    pub const getTypeNameFromLLVMType = utils.getTypeNameFromLLVMType;
 
     // TODO:  move this to interface
     pub fn declareLibcFunction(self: *CodeGenerator, func_name: []const u8) !c.LLVMValueRef {
