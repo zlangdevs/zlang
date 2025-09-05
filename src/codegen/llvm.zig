@@ -441,69 +441,8 @@ pub const CodeGenerator = struct {
         // build a symbol table for struct declarations during code generation
         return errors.CodegenError.TypeMismatch;
     }
-
-    fn getLLVMType(self: *CodeGenerator, type_name: []const u8) c.LLVMTypeRef {
-        if (std.mem.startsWith(u8, type_name, "ptr<") and std.mem.endsWith(u8, type_name, ">")) {
-            const inner_type_name = type_name[4 .. type_name.len - 1];
-            const inner_type = self.getLLVMType(inner_type_name);
-            return c.LLVMPointerType(inner_type, 0);
-        } else if (std.mem.startsWith(u8, type_name, "arr<") and std.mem.endsWith(u8, type_name, ">")) {
-            const inner = type_name[4 .. type_name.len - 1];
-            var comma_pos: ?usize = null;
-            var search_idx: usize = inner.len;
-            while (search_idx > 0) {
-                search_idx -= 1;
-                if (inner[search_idx] == ',') {
-                    comma_pos = search_idx;
-                    break;
-                }
-            }
-
-            if (comma_pos) |pos| {
-                const element_type_part = inner[0..pos];
-                const element_type_name = std.mem.trim(u8, element_type_part, " \t");
-                const size_part = inner[pos + 1 ..];
-                const size_str = std.mem.trim(u8, size_part, " \t");
-
-                if (std.fmt.parseInt(u32, size_str, 10)) |array_size| {
-                    const element_type = self.getLLVMType(element_type_name);
-                    return c.LLVMArrayType(element_type, array_size);
-                } else |_| {}
-            } else {}
-            return c.LLVMInt32TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "i8")) {
-            return c.LLVMInt8TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "i16")) {
-            return c.LLVMInt16TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "i32")) {
-            return c.LLVMInt32TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "i64")) {
-            return c.LLVMInt64TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "u8")) {
-            return c.LLVMInt8TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "u16")) {
-            return c.LLVMInt16TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "u32")) {
-            return c.LLVMInt32TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "u64")) {
-            return c.LLVMInt64TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "f16")) {
-            return c.LLVMHalfTypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "f32")) {
-            return c.LLVMFloatTypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "f64")) {
-            return c.LLVMDoubleTypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "void")) {
-            return c.LLVMVoidTypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "bool")) {
-            return c.LLVMInt1TypeInContext(self.context);
-        } else {
-            if (self.struct_types.get(type_name)) |struct_type| {
-                return struct_type;
-            }
-        }
-        return c.LLVMInt32TypeInContext(self.context);
-    }
+    
+    pub const getLLVMType = utils.getLLVMType;
 
     fn isUnsignedType(type_name: []const u8) bool {
         return std.mem.startsWith(u8, type_name, "u");
