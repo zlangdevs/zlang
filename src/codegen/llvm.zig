@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../parser/ast.zig");
 const errors = @import("../errors.zig");
+const utils = @import("utils.zig");
 const bfck = @import("bf.zig");
 const control_flow = @import("control_flow.zig");
 
@@ -11,51 +12,6 @@ const c = @cImport({
     @cInclude("llvm-c/TargetMachine.h");
     @cInclude("llvm-c/Analysis.h");
     @cInclude("llvm-c/ExecutionEngine.h");
-});
-
-const LibcFunctionSignature = struct {
-    return_type: LibcType,
-    param_types: []const LibcType,
-    is_varargs: bool = false,
-};
-
-const LibcType = enum {
-    void_type,
-    int_type,
-    char_ptr_type,
-    size_t_type,
-    file_ptr_type,
-    long_type,
-    double_type,
-};
-
-const LIBC_FUNCTIONS = std.StaticStringMap(LibcFunctionSignature).initComptime(.{
-    .{ "printf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type}, .is_varargs = true } },
-    .{ "puts", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type} } },
-    .{ "scanf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type}, .is_varargs = true } },
-    .{ "fprintf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{ .file_ptr_type, .char_ptr_type }, .is_varargs = true } },
-    .{ "sprintf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type }, .is_varargs = true } },
-    .{ "snprintf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{ .char_ptr_type, .size_t_type, .char_ptr_type }, .is_varargs = true } },
-    .{ "malloc", LibcFunctionSignature{ .return_type = .char_ptr_type, .param_types = &[_]LibcType{.size_t_type} } },
-    .{ "free", LibcFunctionSignature{ .return_type = .void_type, .param_types = &[_]LibcType{.char_ptr_type} } },
-    .{ "strlen", LibcFunctionSignature{ .return_type = .size_t_type, .param_types = &[_]LibcType{.char_ptr_type} } },
-    .{ "strcpy", LibcFunctionSignature{ .return_type = .char_ptr_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type } } },
-    .{ "strcmp", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type } } },
-    .{ "memset", LibcFunctionSignature{ .return_type = .char_ptr_type, .param_types = &[_]LibcType{ .char_ptr_type, .int_type, .size_t_type } } },
-    .{ "memcpy", LibcFunctionSignature{ .return_type = .char_ptr_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type, .size_t_type } } },
-    .{ "exit", LibcFunctionSignature{ .return_type = .void_type, .param_types = &[_]LibcType{.int_type} } },
-    .{ "atoi", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type} } },
-    .{ "atol", LibcFunctionSignature{ .return_type = .long_type, .param_types = &[_]LibcType{.char_ptr_type} } },
-    .{ "fopen", LibcFunctionSignature{ .return_type = .file_ptr_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type } } },
-    .{ "fclose", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.file_ptr_type} } },
-    .{ "fread", LibcFunctionSignature{ .return_type = .size_t_type, .param_types = &[_]LibcType{ .char_ptr_type, .size_t_type, .size_t_type, .file_ptr_type } } },
-    .{ "fwrite", LibcFunctionSignature{ .return_type = .size_t_type, .param_types = &[_]LibcType{ .char_ptr_type, .size_t_type, .size_t_type, .file_ptr_type } } },
-    .{ "system", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type} } },
-    .{ "putchar", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.int_type} } },
-    .{ "getchar", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{} } },
-    .{ "rand", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{} } },
-    .{ "srand", LibcFunctionSignature{ .return_type = .void_type, .param_types = &[_]LibcType{.int_type} } },
-    .{ "square", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.int_type} } },
 });
 
 pub const CodeGenerator = struct {
@@ -360,7 +316,7 @@ pub const CodeGenerator = struct {
         const memcpy_func = try self.declareLibcFunction("memcpy");
         const i8_type = c.LLVMInt8TypeInContext(self.context);
         const i8_ptr_type = c.LLVMPointerType(i8_type, 0);
-        const size_t_type = self.libcTypeToLLVM(.size_t_type);
+        const size_t_type = utils.libcTypeToLLVM(self, .size_t_type);
         const field_i8_ptr = c.LLVMBuildBitCast(self.builder, field_ptr, i8_ptr_type, "field_i8_ptr");
         const global_str = c.LLVMBuildGlobalStringPtr(self.builder, parsed_str.ptr, "temp_str_ptr");
         const copy_size = c.LLVMConstInt(size_t_type, @as(c_ulonglong, @intCast(str_len)), 0);
@@ -445,7 +401,8 @@ pub const CodeGenerator = struct {
         return try self.generateRecursiveFieldAccess(struct_var_info.value, struct_var_info.type_ref, struct_var_info.type_name, field_path);
     }
 
-    fn getVariable(self: *CodeGenerator, name: []const u8) ?VariableInfo {
+    // TODO:  move this to interface
+    pub fn getVariable(self: *CodeGenerator, name: []const u8) ?VariableInfo {
         var i = self.variable_scopes.items.len;
         while (i > 0) {
             i -= 1;
@@ -599,23 +556,12 @@ pub const CodeGenerator = struct {
         };
     }
 
-    fn libcTypeToLLVM(self: *CodeGenerator, libc_type: LibcType) c.LLVMTypeRef {
-        return switch (libc_type) {
-            .void_type => c.LLVMVoidTypeInContext(self.context),
-            .int_type => c.LLVMInt32TypeInContext(self.context),
-            .char_ptr_type => c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0),
-            .size_t_type => c.LLVMInt64TypeInContext(self.context),
-            .file_ptr_type => c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0),
-            .long_type => c.LLVMInt64TypeInContext(self.context),
-            .double_type => c.LLVMDoubleTypeInContext(self.context),
-        };
-    }
-
-    fn declareLibcFunction(self: *CodeGenerator, func_name: []const u8) !c.LLVMValueRef {
+    // TODO:  move this to interface
+    pub fn declareLibcFunction(self: *CodeGenerator, func_name: []const u8) !c.LLVMValueRef {
         if (self.functions.get(func_name)) |existing| {
             return existing;
         }
-        if (LIBC_FUNCTIONS.get(func_name)) |signature| {
+        if (utils.LIBC_FUNCTIONS.get(func_name)) |signature| {
             const func = try self.createFunctionFromSignature(func_name, signature);
             try self.functions.put(try self.allocator.dupe(u8, func_name), func);
             return func;
@@ -625,14 +571,14 @@ pub const CodeGenerator = struct {
         return func;
     }
 
-    fn createFunctionFromSignature(self: *CodeGenerator, func_name: []const u8, signature: LibcFunctionSignature) !c.LLVMValueRef {
-        const return_type = self.libcTypeToLLVM(signature.return_type);
+    fn createFunctionFromSignature(self: *CodeGenerator, func_name: []const u8, signature: utils.LibcFunctionSignature) !c.LLVMValueRef {
+        const return_type = utils.libcTypeToLLVM(self, signature.return_type);
 
         var param_types = std.ArrayList(c.LLVMTypeRef).init(self.allocator);
         defer param_types.deinit();
 
         for (signature.param_types) |param_type| {
-            try param_types.append(self.libcTypeToLLVM(param_type));
+            try param_types.append(utils.libcTypeToLLVM(self, param_type));
         }
 
         const function_type = if (param_types.items.len > 0)
@@ -794,11 +740,11 @@ pub const CodeGenerator = struct {
                         }
                     } else {
                         if (!last_is_return) {
-                            const default_value = self.getDefaultValueForType(func.return_type);
+                            const default_value = utils.getDefaultValueForType(self, func.return_type);
                             _ = c.LLVMBuildRet(self.builder, default_value);
                         } else {
                             if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
-                                const default_value = self.getDefaultValueForType(func.return_type);
+                                const default_value = utils.getDefaultValueForType(self, func.return_type);
                                 _ = c.LLVMBuildRet(self.builder, default_value);
                             }
                         }
@@ -809,6 +755,7 @@ pub const CodeGenerator = struct {
         }
     }
 
+    // move to control_flow.zig
     fn hasValidControlFlow(self: *CodeGenerator, func_node: *ast.Node) errors.CodegenError!bool {
         switch (func_node.data) {
             .function => |func| {
@@ -821,34 +768,6 @@ pub const CodeGenerator = struct {
         }
     }
 
-    fn getDefaultValueForType(self: *CodeGenerator, type_name: []const u8) c.LLVMValueRef {
-        if (std.mem.eql(u8, type_name, "i8")) {
-            return c.LLVMConstInt(c.LLVMInt8TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "i16")) {
-            return c.LLVMConstInt(c.LLVMInt16TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "i32")) {
-            return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "i64")) {
-            return c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "u8")) {
-            return c.LLVMConstInt(c.LLVMInt8TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "u16")) {
-            return c.LLVMConstInt(c.LLVMInt16TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "u32")) {
-            return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "u64")) {
-            return c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "f16")) {
-            return c.LLVMConstReal(c.LLVMHalfTypeInContext(self.context), 0.0);
-        } else if (std.mem.eql(u8, type_name, "f32")) {
-            return c.LLVMConstReal(c.LLVMFloatTypeInContext(self.context), 0.0);
-        } else if (std.mem.eql(u8, type_name, "f64")) {
-            return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), 0.0);
-        } else if (std.mem.eql(u8, type_name, "bool")) {
-            return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 0, 0);
-        }
-        return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0);
-    }
     fn isReturnStatement(self: *CodeGenerator, stmt: *ast.Node) bool {
         _ = self;
         return switch (stmt.data) {
@@ -935,7 +854,7 @@ pub const CodeGenerator = struct {
                 }
             },
             .brainfuck => |bf| {
-                _ = try self.generateBrainfuck(bf);
+                _ = try bfck.generateBrainfuck(self, bf);
             },
             .if_stmt => |if_stmt| {
                 try self.generateIfStatement(if_stmt);
@@ -1158,7 +1077,7 @@ pub const CodeGenerator = struct {
                 const memcpy_func = try self.declareLibcFunction("memcpy");
                 const i8_type = c.LLVMInt8TypeInContext(self.context);
                 const i8_ptr_type = c.LLVMPointerType(i8_type, 0);
-                const size_t_type = self.libcTypeToLLVM(.size_t_type);
+                const size_t_type = utils.libcTypeToLLVM(self, .size_t_type);
                 const array_i8_ptr = c.LLVMBuildBitCast(self.builder, var_info.value, i8_ptr_type, "array_i8_ptr");
                 const global_str = c.LLVMBuildGlobalStringPtr(self.builder, parsed_str.ptr, "temp_str_ptr");
                 const copy_size = c.LLVMConstInt(size_t_type, @as(c_ulonglong, @intCast(str_len)), 0);
@@ -1928,7 +1847,7 @@ pub const CodeGenerator = struct {
                     }
                     if (!found_external) {
                         // If we didn't find an external declaration, create one
-                        if (LIBC_FUNCTIONS.get(call.name)) |signature| {
+                        if (utils.LIBC_FUNCTIONS.get(call.name)) |signature| {
                             func = try self.createFunctionFromSignature(call.name, signature);
                         } else {
                             func = try self.declareLibcFunction(call.name);
@@ -1967,9 +1886,9 @@ pub const CodeGenerator = struct {
 
                     // Cast argument to match the expected parameter type
                     if (call.is_libc) {
-                        if (LIBC_FUNCTIONS.get(call.name)) |signature| {
+                        if (utils.LIBC_FUNCTIONS.get(call.name)) |signature| {
                             if (i < signature.param_types.len) {
-                                const expected_type = self.libcTypeToLLVM(signature.param_types[i]);
+                                const expected_type = utils.libcTypeToLLVM(self, signature.param_types[i]);
                                 arg_value = self.castToType(arg_value, expected_type);
                             }
                         }
@@ -2311,297 +2230,9 @@ pub const CodeGenerator = struct {
         return phi;
     }
 
-    fn convertToBool(self: *CodeGenerator, value: c.LLVMValueRef) c.LLVMValueRef {
-        const value_type = c.LLVMTypeOf(value);
-        const type_kind = c.LLVMGetTypeKind(value_type);
-        if (type_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(value_type) == 1) {
-            return value;
-        }
-        if (type_kind == c.LLVMIntegerTypeKind) {
-            const zero = c.LLVMConstInt(value_type, 0, 0);
-            return c.LLVMBuildICmp(self.builder, c.LLVMIntNE, value, zero, "tobool");
-        }
-        if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind) {
-            const zero = c.LLVMConstReal(value_type, 0.0);
-            return c.LLVMBuildFCmp(self.builder, c.LLVMRealONE, value, zero, "tobool");
-        }
-        if (type_kind == c.LLVMPointerTypeKind) {
-            const null_ptr = c.LLVMConstNull(value_type);
-            return c.LLVMBuildICmp(self.builder, c.LLVMIntNE, value, null_ptr, "tobool");
-        }
-        return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 1, 0);
-    }
+    pub const convertToBool = utils.convertToBool;
 
-    fn generateBrainfuck(self: *CodeGenerator, bf: ast.Brainfuck) !c.LLVMValueRef {
-        var ctx = bfck.ParseBfContext(self.allocator, bf.code);
-        defer ctx.requests.deinit();
-
-        const current_function = self.current_function orelse return errors.CodegenError.TypeMismatch;
-
-        // --- 1. Setup Brainfuck environment ---
-        const cell_type = c.LLVMIntTypeInContext(self.context, @intCast(ctx.cell_size));
-        const i32_type = c.LLVMInt32TypeInContext(self.context);
-        const i8_type = c.LLVMInt8TypeInContext(self.context);
-        const i8_ptr_type = c.LLVMPointerType(i8_type, 0);
-        const size_t_type = self.libcTypeToLLVM(.size_t_type);
-
-        const tape_len_val = c.LLVMConstInt(i32_type, @as(c_ulonglong, @intCast(ctx.len)), 0);
-        const tape = c.LLVMBuildArrayAlloca(self.builder, cell_type, tape_len_val, "bf_tape");
-
-        const ptr = c.LLVMBuildAlloca(self.builder, i32_type, "bf_ptr");
-        _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_type, 0, 0), ptr);
-
-        // Initialize tape with zeros
-        const memset_func = try self.declareLibcFunction("memset");
-        const tape_i8_ptr = c.LLVMBuildBitCast(self.builder, tape, i8_ptr_type, "tape_i8_ptr");
-        const cell_size_bytes = @divTrunc(ctx.cell_size, 8);
-        const tape_size_bytes = ctx.len * cell_size_bytes;
-        const tape_size_val = c.LLVMConstInt(size_t_type, @as(c_ulonglong, @intCast(tape_size_bytes)), 0);
-        var memset_args: [3]c.LLVMValueRef = .{
-            tape_i8_ptr,
-            c.LLVMConstInt(i32_type, 0, 0),
-            tape_size_val,
-        };
-        _ = c.LLVMBuildCall2(self.builder, c.LLVMGlobalGetValueType(memset_func), memset_func, &memset_args[0], 3, "");
-
-        // --- 2. Load variables into tape ---
-        for (ctx.requests.items) |req| {
-            const var_info = self.getVariable(req.var_name) orelse {
-                return errors.CodegenError.UndefinedVariable;
-            };
-
-            const type_kind = c.LLVMGetTypeKind(var_info.type_ref);
-            if (type_kind != c.LLVMIntegerTypeKind) {
-                return errors.CodegenError.TypeMismatch;
-            }
-
-            const var_size_bits = c.LLVMGetIntTypeWidth(var_info.type_ref);
-            const var_value = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "var_value");
-
-            // Calculate how many cells this variable needs
-            const cells_needed: usize = (var_size_bits + @as(c_uint, @intCast(ctx.cell_size)) - 1) / @as(c_uint, @intCast(ctx.cell_size));
-
-            if (cells_needed == 1) {
-                // Variable fits in one cell - store directly
-                const cell_index = c.LLVMConstInt(i32_type, @as(c_ulonglong, @intCast(req.load_idx)), 0);
-                var gep_indices: [1]c.LLVMValueRef = .{cell_index};
-                const cell_ptr = c.LLVMBuildGEP2(self.builder, cell_type, tape, &gep_indices[0], 1, "cell_ptr");
-
-                const cell_value = if (var_size_bits == ctx.cell_size)
-                    var_value
-                else if (var_size_bits < ctx.cell_size)
-                    c.LLVMBuildZExt(self.builder, var_value, cell_type, "zext_to_cell")
-                else
-                    c.LLVMBuildTrunc(self.builder, var_value, cell_type, "trunc_to_cell");
-
-                _ = c.LLVMBuildStore(self.builder, cell_value, cell_ptr);
-            } else {
-                // Variable needs multiple cells - split by cell_size chunks (big-endian)
-                var cell_idx: usize = 0;
-                while (cell_idx < cells_needed) : (cell_idx += 1) {
-                    const cell_index = req.load_idx + @as(i32, @intCast(cell_idx));
-                    const byte_index = c.LLVMConstInt(i32_type, @as(c_ulonglong, @intCast(cell_index)), 0);
-                    var gep_indices: [1]c.LLVMValueRef = .{byte_index};
-                    const cell_ptr = c.LLVMBuildGEP2(self.builder, cell_type, tape, &gep_indices[0], 1, "cell_ptr");
-
-                    // Extract the chunk for this cell (big-endian: most significant chunk first)
-                    const chunk_pos = cells_needed - 1 - cell_idx;
-                    const shift_amount = c.LLVMConstInt(var_info.type_ref, @intCast(chunk_pos * @as(usize, @intCast(ctx.cell_size))), 0);
-                    var cell_value: c.LLVMValueRef = undefined;
-                    if (@as(c_uint, @intCast(chunk_pos * @as(usize, @intCast(ctx.cell_size)))) >= var_size_bits) {
-                        // This chunk is beyond the variable size, store 0
-                        cell_value = c.LLVMConstInt(cell_type, 0, 0);
-                    } else {
-                        const shifted_value = c.LLVMBuildLShr(self.builder, var_value, shift_amount, "shifted");
-                        cell_value = c.LLVMBuildTrunc(self.builder, shifted_value, cell_type, "chunk");
-                    }
-
-                    _ = c.LLVMBuildStore(self.builder, cell_value, cell_ptr);
-                }
-            }
-        }
-
-        // --- 3. Execute Brainfuck code ---
-        const putchar_func = try self.declareLibcFunction("putchar");
-        const getchar_func = try self.declareLibcFunction("getchar");
-
-        var loop_stack = std.ArrayList(struct { cond: c.LLVMBasicBlockRef, exit: c.LLVMBasicBlockRef }).init(self.allocator);
-        defer loop_stack.deinit();
-
-        // Create constants for cell operations
-        const cell_one = c.LLVMConstInt(cell_type, 1, 0);
-        const cell_zero = c.LLVMConstInt(cell_type, 0, 0);
-
-        // Create max value for unsigned overflow (2^cell_size - 1)
-        // const max_cell_value = if (ctx.cell_size == 64)
-        //     c.LLVMConstInt(cell_type, std.math.maxInt(u64), 0)
-        // else
-        //     c.LLVMConstInt(cell_type, (1 << @intCast(ctx.cell_size)) - 1, 0);
-
-        for (ctx.code) |char| {
-            switch (char) {
-                '>' => {
-                    const ptr_val = c.LLVMBuildLoad2(self.builder, i32_type, ptr, "ptr_val");
-                    const new_ptr_val = c.LLVMBuildAdd(self.builder, ptr_val, c.LLVMConstInt(i32_type, 1, 0), "inc_ptr");
-                    _ = c.LLVMBuildStore(self.builder, new_ptr_val, ptr);
-                },
-                '<' => {
-                    const ptr_val = c.LLVMBuildLoad2(self.builder, i32_type, ptr, "ptr_val");
-                    const new_ptr_val = c.LLVMBuildSub(self.builder, ptr_val, c.LLVMConstInt(i32_type, 1, 0), "dec_ptr");
-                    _ = c.LLVMBuildStore(self.builder, new_ptr_val, ptr);
-                },
-                '+' => {
-                    const ptr_val = c.LLVMBuildLoad2(self.builder, i32_type, ptr, "ptr_val");
-                    var indices: [1]c.LLVMValueRef = .{ptr_val};
-                    const cell_ptr = c.LLVMBuildGEP2(self.builder, cell_type, tape, &indices[0], 1, "cell_ptr");
-                    const cell_val = c.LLVMBuildLoad2(self.builder, cell_type, cell_ptr, "cell_val");
-
-                    var new_cell_val: c.LLVMValueRef = undefined;
-                    if (ctx.cell_signed) {
-                        // Signed arithmetic - let LLVM handle overflow
-                        new_cell_val = c.LLVMBuildAdd(self.builder, cell_val, cell_one, "inc_cell");
-                    } else {
-                        // Unsigned arithmetic with proper wrapping
-                        new_cell_val = c.LLVMBuildAdd(self.builder, cell_val, cell_one, "inc_cell");
-                        // LLVM handles unsigned overflow correctly by default
-                    }
-
-                    _ = c.LLVMBuildStore(self.builder, new_cell_val, cell_ptr);
-                },
-                '-' => {
-                    const ptr_val = c.LLVMBuildLoad2(self.builder, i32_type, ptr, "ptr_val");
-                    var indices: [1]c.LLVMValueRef = .{ptr_val};
-                    const cell_ptr = c.LLVMBuildGEP2(self.builder, cell_type, tape, &indices[0], 1, "cell_ptr");
-                    const cell_val = c.LLVMBuildLoad2(self.builder, cell_type, cell_ptr, "cell_val");
-
-                    var new_cell_val: c.LLVMValueRef = undefined;
-                    if (ctx.cell_signed) {
-                        // Signed arithmetic - let LLVM handle overflow
-                        new_cell_val = c.LLVMBuildSub(self.builder, cell_val, cell_one, "dec_cell");
-                    } else {
-                        // Unsigned arithmetic with proper wrapping
-                        new_cell_val = c.LLVMBuildSub(self.builder, cell_val, cell_one, "dec_cell");
-                        // LLVM handles unsigned underflow correctly by default (0-1 = MAX_VALUE)
-                    }
-
-                    _ = c.LLVMBuildStore(self.builder, new_cell_val, cell_ptr);
-                },
-                '.' => {
-                    const ptr_val = c.LLVMBuildLoad2(self.builder, i32_type, ptr, "ptr_val");
-                    var indices: [1]c.LLVMValueRef = .{ptr_val};
-                    const cell_ptr = c.LLVMBuildGEP2(self.builder, cell_type, tape, &indices[0], 1, "cell_ptr");
-                    const cell_val = c.LLVMBuildLoad2(self.builder, cell_type, cell_ptr, "cell_val");
-                    const char_val = self.castToType(cell_val, i32_type);
-                    var putchar_args: [1]c.LLVMValueRef = .{char_val};
-                    _ = c.LLVMBuildCall2(self.builder, c.LLVMGlobalGetValueType(putchar_func), putchar_func, &putchar_args[0], 1, "");
-                },
-                ',' => {
-                    const ptr_val = c.LLVMBuildLoad2(self.builder, i32_type, ptr, "ptr_val");
-                    var indices: [1]c.LLVMValueRef = .{ptr_val};
-                    const cell_ptr = c.LLVMBuildGEP2(self.builder, cell_type, tape, &indices[0], 1, "cell_ptr");
-                    const input_val = c.LLVMBuildCall2(self.builder, c.LLVMGlobalGetValueType(getchar_func), getchar_func, null, 0, "input");
-                    const cell_val = self.castToType(input_val, cell_type);
-                    _ = c.LLVMBuildStore(self.builder, cell_val, cell_ptr);
-                },
-                '[' => {
-                    const loop_cond_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "bf_loop_cond");
-                    const loop_body_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "bf_loop_body");
-                    const loop_exit_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "bf_loop_exit");
-
-                    _ = c.LLVMBuildBr(self.builder, loop_cond_bb);
-                    c.LLVMPositionBuilderAtEnd(self.builder, loop_cond_bb);
-
-                    const ptr_val = c.LLVMBuildLoad2(self.builder, i32_type, ptr, "ptr_val");
-                    var indices: [1]c.LLVMValueRef = .{ptr_val};
-                    const cell_ptr = c.LLVMBuildGEP2(self.builder, cell_type, tape, &indices[0], 1, "cell_ptr");
-                    const cell_val = c.LLVMBuildLoad2(self.builder, cell_type, cell_ptr, "cell_val");
-                    const cond = c.LLVMBuildICmp(self.builder, c.LLVMIntNE, cell_val, cell_zero, "loop_cond");
-                    _ = c.LLVMBuildCondBr(self.builder, cond, loop_body_bb, loop_exit_bb);
-
-                    c.LLVMPositionBuilderAtEnd(self.builder, loop_body_bb);
-                    try loop_stack.append(.{ .cond = loop_cond_bb, .exit = loop_exit_bb });
-                },
-                ']' => {
-                    if (loop_stack.items.len == 0) {
-                        return errors.CodegenError.UnsupportedOperation; // Unmatched ]
-                    }
-                    const loop_blocks = loop_stack.pop();
-                    _ = c.LLVMBuildBr(self.builder, loop_blocks.?.cond);
-                    c.LLVMPositionBuilderAtEnd(self.builder, loop_blocks.?.exit);
-                },
-                else => {}, // Ignore non-brainfuck characters
-            }
-        }
-
-        // --- 4. Sync variables back from tape ---
-        for (ctx.requests.items) |req| {
-            const var_info = self.getVariable(req.var_name) orelse continue;
-
-            const type_kind = c.LLVMGetTypeKind(var_info.type_ref);
-            if (type_kind != c.LLVMIntegerTypeKind) {
-                continue;
-            }
-
-            const var_size_bits = c.LLVMGetIntTypeWidth(var_info.type_ref);
-            const cells_needed: usize = (var_size_bits + @as(c_uint, @intCast(ctx.cell_size)) - 1) / @as(c_uint, @intCast(ctx.cell_size));
-
-            if (cells_needed == 1) {
-                // Variable fits in one cell - load directly
-                const cell_index = c.LLVMConstInt(i32_type, @as(c_ulonglong, @intCast(req.load_idx)), 0);
-                var gep_indices: [1]c.LLVMValueRef = .{cell_index};
-                const cell_ptr = c.LLVMBuildGEP2(self.builder, cell_type, tape, &gep_indices[0], 1, "cell_ptr");
-                const cell_val = c.LLVMBuildLoad2(self.builder, cell_type, cell_ptr, "cell_val");
-
-                var reconstructed_value: c.LLVMValueRef = undefined;
-                if (var_size_bits == ctx.cell_size) {
-                    reconstructed_value = cell_val;
-                } else if (var_size_bits < ctx.cell_size) {
-                    // Truncate cell value to variable size
-                    reconstructed_value = c.LLVMBuildTrunc(self.builder, cell_val, var_info.type_ref, "trunc_from_cell");
-                } else {
-                    // Zero-extend cell value to variable size
-                    reconstructed_value = c.LLVMBuildZExt(self.builder, cell_val, var_info.type_ref, "zext_from_cell");
-                }
-
-                _ = c.LLVMBuildStore(self.builder, reconstructed_value, var_info.value);
-            } else {
-                // Variable needs multiple cells - reconstruct from chunks (big-endian)
-                var reconstructed_value = c.LLVMConstInt(var_info.type_ref, 0, 0);
-
-                var cell_idx: usize = 0;
-                while (cell_idx < cells_needed) : (cell_idx += 1) {
-                    const cell_index = req.load_idx + @as(i32, @intCast(cell_idx));
-                    const byte_index = c.LLVMConstInt(i32_type, @as(c_ulonglong, @intCast(cell_index)), 0);
-                    var gep_indices: [1]c.LLVMValueRef = .{byte_index};
-                    const cell_ptr = c.LLVMBuildGEP2(self.builder, cell_type, tape, &gep_indices[0], 1, "cell_ptr");
-                    const cell_val = c.LLVMBuildLoad2(self.builder, cell_type, cell_ptr, "cell_val");
-
-                    // Zero-extend the cell value to the variable type
-                    const extended_cell_val = c.LLVMBuildZExt(self.builder, cell_val, var_info.type_ref, "extended");
-
-                    // For big-endian: cell_idx corresponds to chunk at position (cells_needed - 1 - cell_idx)
-                    const chunk_pos = cells_needed - 1 - cell_idx;
-                    const shift_amount = c.LLVMConstInt(var_info.type_ref, @intCast(chunk_pos * @as(usize, @intCast(ctx.cell_size))), 0);
-
-                    if (@as(c_uint, @intCast(chunk_pos * @as(usize, @intCast(ctx.cell_size)))) < var_size_bits) {
-                        if (shift_amount == c.LLVMConstInt(var_info.type_ref, 0, 0)) {
-                            // Least significant chunk - just OR it
-                            reconstructed_value = c.LLVMBuildOr(self.builder, reconstructed_value, extended_cell_val, "combined");
-                        } else {
-                            // Shift to the correct position and combine
-                            const shifted_cell_val = c.LLVMBuildShl(self.builder, extended_cell_val, shift_amount, "shifted");
-                            reconstructed_value = c.LLVMBuildOr(self.builder, reconstructed_value, shifted_cell_val, "combined");
-                        }
-                    }
-                }
-
-                // Store the reconstructed value back to the variable
-                _ = c.LLVMBuildStore(self.builder, reconstructed_value, var_info.value);
-            }
-        }
-
-        return c.LLVMConstInt(i32_type, 0, 0);
-    }
+    pub const generateBrainfuck = bfck.generateBrainfuck;
 
     pub fn writeToFile(self: *CodeGenerator, filename: []const u8) !void {
         const filename_z = try self.allocator.dupeZ(u8, filename);
