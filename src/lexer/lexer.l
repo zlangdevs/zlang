@@ -14,8 +14,6 @@ extern YYSTYPE yylval;
 DIGIT    [0-9]
 LETTER   [a-zA-Z_]
 IDENT    {LETTER}({LETTER}|{DIGIT})*
-ARRAY_TYPE arr<[a-zA-Z_][a-zA-Z0-9_]*,[ \t]*[0-9]+>
-PTR_TYPE ptr<[^>]*>
 STRING   \"([^"\\]|\\.)*\"
 CHAR     '([^'\\]|\\.)'
 INTEGER  {DIGIT}+
@@ -39,8 +37,6 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "struct"    { return TOKEN_STRUCT; }
 "null"      { return TOKEN_NULL; }
 "brainfuck"[ \t\n]*"{" { BEGIN(BRAINFUCK); yylval.string = strdup(""); }
-{ARRAY_TYPE} { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
-{PTR_TYPE} { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
 {IDENT}     { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
 {FLOAT_EXP_DOT}  { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
 {FLOAT_EXP_INT}  { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
