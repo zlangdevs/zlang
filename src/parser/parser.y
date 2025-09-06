@@ -58,7 +58,8 @@ extern void* current_scanner;
 void* ast_root = NULL;
 %}
 
-%expect 4
+%expect 6
+%expect-rr 0
 
 %define parse.error verbose
 
@@ -217,12 +218,13 @@ function_name:
 ;
 
 complex_type_name:
-    TOKEN_IDENTIFIER '<' TOKEN_IDENTIFIER ',' TOKEN_NUMBER '>' {
+    TOKEN_IDENTIFIER TOKEN_LESS type_name TOKEN_COMMA TOKEN_NUMBER TOKEN_GREATER %prec TOKEN_LESS {
         char* result = malloc(strlen($1) + strlen($3) + strlen($5) + 6);
         sprintf(result, "%s<%s, %s>", $1, $3, $5);
+        free($3);
         $$ = result;
     }
-  | TOKEN_IDENTIFIER '<' type_name '>' {
+  | TOKEN_IDENTIFIER TOKEN_LESS type_name TOKEN_GREATER %prec TOKEN_LESS {
         char* result = malloc(strlen($1) + strlen($3) + 5);
         sprintf(result, "%s<%s>", $1, $3);
         free($3);
@@ -320,35 +322,34 @@ assignment:
         void* target = zig_create_identifier($1);
         $$ = zig_create_assignment(target, $3);
     }
-   | qualified_identifier TOKEN_ASSIGN expression {
+    | qualified_identifier TOKEN_ASSIGN expression {
         $$ = zig_create_assignment($1, $3);
     }
-   | TOKEN_IDENTIFIER TOKEN_PLUS_ASSIGN expression {
+    | TOKEN_IDENTIFIER TOKEN_PLUS_ASSIGN expression {
         void* target = zig_create_identifier($1);
         $$ = zig_create_assignment(target, zig_create_binary_op('+', zig_create_identifier($1), $3));
     }
-   | TOKEN_IDENTIFIER TOKEN_MINUS_ASSIGN expression {
+    | TOKEN_IDENTIFIER TOKEN_MINUS_ASSIGN expression {
         void* target = zig_create_identifier($1);
         $$ = zig_create_assignment(target, zig_create_binary_op('-', zig_create_identifier($1), $3));
     }
-   | TOKEN_IDENTIFIER TOKEN_MULTIPLY_ASSIGN expression {
+    | TOKEN_IDENTIFIER TOKEN_MULTIPLY_ASSIGN expression {
         void* target = zig_create_identifier($1);
         $$ = zig_create_assignment(target, zig_create_binary_op('*', zig_create_identifier($1), $3));
     }
-   | TOKEN_IDENTIFIER TOKEN_DIVIDE_ASSIGN expression {
+    | TOKEN_IDENTIFIER TOKEN_DIVIDE_ASSIGN expression {
         void* target = zig_create_identifier($1);
         $$ = zig_create_assignment(target, zig_create_binary_op('/', zig_create_identifier($1), $3));
     }
-   | TOKEN_IDENTIFIER TOKEN_MODULUS_ASSIGN expression {
+    | TOKEN_IDENTIFIER TOKEN_MODULUS_ASSIGN expression {
         void* target = zig_create_identifier($1);
         $$ = zig_create_assignment(target, zig_create_binary_op('%', zig_create_identifier($1), $3));
     }
 ;
 
 array_assignment:
-    TOKEN_IDENTIFIER TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_ASSIGN expression {
-        void* arr = zig_create_identifier($1);
-        $$ = zig_create_array_assignment(arr, $3, $6);
+    postfix_expression TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_ASSIGN expression {
+        $$ = zig_create_array_assignment($1, $3, $6);
     }
 ;
 
