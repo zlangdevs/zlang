@@ -6,6 +6,7 @@ pub const NodeType = enum {
     assignment,
     var_decl,
     function_call,
+    method_call,
     return_stmt,
     identifier,
     unary_op,
@@ -94,6 +95,12 @@ pub const VarDecl = struct {
 pub const FunctionCall = struct {
     name: []const u8,
     is_libc: bool, // true if starts with @
+    args: std.ArrayList(*Node),
+};
+
+pub const MethodCall = struct {
+    object: *Node,
+    method_name: []const u8,
     args: std.ArrayList(*Node),
 };
 
@@ -199,6 +206,7 @@ pub const NodeData = union(NodeType) {
     assignment: Assignment,
     var_decl: VarDecl,
     function_call: FunctionCall,
+    method_call: MethodCall,
     return_stmt: ReturnStmt,
     identifier: Identifier,
     unary_op: UnaryOp,
@@ -258,6 +266,15 @@ pub const Node = struct {
                     arg.destroy();
                 }
                 call.args.deinit();
+                self.allocator.free(call.name);
+            },
+            .method_call => |method| {
+                method.object.destroy();
+                for (method.args.items) |arg| {
+                    arg.destroy();
+                }
+                method.args.deinit();
+                self.allocator.free(method.method_name);
             },
             .comparison => |comp| {
                 comp.lhs.destroy();
@@ -422,6 +439,15 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             std.debug.print("{s} FunctionCall: \x1b[35m{s}{s}\x1b[0m ({} arg{s})\n", .{ icon, prefix, call.name, call.args.items.len, if (call.args.items.len == 1) @as([]const u8, "") else "s" });
             for (call.args.items, 0..) |arg, i| {
                 const is_arg_last = i == call.args.items.len - 1;
+                printAST(arg, indent + 1, is_arg_last, false);
+            }
+        },
+        .method_call => |method| {
+            std.debug.print("📞 MethodCall: \x1b[35m{s}\x1b[0m ({} arg{s})\n", .{ method.method_name, method.args.items.len, if (method.args.items.len == 1) @as([]const u8, "") else "s" });
+            std.debug.print("    Object:\n", .{});
+            printAST(method.object, indent + 1, false, false);
+            for (method.args.items, 0..) |arg, i| {
+                const is_arg_last = i == method.args.items.len - 1;
                 printAST(arg, indent + 1, is_arg_last, false);
             }
         },

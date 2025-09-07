@@ -671,6 +671,31 @@ export fn zig_create_array_assignment(array_ptr: ?*anyopaque, index_ptr: ?*anyop
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_method_call(object_ptr: ?*anyopaque, method_name_ptr: [*c]const u8, args_ptr: ?*anyopaque) ?*anyopaque {
+    if (object_ptr == null or method_name_ptr == null) return null;
+
+    const object = @as(*ast.Node, @ptrFromInt(@intFromPtr(object_ptr.?)));
+    const method_name = std.mem.span(method_name_ptr);
+    const method_name_copy = global_allocator.dupe(u8, method_name) catch return null;
+
+    var args = std.ArrayList(*ast.Node).init(global_allocator);
+    if (args_ptr) |ptr| {
+        const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
+        args = node_list.items;
+    }
+
+    const method_call_data = ast.NodeData{
+        .method_call = ast.MethodCall{
+            .object = object,
+            .method_name = method_name_copy,
+            .args = args,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, method_call_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_create_c_function_decl(name_ptr: [*c]const u8, return_type_ptr: [*c]const u8, params_ptr: ?*anyopaque) ?*anyopaque {
     const name = std.mem.span(name_ptr);
     const return_type = std.mem.span(return_type_ptr);

@@ -945,6 +945,9 @@ pub const CodeGenerator = struct {
             .function_call => {
                 _ = try self.generateExpression(stmt);
             },
+            .method_call => {
+                _ = try self.generateExpression(stmt);
+            },
             .return_stmt => |ret| {
                 if (ret.expression) |expr| {
                     const ret_value = try self.generateExpression(expr);
@@ -1961,118 +1964,23 @@ pub const CodeGenerator = struct {
             .binary_op => |b| {
                 return self.generateBinaryOp(b);
             },
-            .function_call => |call| {
-                var func: c.LLVMValueRef = undefined;
-                if (call.is_libc) {
-                    // For libc calls, we need to be very careful about which function we call
-                    // The issue is that there might be both a declaration and a definition with the same name
-                    // First, try to find an external declaration by iterating through all functions in the module
-                    var found_external = false;
-                    var func_iter = c.LLVMGetFirstFunction(self.module);
-                    while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
-                        const func_name_ptr = c.LLVMGetValueName(func_iter);
-                        if (func_name_ptr != null) {
-                            const func_name_slice = std.mem.span(func_name_ptr);
-                            // Look for a function with the exact name that is a declaration (external function)
-                            if (std.mem.eql(u8, func_name_slice, call.name) and c.LLVMIsDeclaration(func_iter) != 0) {
-                                func = func_iter;
-                                found_external = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!found_external) {
-                        // If we didn't find an external declaration, create one
-                        if (LIBC_FUNCTIONS.get(call.name)) |signature| {
-                            func = try self.createFunctionFromSignature(call.name, signature);
-                        } else {
-                            func = try self.declareLibcFunction(call.name);
-                        }
-                    }
-                } else {
-                    // For non-libc calls, always prioritize external declarations over defined functions
-                    // This is critical for wrapper functions that need to call external C functions
-                    var found_external = false;
-                    var func_iter = c.LLVMGetFirstFunction(self.module);
-                    while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
-                        const func_name_ptr = c.LLVMGetValueName(func_iter);
-                        if (func_name_ptr != null) {
-                            const func_name_slice = std.mem.span(func_name_ptr);
-                            if (std.mem.eql(u8, func_name_slice, call.name) and c.LLVMIsDeclaration(func_iter) != 0) {
-                                func = func_iter;
-                                found_external = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!found_external) {
-                        if (self.functions.get(call.name)) |declared_func| {
-                            func = declared_func;
-                        } else {
-                            return errors.CodegenError.UndefinedFunction;
-                        }
-                    }
-                }
-
-                var args = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+            .method_call => |method| {
+                // Convert method call to function call: obj.method(args) -> method(obj, args)
+                var args = std.ArrayList(*ast.Node).init(self.allocator);
                 defer args.deinit();
-
-                for (call.args.items, 0..) |arg, i| {
-                    var arg_value = try self.generateExpression(arg);
-
-                    // Cast argument to match the expected parameter type
-                    if (call.is_libc) {
-                        if (LIBC_FUNCTIONS.get(call.name)) |signature| {
-                            if (i < signature.param_types.len) {
-                                const expected_type = self.libcTypeToLLVM(signature.param_types[i]);
-                                arg_value = self.castToType(arg_value, expected_type);
-                            }
-                        }
-                    } else {
-                        // For non-libc functions, try to cast based on external declaration
-                        var func_iter = c.LLVMGetFirstFunction(self.module);
-                        while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
-                            const func_name_ptr = c.LLVMGetValueName(func_iter);
-                            if (func_name_ptr != null) {
-                                const func_name_slice = std.mem.span(func_name_ptr);
-                                if (std.mem.eql(u8, func_name_slice, call.name) and c.LLVMIsDeclaration(func_iter) != 0) {
-                                    // Found external declaration, cast to match parameter type
-                                    const func_type = c.LLVMGlobalGetValueType(func_iter);
-                                    const param_count = c.LLVMCountParamTypes(func_type);
-                                    if (i < @as(usize, @intCast(param_count))) {
-                                        var param_types = std.ArrayList(c.LLVMTypeRef).init(self.allocator);
-                                        defer param_types.deinit();
-                                        try param_types.resize(@as(usize, @intCast(param_count)));
-                                        c.LLVMGetParamTypes(func_type, param_types.items.ptr);
-                                        const expected_type = param_types.items[i];
-                                        arg_value = self.castToType(arg_value, expected_type);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    if (call.is_libc) {
-                        arg_value = self.prepareArgumentForLibcCall(arg_value, call.name, i);
-                    }
-
-                    try args.append(arg_value);
+                try args.append(method.object);
+                for (method.args.items) |arg| {
+                    try args.append(arg);
                 }
-
-                const func_type = c.LLVMGlobalGetValueType(func);
-                const return_type = c.LLVMGetReturnType(func_type);
-                const is_void = c.LLVMGetTypeKind(return_type) == c.LLVMVoidTypeKind;
-
-                const call_name = if (is_void) "" else call.name;
-                const call_name_z = self.allocator.dupeZ(u8, call_name) catch return errors.CodegenError.OutOfMemory;
-                defer self.allocator.free(call_name_z);
-
-                if (args.items.len > 0) {
-                    return c.LLVMBuildCall2(self.builder, func_type, func, args.items.ptr, @as(c_uint, @intCast(args.items.len)), call_name_z.ptr);
-                } else {
-                    return c.LLVMBuildCall2(self.builder, func_type, func, null, 0, call_name_z.ptr);
-                }
+                const function_call = ast.FunctionCall{
+                    .name = method.method_name,
+                    .is_libc = false,
+                    .args = args,
+                };
+                return try self.generateFunctionCall(function_call);
+            },
+            .function_call => |call| {
+                return try self.generateFunctionCall(call);
             },
             .array_index => |arr_idx| {
                 var collected_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
@@ -2106,6 +2014,109 @@ pub const CodeGenerator = struct {
                 return c.LLVMBuildLoad2(self.builder, final_type, element_ptr, "array_element");
             },
             else => return errors.CodegenError.TypeMismatch,
+        }
+    }
+
+    fn generateFunctionCall(self: *CodeGenerator, call: ast.FunctionCall) errors.CodegenError!c.LLVMValueRef {
+        var func: c.LLVMValueRef = undefined;
+        if (call.is_libc) {
+            var found_external = false;
+            var func_iter = c.LLVMGetFirstFunction(self.module);
+            while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
+                const func_name_ptr = c.LLVMGetValueName(func_iter);
+                if (func_name_ptr != null) {
+                    const func_name_slice = std.mem.span(func_name_ptr);
+                    if (std.mem.eql(u8, func_name_slice, call.name) and c.LLVMIsDeclaration(func_iter) != 0) {
+                        func = func_iter;
+                        found_external = true;
+                        break;
+                    }
+                }
+            }
+            if (!found_external) {
+                if (LIBC_FUNCTIONS.get(call.name)) |signature| {
+                    func = try self.createFunctionFromSignature(call.name, signature);
+                } else {
+                    func = try self.declareLibcFunction(call.name);
+                }
+            }
+        } else {
+            var found_external = false;
+            var func_iter = c.LLVMGetFirstFunction(self.module);
+            while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
+                const func_name_ptr = c.LLVMGetValueName(func_iter);
+                if (func_name_ptr != null) {
+                    const func_name_slice = std.mem.span(func_name_ptr);
+                    if (std.mem.eql(u8, func_name_slice, call.name) and c.LLVMIsDeclaration(func_iter) != 0) {
+                        func = func_iter;
+                        found_external = true;
+                        break;
+                    }
+                }
+            }
+            if (!found_external) {
+                if (self.functions.get(call.name)) |declared_func| {
+                    func = declared_func;
+                } else {
+                    return errors.CodegenError.UndefinedFunction;
+                }
+            }
+        }
+
+        var args = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+        defer args.deinit();
+
+        for (call.args.items, 0..) |arg, i| {
+            var arg_value = try self.generateExpression(arg);
+            if (call.is_libc) {
+                if (LIBC_FUNCTIONS.get(call.name)) |signature| {
+                    if (i < signature.param_types.len) {
+                        const expected_type = self.libcTypeToLLVM(signature.param_types[i]);
+                        arg_value = self.castToType(arg_value, expected_type);
+                    }
+                }
+            } else {
+                var func_iter = c.LLVMGetFirstFunction(self.module);
+                while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
+                    const func_name_ptr = c.LLVMGetValueName(func_iter);
+                    if (func_name_ptr != null) {
+                        const func_name_slice = std.mem.span(func_name_ptr);
+                        if (std.mem.eql(u8, func_name_slice, call.name) and c.LLVMIsDeclaration(func_iter) != 0) {
+                            const func_type = c.LLVMGlobalGetValueType(func_iter);
+                            const param_count = c.LLVMCountParamTypes(func_type);
+                            if (i < @as(usize, @intCast(param_count))) {
+                                var param_types = std.ArrayList(c.LLVMTypeRef).init(self.allocator);
+                                defer param_types.deinit();
+                                try param_types.resize(@as(usize, @intCast(param_count)));
+                                c.LLVMGetParamTypes(func_type, param_types.items.ptr);
+                                const expected_type = param_types.items[i];
+                                arg_value = self.castToType(arg_value, expected_type);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (call.is_libc) {
+                arg_value = self.prepareArgumentForLibcCall(arg_value, call.name, i);
+            }
+
+            try args.append(arg_value);
+        }
+
+        const func_type = c.LLVMGlobalGetValueType(func);
+        const return_type = c.LLVMGetReturnType(func_type);
+        const is_void = c.LLVMGetTypeKind(return_type) == c.LLVMVoidTypeKind;
+
+        const call_name = if (is_void) "" else call.name;
+        const call_name_z = self.allocator.dupeZ(u8, call_name) catch return errors.CodegenError.OutOfMemory;
+        defer self.allocator.free(call_name_z);
+
+        if (args.items.len > 0) {
+            return c.LLVMBuildCall2(self.builder, func_type, func, args.items.ptr, @as(c_uint, @intCast(args.items.len)), call_name_z.ptr);
+        } else {
+            return c.LLVMBuildCall2(self.builder, func_type, func, null, 0, call_name_z.ptr);
         }
     }
 

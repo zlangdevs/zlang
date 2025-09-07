@@ -96,6 +96,10 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
                 .assignment => |as| collectUseStatements(as.value, dependencies),
                 .var_decl => |decl| if (decl.initializer) |init| collectUseStatements(init, dependencies),
                 .function_call => |call| for (call.args.items) |arg| collectUseStatements(arg, dependencies),
+                .method_call => |method| {
+                    collectUseStatements(method.object, dependencies);
+                    for (method.args.items) |arg| collectUseStatements(arg, dependencies);
+                },
                 .return_stmt => |ret| if (ret.expression) |expr| collectUseStatements(expr, dependencies),
                 .if_stmt => |if_stmt| {
                     collectUseStatements(if_stmt.condition, dependencies);

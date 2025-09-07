@@ -14,6 +14,7 @@ extern void zig_add_to_param_list(void* list, void* param);
 extern void* zig_create_function(const char* name, const char* return_type, void* params, void* body);
 extern void* zig_create_var_decl(const char* type_name, const char* name, void* initializer);
 extern void* zig_create_function_call(const char* name, int is_libc, void* args);
+extern void* zig_create_method_call(void* object, const char* method_name, void* args);
 extern void* zig_create_comparison(char op, void* lhs, void* rhs);
 extern void* zig_create_return_stmt(void* expression);
 extern void* zig_create_binary_op(char op, void* lhs, void* rhs);
@@ -476,6 +477,11 @@ postfix_expression:
   | postfix_expression TOKEN_DOT TOKEN_IDENTIFIER {
        const char* field_copy = strdup($3);
        $$ = zig_create_qualified_identifier($1, field_copy);
+       free($3);
+   }
+  | postfix_expression TOKEN_DOT TOKEN_IDENTIFIER TOKEN_LPAREN argument_list TOKEN_RPAREN {
+       const char* method_name_copy = strdup($3);
+       $$ = zig_create_method_call($1, method_name_copy, $5);
        free($3);
    }
   | postfix_expression TOKEN_INCREMENT { $$ = zig_create_unary_op('I', $1); }
