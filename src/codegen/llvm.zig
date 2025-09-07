@@ -203,6 +203,18 @@ pub const CodeGenerator = struct {
         }
     }
 
+    fn collectArrayIndices(self: *CodeGenerator, node: *ast.Node, indices: *std.ArrayList(c.LLVMValueRef)) !*ast.Node {
+        switch (node.data) {
+            .array_index => |arr_idx| {
+                const base = try self.collectArrayIndices(arr_idx.array, indices);
+                const index_value = try self.generateExpression(arr_idx.index);
+                try indices.append(index_value);
+                return base;
+            },
+            else => return node,
+        }
+    }
+
     fn generateArrayElementFieldAssignment(self: *CodeGenerator, array_index: ast.ArrayIndex, field_path: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
         const array_name = try self.getBaseIdentifierName(array_index.array);
         defer self.allocator.free(array_name);
@@ -887,6 +899,14 @@ pub const CodeGenerator = struct {
                             try self.generateStructFieldAssignment(struct_name, field_path, as.value);
                         }
                     },
+                    .array_index => |arr_idx| {
+                        const arr_ass = ast.ArrayAssignment{
+                            .array = arr_idx.array,
+                            .index = arr_idx.index,
+                            .value = as.value,
+                        };
+                        try self.generateArrayAssignment(arr_ass);
+                    },
                     else => {
                         return errors.CodegenError.TypeMismatch;
                     },
@@ -1109,19 +1129,37 @@ pub const CodeGenerator = struct {
     }
 
     fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignment) errors.CodegenError!void {
-        const array_name = try self.getBaseIdentifierName(arr_ass.array);
+        var collected_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+        defer collected_indices.deinit();
+
+        const base_node = try self.collectArrayIndices(arr_ass.array, &collected_indices);
+        const index_value = try self.generateExpression(arr_ass.index);
+        try collected_indices.append(index_value);
+
+        const array_name = try self.getBaseIdentifierName(base_node);
         defer self.allocator.free(array_name);
         const var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
 
-        const index_value = try self.generateExpression(arr_ass.index);
         const value = try self.generateExpression(arr_ass.value);
 
-        const element_type = c.LLVMGetElementType(var_info.type_ref);
+        var final_type = var_info.type_ref;
+        for (0..collected_indices.items.len) |_| {
+            final_type = c.LLVMGetElementType(final_type);
+        }
 
-        var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
-        const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
+        var all_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+        defer all_indices.deinit();
+        try all_indices.append(c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
 
-        const casted_value = self.castToType(value, element_type);
+        var i = collected_indices.items.len;
+        while (i > 0) {
+            i -= 1;
+            try all_indices.append(collected_indices.items[i]);
+        }
+
+        const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
+
+        const casted_value = self.castToType(value, final_type);
         _ = c.LLVMBuildStore(self.builder, casted_value, element_ptr);
     }
 
@@ -2037,15 +2075,35 @@ pub const CodeGenerator = struct {
                 }
             },
             .array_index => |arr_idx| {
-                const array_name = try self.getBaseIdentifierName(arr_idx.array);
+                var collected_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+                defer collected_indices.deinit();
+
+                const base_node = try self.collectArrayIndices(arr_idx.array, &collected_indices);
+                const index_value = try self.generateExpression(arr_idx.index);
+                try collected_indices.append(index_value);
+
+                const array_name = try self.getBaseIdentifierName(base_node);
                 defer self.allocator.free(array_name);
                 const var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
-                const index_value = try self.generateExpression(arr_idx.index);
-                const element_type = c.LLVMGetElementType(var_info.type_ref);
-                var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
-                const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
 
-                return c.LLVMBuildLoad2(self.builder, element_type, element_ptr, "array_element");
+                var final_type = var_info.type_ref;
+                for (0..collected_indices.items.len) |_| {
+                    final_type = c.LLVMGetElementType(final_type);
+                }
+
+                var all_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+                defer all_indices.deinit();
+                try all_indices.append(c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
+
+                var i = collected_indices.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    try all_indices.append(collected_indices.items[i]);
+                }
+
+                const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
+
+                return c.LLVMBuildLoad2(self.builder, final_type, element_ptr, "array_element");
             },
             else => return errors.CodegenError.TypeMismatch,
         }
