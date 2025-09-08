@@ -95,6 +95,13 @@ pub const ControlFlowAnalyzer = struct {
         return self.analyzeControlFlow(statements, index + 1, false);
     }
 
+    pub fn hasValidControlFlow(self: *ControlFlowAnalyzer, func: ast.Function) errors.CodegenError!bool {
+        if (std.mem.eql(u8, func.return_type, "void")) {
+            return true;
+        }
+        return self.analyzeStatementListEnhanced(func.body.items);
+    }
+
     fn analyzeIfStatementEnhanced(self: *ControlFlowAnalyzer, stmt: *ast.Node) errors.CodegenError!bool {
         switch (stmt.data) {
             .if_stmt => |if_stmt| {
