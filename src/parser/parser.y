@@ -48,6 +48,7 @@ extern void zig_add_enum_value(void* list, const char* name, void* value);
 extern void* zig_create_struct_field_list(void);
 extern void zig_add_struct_field(void* list, const char* name, const char* type_name);
 extern void zig_add_to_program(void* program, void* function);
+extern void zig_add_global_to_program(void* program, void* global);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
 
@@ -101,7 +102,7 @@ void* ast_root = NULL;
 
 %type <node> parameter_list parameters parameter
 %type <node> program function_list function statement_list statement
-%type <node> var_declaration function_call return_statement assignment brainfuck_statement
+%type <node> var_declaration global_variable_declaration function_call return_statement assignment brainfuck_statement
 %type <node> expression logical_or_expression logical_and_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression postfix_expression argument_list arguments
 %type <node> comparison_expression simple_term c_for_statement for_increment
 %type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration
@@ -131,6 +132,15 @@ function_list:
     }
    | function_list function {
         zig_add_to_program(ast_root, $2);
+    }
+   | global_variable_declaration {
+        if (ast_root == NULL) {
+            ast_root = zig_create_program();
+        }
+        zig_add_global_to_program(ast_root, $1);
+    }
+   | function_list global_variable_declaration {
+        zig_add_global_to_program(ast_root, $2);
     }
    | c_function_decl_statement {
         if (ast_root == NULL) {
@@ -366,8 +376,15 @@ var_declaration:
         $$ = zig_create_var_decl($1, $2, initializer);
         free($1);
     }
-  | type_name TOKEN_IDENTIFIER {
+   | type_name TOKEN_IDENTIFIER {
         $$ = zig_create_var_decl($1, $2, NULL);
+        free($1);
+    }
+;
+
+global_variable_declaration:
+    type_name TOKEN_IDENTIFIER TOKEN_ASSIGN expression TOKEN_SEMICOLON {
+        $$ = zig_create_var_decl($1, $2, $4);
         free($1);
     }
 ;

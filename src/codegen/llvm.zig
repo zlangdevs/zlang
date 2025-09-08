@@ -719,6 +719,9 @@ pub const CodeGenerator = struct {
                         // since structs are compiled to LLVM types when used in variables/functions
                     }
                 }
+                for (prog.globals.items) |glob| {
+                    try self.generateGlobalDeclaration(glob);
+                }
                 for (prog.functions.items) |func| {
                     if (func.data == .c_function_decl) {
                         try self.generateCFunctionDeclaration(func.data.c_function_decl);
@@ -1336,6 +1339,34 @@ pub const CodeGenerator = struct {
                 }
             },
             else => {},
+        }
+    }
+
+    fn generateGlobalDeclaration(self: *CodeGenerator, global_node: *ast.Node) errors.CodegenError!void {
+        switch (global_node.data) {
+            .var_decl => |decl| {
+                const var_type = self.getLLVMType(decl.type_name);
+                const var_name_z = self.allocator.dupeZ(u8, decl.name) catch return errors.CodegenError.OutOfMemory;
+                defer self.allocator.free(var_name_z);
+                const global_var = c.LLVMAddGlobal(self.module, var_type, var_name_z.ptr);
+
+                if (decl.initializer) |initializer| {
+                    const init_value = try self.generateExpression(initializer);
+                    const casted_init_value = self.castToType(init_value, var_type);
+                    c.LLVMSetInitializer(global_var, casted_init_value);
+                } else {
+                    const default_value = self.getDefaultValueForType(decl.type_name);
+                    c.LLVMSetInitializer(global_var, default_value);
+                }
+
+                c.LLVMSetLinkage(global_var, c.LLVMExternalLinkage);
+                try self.variables.put(try self.allocator.dupe(u8, decl.name), VariableInfo{
+                    .value = global_var,
+                    .type_ref = var_type,
+                    .type_name = decl.type_name,
+                });
+            },
+            else => return errors.CodegenError.TypeMismatch,
         }
     }
 

@@ -42,6 +42,7 @@ export fn zig_create_program() ?*anyopaque {
     const program_data = ast.NodeData{
         .program = ast.Program{
             .functions = std.ArrayList(*ast.Node).init(global_allocator),
+            .globals = std.ArrayList(*ast.Node).init(global_allocator),
         },
     };
 
@@ -488,6 +489,20 @@ export fn zig_add_to_program(program_ptr: ?*anyopaque, function_ptr: ?*anyopaque
     switch (program_node.data) {
         .program => |*prog| {
             prog.functions.append(function_node) catch return;
+        },
+        else => return,
+    }
+}
+
+export fn zig_add_global_to_program(program_ptr: ?*anyopaque, global_ptr: ?*anyopaque) void {
+    if (program_ptr == null or global_ptr == null) return;
+
+    const program_node = @as(*ast.Node, @ptrFromInt(@intFromPtr(program_ptr.?)));
+    const global_node = @as(*ast.Node, @ptrFromInt(@intFromPtr(global_ptr.?)));
+
+    switch (program_node.data) {
+        .program => |*prog| {
+            prog.globals.append(global_node) catch return;
         },
         else => return,
     }

@@ -122,6 +122,7 @@ pub const Function = struct {
 
 pub const Program = struct {
     functions: std.ArrayList(*Node),
+    globals: std.ArrayList(*Node),
 };
 
 pub const Brainfuck = struct {
@@ -254,6 +255,10 @@ pub const Node = struct {
                     func.destroy();
                 }
                 prog.functions.deinit();
+                for (prog.globals.items) |glob| {
+                    glob.destroy();
+                }
+                prog.globals.deinit();
             },
             .function => |func| {
                 for (func.body.items) |stmt| {
@@ -396,7 +401,12 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
 
     switch (node.data) {
         .program => |prog| {
-            std.debug.print("📁 Program ({} function{s})\n", .{ prog.functions.items.len, if (prog.functions.items.len == 1) @as([]const u8, "") else "s" });
+            const total_items = prog.functions.items.len + prog.globals.items.len;
+            std.debug.print("📁 Program ({} item{s})\n", .{ total_items, if (total_items == 1) @as([]const u8, "") else "s" });
+            for (prog.globals.items, 0..) |glob, i| {
+                const is_glob_last = i == prog.globals.items.len - 1 and prog.functions.items.len == 0;
+                printAST(glob, indent + 1, is_glob_last, false);
+            }
             for (prog.functions.items, 0..) |func, i| {
                 const is_func_last = i == prog.functions.items.len - 1;
                 printAST(func, indent + 1, is_func_last, false);
