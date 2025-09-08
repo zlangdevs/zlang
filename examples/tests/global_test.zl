@@ -1,0 +1,8 @@
+i32 x = 42;
+
+fun main() -> i32 {
+    @printf("x = %d\n", x);
+    x = 100;
+    @printf("x after assignment = %d\n", x);
+    return 0;
+}

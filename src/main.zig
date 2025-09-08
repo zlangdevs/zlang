@@ -82,6 +82,9 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
             for (prog.functions.items) |func| {
                 collectUseStatements(func, dependencies);
             }
+            for (prog.globals.items) |glob| {
+                collectUseStatements(glob, dependencies);
+            }
         },
         .function => |func| {
             for (func.body.items) |stmt| {
@@ -179,6 +182,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
     const merged_program_data = ast.NodeData{
         .program = ast.Program{
             .functions = std.ArrayList(*ast.Node).init(alloc),
+            .globals = std.ArrayList(*ast.Node).init(alloc),
         },
     };
 
@@ -190,6 +194,9 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
                     if (func.data != .use_stmt) {
                         try merged_program.data.program.functions.append(func);
                     }
+                }
+                for (prog.globals.items) |glob| {
+                    try merged_program.data.program.globals.append(glob);
                 }
             },
             else => {
