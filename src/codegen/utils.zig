@@ -28,6 +28,7 @@ pub const LibcFunctionSignature = struct {
     is_varargs: bool = false,
 };
 
+// Temporary thing untill we have std lib
 pub const LIBC_FUNCTIONS = std.StaticStringMap(LibcFunctionSignature).initComptime(.{
     .{ "printf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type}, .is_varargs = true } },
     .{ "puts", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type} } },

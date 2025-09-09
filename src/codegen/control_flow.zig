@@ -11,18 +11,6 @@ pub const ControlFlowAnalyzer = struct {
         };
     }
 
-    pub fn analyzeFunction(self: *ControlFlowAnalyzer, func: *ast.Node) errors.CodegenError!bool {
-        switch (func.data) {
-            .function => |f| {
-                if (std.mem.eql(u8, f.return_type, "void")) {
-                    return true;
-                }
-                return self.analyzeStatementList(f.body.items);
-            },
-            else => return errors.CodegenError.TypeMismatch,
-        }
-    }
-
     fn analyzeStatementList(self: *ControlFlowAnalyzer, statements: []const *ast.Node) errors.CodegenError!bool {
         if (statements.len == 0) return false;
         var i: usize = 0;
