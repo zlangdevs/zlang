@@ -47,6 +47,10 @@ extern void* zig_create_enum_value_list(void);
 extern void zig_add_enum_value(void* list, const char* name, void* value);
 extern void* zig_create_struct_field_list(void);
 extern void zig_add_struct_field(void* list, const char* name, const char* type_name);
+extern void zig_add_struct_field_with_default(void* list, const char* name, const char* type_name, void* default_value);
+extern void* zig_create_struct_initializer(const char* struct_name, void* field_values);
+extern void* zig_create_struct_field_value_list(void);
+extern void zig_add_struct_field_value(void* list, const char* field_name, void* value);
 extern void zig_add_to_program(void* program, void* function);
 extern void zig_add_global_to_program(void* program, void* global);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
@@ -60,7 +64,7 @@ extern void* current_scanner;
 void* ast_root = NULL;
 %}
 
-%expect 6
+%expect 7
 %expect-rr 0
 
 %define parse.error verbose
@@ -107,6 +111,7 @@ void* ast_root = NULL;
 %type <node> comparison_expression simple_term c_for_statement for_increment
 %type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration
 %type <node> enum_values enum_value_list struct_fields struct_field_list qualified_identifier
+%type <node> struct_initializer struct_field_values struct_field_value_list initializer_expression
 %type <string> type_name function_name string_literal complex_type_name module_path
 
 %start program
@@ -329,11 +334,11 @@ brainfuck_statement:
 ;
 
 assignment:
-    TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
+    TOKEN_IDENTIFIER TOKEN_ASSIGN initializer_expression {
         void* target = zig_create_identifier($1);
         $$ = zig_create_assignment(target, $3);
     }
-    | qualified_identifier TOKEN_ASSIGN expression {
+    | qualified_identifier TOKEN_ASSIGN initializer_expression {
         $$ = zig_create_assignment($1, $3);
     }
     | TOKEN_IDENTIFIER TOKEN_PLUS_ASSIGN expression {
@@ -371,19 +376,19 @@ array_initializer:
 ;
 
 var_declaration:
-    type_name TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
+    type_name TOKEN_IDENTIFIER TOKEN_ASSIGN initializer_expression {
         void* initializer = $4;
         $$ = zig_create_var_decl($1, $2, initializer);
         free($1);
     }
-   | type_name TOKEN_IDENTIFIER {
+    | type_name TOKEN_IDENTIFIER {
         $$ = zig_create_var_decl($1, $2, NULL);
         free($1);
     }
 ;
 
 global_variable_declaration:
-    type_name TOKEN_IDENTIFIER TOKEN_ASSIGN expression TOKEN_SEMICOLON {
+    type_name TOKEN_IDENTIFIER TOKEN_ASSIGN initializer_expression TOKEN_SEMICOLON {
         $$ = zig_create_var_decl($1, $2, $4);
         free($1);
     }
@@ -399,8 +404,8 @@ function_call:
 ;
 
 return_statement:
-    TOKEN_RETURN expression { $$ = zig_create_return_stmt($2); }
-  | TOKEN_RETURN { $$ = zig_create_return_stmt(NULL); }
+    TOKEN_RETURN initializer_expression { $$ = zig_create_return_stmt($2); }
+   | TOKEN_RETURN { $$ = zig_create_return_stmt(NULL); }
 ;
 
 argument_list:
@@ -563,6 +568,13 @@ struct_declaration:
     }
 ;
 
+struct_initializer:
+    TOKEN_IDENTIFIER TOKEN_LBRACE struct_field_values TOKEN_RBRACE {
+        $$ = zig_create_struct_initializer($1, $3);
+        free($1);
+    }
+;
+
 enum_values:
    /* empty */ { $$ = zig_create_enum_value_list(); }
    | enum_value_list { $$ = $1; }
@@ -607,8 +619,20 @@ struct_field_list:
         free($1);
         free($2);
     }
+    | TOKEN_IDENTIFIER type_name TOKEN_ASSIGN expression {
+        $$ = zig_create_struct_field_list();
+        zig_add_struct_field_with_default($$, $1, $2, $4);
+        free($1);
+        free($2);
+    }
     | struct_field_list TOKEN_COMMA TOKEN_IDENTIFIER type_name {
         zig_add_struct_field($1, $3, $4);
+        free($3);
+        free($4);
+        $$ = $1;
+    }
+    | struct_field_list TOKEN_COMMA TOKEN_IDENTIFIER type_name TOKEN_ASSIGN expression {
+        zig_add_struct_field_with_default($1, $3, $4, $6);
         free($3);
         free($4);
         $$ = $1;
@@ -617,6 +641,33 @@ struct_field_list:
         /* Allow trailing comma */
         $$ = $1;
     }
+;
+
+struct_field_values:
+    /* empty */ { $$ = zig_create_struct_field_value_list(); }
+    | struct_field_value_list { $$ = $1; }
+;
+
+struct_field_value_list:
+    TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
+        $$ = zig_create_struct_field_value_list();
+        zig_add_struct_field_value($$, $1, $3);
+        free($1);
+    }
+    | struct_field_value_list TOKEN_COMMA TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
+        zig_add_struct_field_value($1, $3, $5);
+        free($3);
+        $$ = $1;
+    }
+    | struct_field_value_list TOKEN_COMMA {
+        /* Allow trailing comma */
+        $$ = $1;
+    }
+;
+
+initializer_expression:
+    expression { $$ = $1; }
+   | struct_initializer { $$ = $1; }
 ;
 
 module_path:
