@@ -608,13 +608,13 @@ pub const CodeGenerator = struct {
         // There is some confusing shit going on down there....
         const valid_control_flow = try self.control_flow_analyzer.hasValidControlFlow(func);
         if (!valid_control_flow and !std.mem.eql(u8, func.return_type, "void")) {
-            if (func.body.items.len == 0 or !self.isReturnStatement(func.body.items[func.body.items.len - 1])) {
+            if (func.body.items.len == 0 or !utils.isReturnStatement(func.body.items[func.body.items.len - 1])) {
                 return errors.CodegenError.TypeMismatch;
             }
         }
         if (valid_control_flow) {
             const last_is_return = if (func.body.items.len > 0)
-                self.isReturnStatement(func.body.items[func.body.items.len - 1])
+                utils.isReturnStatement(func.body.items[func.body.items.len - 1])
             else
                 false;
             if (std.mem.eql(u8, func.return_type, "void")) {
@@ -633,14 +633,6 @@ pub const CodeGenerator = struct {
                 }
             }
         }
-    }
-
-    fn isReturnStatement(self: *CodeGenerator, stmt: *ast.Node) bool {
-        _ = self;
-        return switch (stmt.data) {
-            .return_stmt => true,
-            else => false,
-        };
     }
 
     fn generateStatement(self: *CodeGenerator, stmt: *ast.Node) errors.CodegenError!void {
@@ -760,13 +752,16 @@ pub const CodeGenerator = struct {
 
     fn generateIfStatement(self: *CodeGenerator, if_stmt: ast.IfStmt) errors.CodegenError!void {
         const current_function = self.current_function orelse return errors.CodegenError.TypeMismatch;
+        
         const then_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "then");
         const else_bb = if (if_stmt.else_body != null)
             c.LLVMAppendBasicBlockInContext(self.context, current_function, "else")
         else
             null;
+            
         const merge_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "ifcont");
         const condition_value = try self.generateExpression(if_stmt.condition);
+        
         const condition_bool = self.convertToBool(condition_value);
         if (else_bb) |else_block| {
             _ = c.LLVMBuildCondBr(self.builder, condition_bool, then_bb, else_block);

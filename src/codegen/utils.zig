@@ -69,6 +69,13 @@ pub fn libcTypeToLLVM(cg: *codegen.CodeGenerator, libc_type: LibcType) c.LLVMTyp
     };
 }
 
+pub fn isReturnStatement(stmt: *ast.Node) bool {
+    return switch (stmt.data) {
+        .return_stmt => true,
+        else => false,
+    };
+}
+
 pub fn convertToBool(cg: *codegen.CodeGenerator, value: c.LLVMValueRef) c.LLVMValueRef {
     const value_type = c.LLVMTypeOf(value);
     const type_kind = c.LLVMGetTypeKind(value_type);
