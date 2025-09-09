@@ -24,7 +24,7 @@ pub const CodeGenerator = struct {
     current_function: ?c.LLVMValueRef,
     current_function_return_type: []const u8,
     control_flow_analyzer: control_flow.ControlFlowAnalyzer,
-    loop_context_stack: std.ArrayList(LoopContext),
+    loop_stack: std.ArrayList(LoopContext),
     variable_scopes: std.ArrayList(std.HashMap([]const u8, VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage)),
     uses_float_modulo: bool,
     struct_types: std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
@@ -70,7 +70,7 @@ pub const CodeGenerator = struct {
             .current_function = null,
             .current_function_return_type = "",
             .control_flow_analyzer = control_flow_analyzer,
-            .loop_context_stack = std.ArrayList(LoopContext).init(allocator),
+            .loop_stack = std.ArrayList(LoopContext).init(allocator),
             .variable_scopes = variable_scopes,
             .uses_float_modulo = false,
             .struct_types = std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
@@ -81,7 +81,7 @@ pub const CodeGenerator = struct {
     pub fn deinit(self: *CodeGenerator) void {
         self.functions.deinit();
         self.external_c_functions.deinit();
-        self.loop_context_stack.deinit();
+        self.loop_stack.deinit();
         self.struct_types.deinit();
         var struct_fields_iter = self.struct_fields.iterator();
         while (struct_fields_iter.next()) |entry| {
@@ -752,16 +752,16 @@ pub const CodeGenerator = struct {
 
     fn generateIfStatement(self: *CodeGenerator, if_stmt: ast.IfStmt) errors.CodegenError!void {
         const current_function = self.current_function orelse return errors.CodegenError.TypeMismatch;
-        
+
         const then_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "then");
         const else_bb = if (if_stmt.else_body != null)
             c.LLVMAppendBasicBlockInContext(self.context, current_function, "else")
         else
             null;
-            
+
         const merge_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "ifcont");
         const condition_value = try self.generateExpression(if_stmt.condition);
-        
+
         const condition_bool = self.convertToBool(condition_value);
         if (else_bb) |else_block| {
             _ = c.LLVMBuildCondBr(self.builder, condition_bool, then_bb, else_block);
@@ -797,45 +797,56 @@ pub const CodeGenerator = struct {
 
     fn generateForStatement(self: *CodeGenerator, for_stmt: ast.ForStmt) errors.CodegenError!void {
         const current_function = self.current_function orelse return errors.CodegenError.TypeMismatch;
+        
+        const body_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "for_body");
+        const exit_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "for_exit");
+        
         if (for_stmt.condition) |cond| {
             const condition_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "for_cond");
-            const body_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "for_body");
-            const exit_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "for_exit");
+
             const loop_context = LoopContext{
                 .break_block = exit_bb,
                 .continue_block = condition_bb,
             };
-            try self.loop_context_stack.append(loop_context);
+
+            try self.loop_stack.append(loop_context);
             _ = c.LLVMBuildBr(self.builder, condition_bb);
             c.LLVMPositionBuilderAtEnd(self.builder, condition_bb);
+
             const cond_value = try self.generateExpression(cond);
             const cond_bool = self.convertToBool(cond_value);
+
             _ = c.LLVMBuildCondBr(self.builder, cond_bool, body_bb, exit_bb);
             c.LLVMPositionBuilderAtEnd(self.builder, body_bb);
+
             try self.pushScope();
             for (for_stmt.body.items) |stmt| {
                 try self.generateStatement(stmt);
             }
+
             self.popScope();
             if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
                 _ = c.LLVMBuildBr(self.builder, condition_bb);
             }
+
             c.LLVMPositionBuilderAtEnd(self.builder, exit_bb);
-            _ = self.loop_context_stack.pop();
+            _ = self.loop_stack.pop();
         } else {
-            const body_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "for_body");
-            const exit_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "for_exit");
+            
             const loop_context = LoopContext{
                 .break_block = exit_bb,
                 .continue_block = body_bb,
             };
-            try self.loop_context_stack.append(loop_context);
+
+            try self.loop_stack.append(loop_context);
             _ = c.LLVMBuildBr(self.builder, body_bb);
             c.LLVMPositionBuilderAtEnd(self.builder, body_bb);
+
             try self.pushScope();
             for (for_stmt.body.items) |stmt| {
                 try self.generateStatement(stmt);
             }
+
             self.popScope();
 
             if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
@@ -843,7 +854,7 @@ pub const CodeGenerator = struct {
             }
 
             c.LLVMPositionBuilderAtEnd(self.builder, exit_bb);
-            _ = self.loop_context_stack.pop();
+            _ = self.loop_stack.pop();
         }
     }
 
@@ -871,7 +882,7 @@ pub const CodeGenerator = struct {
             .break_block = exit_bb,
             .continue_block = increment_bb,
         };
-        try self.loop_context_stack.append(loop_context);
+        try self.loop_stack.append(loop_context);
         c.LLVMPositionBuilderAtEnd(self.builder, body_bb);
         for (c_for_stmt.body.items) |stmt| {
             try self.generateStatement(stmt);
@@ -885,8 +896,26 @@ pub const CodeGenerator = struct {
         }
         _ = c.LLVMBuildBr(self.builder, condition_bb);
         c.LLVMPositionBuilderAtEnd(self.builder, exit_bb);
-        _ = self.loop_context_stack.pop();
+        _ = self.loop_stack.pop();
         self.popScope();
+    }
+
+    fn generateContinueStatement(self: *CodeGenerator) errors.CodegenError!void {
+        if (self.loop_stack.items.len == 0) {
+            return errors.CodegenError.TypeMismatch;
+        }
+        const loop_context = self.loop_stack.items[self.loop_stack.items.len - 1];
+        const continue_block = loop_context.continue_block;
+        _ = c.LLVMBuildBr(self.builder, continue_block);
+    }
+
+    fn generateBreakStatement(self: *CodeGenerator) errors.CodegenError!void {
+        if (self.loop_stack.items.len == 0) {
+            return errors.CodegenError.TypeMismatch;
+        }
+        const loop_context = self.loop_stack.items[self.loop_stack.items.len - 1];
+        const break_block = loop_context.break_block;
+        _ = c.LLVMBuildBr(self.builder, break_block);
     }
 
     fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignment) errors.CodegenError!void {
@@ -1000,24 +1029,6 @@ pub const CodeGenerator = struct {
         } else {
             return errors.CodegenError.TypeMismatch;
         }
-    }
-
-    fn generateContinueStatement(self: *CodeGenerator) errors.CodegenError!void {
-        if (self.loop_context_stack.items.len == 0) {
-            return errors.CodegenError.TypeMismatch;
-        }
-        const loop_context = self.loop_context_stack.items[self.loop_context_stack.items.len - 1];
-        const continue_block = loop_context.continue_block;
-        _ = c.LLVMBuildBr(self.builder, continue_block);
-    }
-
-    fn generateBreakStatement(self: *CodeGenerator) errors.CodegenError!void {
-        if (self.loop_context_stack.items.len == 0) {
-            return errors.CodegenError.TypeMismatch;
-        }
-        const loop_context = self.loop_context_stack.items[self.loop_context_stack.items.len - 1];
-        const break_block = loop_context.break_block;
-        _ = c.LLVMBuildBr(self.builder, break_block);
     }
 
     fn generateCFunctionDeclaration(self: *CodeGenerator, c_func: ast.CFunctionDecl) errors.CodegenError!void {
