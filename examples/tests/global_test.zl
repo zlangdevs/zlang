@@ -1,6 +1,6 @@
 i32 x = 42;
 
-fun main() -> i32 {
+fun main() >> i32 {
     @printf("x = (expected 42):%d\n", x);
     x += 100;
     @printf("x after assignment = (expected 142):%d\n", x);
