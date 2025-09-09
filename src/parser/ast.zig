@@ -31,6 +31,7 @@ pub const NodeType = enum {
     use_stmt,
     enum_decl,
     struct_decl,
+    struct_initializer,
     qualified_identifier,
 };
 
@@ -189,11 +190,22 @@ pub const EnumDecl = struct {
 pub const StructField = struct {
     name: []const u8,
     type_name: []const u8,
+    default_value: ?*Node,
 };
 
 pub const StructDecl = struct {
     name: []const u8,
     fields: std.ArrayList(StructField),
+};
+
+pub const StructInitializer = struct {
+    struct_name: []const u8,
+    field_values: std.ArrayList(StructFieldValue),
+};
+
+pub const StructFieldValue = struct {
+    field_name: []const u8,
+    value: *Node,
 };
 
 pub const QualifiedIdentifier = struct {
@@ -232,6 +244,7 @@ pub const NodeData = union(NodeType) {
     use_stmt: UseStmt,
     enum_decl: EnumDecl,
     struct_decl: StructDecl,
+    struct_initializer: StructInitializer,
     qualified_identifier: QualifiedIdentifier,
 };
 
@@ -368,8 +381,19 @@ pub const Node = struct {
                 for (struct_decl.fields.items) |*field| {
                     self.allocator.free(field.name);
                     self.allocator.free(field.type_name);
+                    if (field.default_value) |default_val| {
+                        default_val.destroy();
+                    }
                 }
                 struct_decl.fields.deinit();
+            },
+            .struct_initializer => |struct_init| {
+                self.allocator.free(struct_init.struct_name);
+                for (struct_init.field_values.items) |*field_val| {
+                    self.allocator.free(field_val.field_name);
+                    field_val.value.destroy();
+                }
+                struct_init.field_values.deinit();
             },
             .qualified_identifier => |qual_id| {
                 qual_id.base.destroy();
@@ -660,7 +684,22 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             for (struct_decl.fields.items, 0..) |field, i| {
                 const is_last_field = i == struct_decl.fields.items.len - 1;
                 printIndent(indent + 1, is_last_field, false);
-                std.debug.print("Field: \x1b[36m{s}\x1b[0m: \x1b[33m{s}\x1b[0m\n", .{ field.name, field.type_name });
+                std.debug.print("Field: \x1b[36m{s}\x1b[0m: \x1b[33m{s}\x1b[0m", .{ field.name, field.type_name });
+                if (field.default_value) |default_val| {
+                    std.debug.print(" = \n", .{});
+                    printAST(default_val, indent + 2, true, false);
+                } else {
+                    std.debug.print("\n", .{});
+                }
+            }
+        },
+        .struct_initializer => |struct_init| {
+            std.debug.print("🏗️  Struct Initializer: \x1b[32m{s}\x1b[0m ({} field values)\n", .{ struct_init.struct_name, struct_init.field_values.items.len });
+            for (struct_init.field_values.items, 0..) |field_val, i| {
+                const is_last_val = i == struct_init.field_values.items.len - 1;
+                printIndent(indent + 1, is_last_val, false);
+                std.debug.print("Field: \x1b[36m{s}\x1b[0m = \n", .{field_val.field_name});
+                printAST(field_val.value, indent + 2, true, false);
             }
         },
     }
