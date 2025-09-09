@@ -82,6 +82,9 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
             for (prog.functions.items) |func| {
                 collectUseStatements(func, dependencies);
             }
+            for (prog.globals.items) |glob| {
+                collectUseStatements(glob, dependencies);
+            }
         },
         .function => |func| {
             for (func.body.items) |stmt| {
@@ -96,6 +99,10 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
                 .assignment => |as| collectUseStatements(as.value, dependencies),
                 .var_decl => |decl| if (decl.initializer) |init| collectUseStatements(init, dependencies),
                 .function_call => |call| for (call.args.items) |arg| collectUseStatements(arg, dependencies),
+                .method_call => |method| {
+                    collectUseStatements(method.object, dependencies);
+                    for (method.args.items) |arg| collectUseStatements(arg, dependencies);
+                },
                 .return_stmt => |ret| if (ret.expression) |expr| collectUseStatements(expr, dependencies),
                 .if_stmt => |if_stmt| {
                     collectUseStatements(if_stmt.condition, dependencies);
@@ -175,6 +182,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
     const merged_program_data = ast.NodeData{
         .program = ast.Program{
             .functions = std.ArrayList(*ast.Node).init(alloc),
+            .globals = std.ArrayList(*ast.Node).init(alloc),
         },
     };
 
@@ -186,6 +194,9 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
                     if (func.data != .use_stmt) {
                         try merged_program.data.program.functions.append(func);
                     }
+                }
+                for (prog.globals.items) |glob| {
+                    try merged_program.data.program.globals.append(glob);
                 }
             },
             else => {
@@ -349,9 +360,10 @@ pub fn main() !u8 {
         const error_msg = switch (err) {
             error.FunctionCreationFailed => "Failed to create function.",
             error.TypeMismatch => "Type mismatch in code generation.",
+            error.NullNotAllowedInNonPointerType => "Null can only be assigned to pointer types. Cannot assign null to non-pointer type.",
             error.UndefinedFunction => "Undefined function called.",
             error.UndefinedVariable => "Undefined variable used.",
-            error.UnsupportedOperation => "Unsopported operator used",
+            error.UnsupportedOperation => "Unsupported operator used",
             error.OutOfMemory => "Out of memory during code generation.",
             error.RedeclaredVariable => "Variable reinitialization",
             else => "Unknown code generation error.",

@@ -42,6 +42,7 @@ export fn zig_create_program() ?*anyopaque {
     const program_data = ast.NodeData{
         .program = ast.Program{
             .functions = std.ArrayList(*ast.Node).init(global_allocator),
+            .globals = std.ArrayList(*ast.Node).init(global_allocator),
         },
     };
 
@@ -358,6 +359,16 @@ const StructFieldList = struct {
     }
 };
 
+const StructFieldValueList = struct {
+    items: std.ArrayList(ast.StructFieldValue),
+
+    fn init(allocator: std.mem.Allocator) StructFieldValueList {
+        return StructFieldValueList{
+            .items = std.ArrayList(ast.StructFieldValue).init(allocator),
+        };
+    }
+};
+
 export fn zig_create_enum_value_list() ?*anyopaque {
     const enum_value_list = global_allocator.create(EnumValueList) catch return null;
     enum_value_list.* = EnumValueList.init(global_allocator);
@@ -421,6 +432,30 @@ export fn zig_add_struct_field(list_ptr: ?*anyopaque, name_ptr: [*c]const u8, ty
     const struct_field = ast.StructField{
         .name = name_copy,
         .type_name = type_name_copy,
+        .default_value = null,
+    };
+
+    struct_field_list.items.append(struct_field) catch return;
+}
+
+export fn zig_add_struct_field_with_default(list_ptr: ?*anyopaque, name_ptr: [*c]const u8, type_name_ptr: [*c]const u8, default_value_ptr: ?*anyopaque) void {
+    if (list_ptr == null) return;
+    const struct_field_list = @as(*StructFieldList, @ptrFromInt(@intFromPtr(list_ptr.?)));
+    const name = std.mem.span(name_ptr);
+    const type_name = std.mem.span(type_name_ptr);
+    const name_copy = global_allocator.dupe(u8, name) catch return;
+    const type_name_copy = global_allocator.dupe(u8, type_name) catch {
+        global_allocator.free(name_copy);
+        return;
+    };
+    var default_value: ?*ast.Node = null;
+    if (default_value_ptr) |ptr| {
+        default_value = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
+    }
+    const struct_field = ast.StructField{
+        .name = name_copy,
+        .type_name = type_name_copy,
+        .default_value = default_value,
     };
 
     struct_field_list.items.append(struct_field) catch return;
@@ -447,6 +482,47 @@ export fn zig_create_struct_decl(name_ptr: [*c]const u8, fields_ptr: ?*anyopaque
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_struct_initializer(struct_name_ptr: [*c]const u8, field_values_ptr: ?*anyopaque) ?*anyopaque {
+    const struct_name = std.mem.span(struct_name_ptr);
+    const struct_name_copy = global_allocator.dupe(u8, struct_name) catch return null;
+    var field_values = std.ArrayList(ast.StructFieldValue).init(global_allocator);
+    if (field_values_ptr) |ptr| {
+        const struct_field_value_list = @as(*StructFieldValueList, @ptrFromInt(@intFromPtr(ptr)));
+        field_values = struct_field_value_list.items;
+    }
+    const struct_init_data = ast.NodeData{
+        .struct_initializer = ast.StructInitializer{
+            .struct_name = struct_name_copy,
+            .field_values = field_values,
+        },
+    };
+    const node = ast.Node.create(global_allocator, struct_init_data) catch {
+        global_allocator.free(struct_name_copy);
+        return null;
+    };
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_struct_field_value_list() ?*anyopaque {
+    const struct_field_value_list = global_allocator.create(StructFieldValueList) catch return null;
+    struct_field_value_list.* = StructFieldValueList.init(global_allocator);
+    return @as(*anyopaque, @ptrCast(struct_field_value_list));
+}
+
+export fn zig_add_struct_field_value(list_ptr: ?*anyopaque, field_name_ptr: [*c]const u8, value_ptr: ?*anyopaque) void {
+    if (list_ptr == null or field_name_ptr == null or value_ptr == null) return;
+    const struct_field_value_list = @as(*StructFieldValueList, @ptrFromInt(@intFromPtr(list_ptr.?)));
+    const field_name = std.mem.span(field_name_ptr);
+    const field_name_copy = global_allocator.dupe(u8, field_name) catch return;
+    const value = @as(*ast.Node, @ptrFromInt(@intFromPtr(value_ptr.?)));
+    const struct_field_value = ast.StructFieldValue{
+        .field_name = field_name_copy,
+        .value = value,
+    };
+
+    struct_field_value_list.items.append(struct_field_value) catch return;
+}
+
 export fn zig_create_bool_literal(value: c_int) ?*anyopaque {
     const bool_data = ast.NodeData{
         .bool_literal = ast.BoolLiteral{
@@ -455,6 +531,15 @@ export fn zig_create_bool_literal(value: c_int) ?*anyopaque {
     };
 
     const node = ast.Node.create(global_allocator, bool_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_null_literal() ?*anyopaque {
+    const null_data = ast.NodeData{
+        .null_literal = ast.NullLiteral{},
+    };
+
+    const node = ast.Node.create(global_allocator, null_data) catch return null;
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -479,6 +564,20 @@ export fn zig_add_to_program(program_ptr: ?*anyopaque, function_ptr: ?*anyopaque
     switch (program_node.data) {
         .program => |*prog| {
             prog.functions.append(function_node) catch return;
+        },
+        else => return,
+    }
+}
+
+export fn zig_add_global_to_program(program_ptr: ?*anyopaque, global_ptr: ?*anyopaque) void {
+    if (program_ptr == null or global_ptr == null) return;
+
+    const program_node = @as(*ast.Node, @ptrFromInt(@intFromPtr(program_ptr.?)));
+    const global_node = @as(*ast.Node, @ptrFromInt(@intFromPtr(global_ptr.?)));
+
+    switch (program_node.data) {
+        .program => |*prog| {
+            prog.globals.append(global_node) catch return;
         },
         else => return,
     }
@@ -659,6 +758,31 @@ export fn zig_create_array_assignment(array_ptr: ?*anyopaque, index_ptr: ?*anyop
     };
 
     const node = ast.Node.create(global_allocator, array_assignment_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_method_call(object_ptr: ?*anyopaque, method_name_ptr: [*c]const u8, args_ptr: ?*anyopaque) ?*anyopaque {
+    if (object_ptr == null or method_name_ptr == null) return null;
+
+    const object = @as(*ast.Node, @ptrFromInt(@intFromPtr(object_ptr.?)));
+    const method_name = std.mem.span(method_name_ptr);
+    const method_name_copy = global_allocator.dupe(u8, method_name) catch return null;
+
+    var args = std.ArrayList(*ast.Node).init(global_allocator);
+    if (args_ptr) |ptr| {
+        const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
+        args = node_list.items;
+    }
+
+    const method_call_data = ast.NodeData{
+        .method_call = ast.MethodCall{
+            .object = object,
+            .method_name = method_name_copy,
+            .args = args,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, method_call_data) catch return null;
     return @as(*anyopaque, @ptrCast(node));
 }
 

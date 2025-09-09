@@ -6,6 +6,7 @@ pub const NodeType = enum {
     assignment,
     var_decl,
     function_call,
+    method_call,
     return_stmt,
     identifier,
     unary_op,
@@ -14,6 +15,7 @@ pub const NodeType = enum {
     char_literal,
     string_literal,
     bool_literal,
+    null_literal,
     binary_op,
     brainfuck,
     comparison,
@@ -29,6 +31,7 @@ pub const NodeType = enum {
     use_stmt,
     enum_decl,
     struct_decl,
+    struct_initializer,
     qualified_identifier,
 };
 
@@ -71,6 +74,8 @@ pub const BoolLiteral = struct {
     value: bool,
 };
 
+pub const NullLiteral = struct {};
+
 pub const Assignment = struct {
     target: *Node,
     value: *Node,
@@ -94,6 +99,12 @@ pub const FunctionCall = struct {
     args: std.ArrayList(*Node),
 };
 
+pub const MethodCall = struct {
+    object: *Node,
+    method_name: []const u8,
+    args: std.ArrayList(*Node),
+};
+
 pub const ReturnStmt = struct {
     expression: ?*Node,
 };
@@ -112,6 +123,7 @@ pub const Function = struct {
 
 pub const Program = struct {
     functions: std.ArrayList(*Node),
+    globals: std.ArrayList(*Node),
 };
 
 pub const Brainfuck = struct {
@@ -178,11 +190,22 @@ pub const EnumDecl = struct {
 pub const StructField = struct {
     name: []const u8,
     type_name: []const u8,
+    default_value: ?*Node,
 };
 
 pub const StructDecl = struct {
     name: []const u8,
     fields: std.ArrayList(StructField),
+};
+
+pub const StructInitializer = struct {
+    struct_name: []const u8,
+    field_values: std.ArrayList(StructFieldValue),
+};
+
+pub const StructFieldValue = struct {
+    field_name: []const u8,
+    value: *Node,
 };
 
 pub const QualifiedIdentifier = struct {
@@ -196,6 +219,7 @@ pub const NodeData = union(NodeType) {
     assignment: Assignment,
     var_decl: VarDecl,
     function_call: FunctionCall,
+    method_call: MethodCall,
     return_stmt: ReturnStmt,
     identifier: Identifier,
     unary_op: UnaryOp,
@@ -204,6 +228,7 @@ pub const NodeData = union(NodeType) {
     char_literal: CharLiteral,
     string_literal: StringLiteral,
     bool_literal: BoolLiteral,
+    null_literal: NullLiteral,
     binary_op: BinaryOp,
     brainfuck: Brainfuck,
     comparison: Comparison,
@@ -219,6 +244,7 @@ pub const NodeData = union(NodeType) {
     use_stmt: UseStmt,
     enum_decl: EnumDecl,
     struct_decl: StructDecl,
+    struct_initializer: StructInitializer,
     qualified_identifier: QualifiedIdentifier,
 };
 
@@ -242,6 +268,10 @@ pub const Node = struct {
                     func.destroy();
                 }
                 prog.functions.deinit();
+                for (prog.globals.items) |glob| {
+                    glob.destroy();
+                }
+                prog.globals.deinit();
             },
             .function => |func| {
                 for (func.body.items) |stmt| {
@@ -254,6 +284,15 @@ pub const Node = struct {
                     arg.destroy();
                 }
                 call.args.deinit();
+                self.allocator.free(call.name);
+            },
+            .method_call => |method| {
+                method.object.destroy();
+                for (method.args.items) |arg| {
+                    arg.destroy();
+                }
+                method.args.deinit();
+                self.allocator.free(method.method_name);
             },
             .comparison => |comp| {
                 comp.lhs.destroy();
@@ -342,8 +381,19 @@ pub const Node = struct {
                 for (struct_decl.fields.items) |*field| {
                     self.allocator.free(field.name);
                     self.allocator.free(field.type_name);
+                    if (field.default_value) |default_val| {
+                        default_val.destroy();
+                    }
                 }
                 struct_decl.fields.deinit();
+            },
+            .struct_initializer => |struct_init| {
+                self.allocator.free(struct_init.struct_name);
+                for (struct_init.field_values.items) |*field_val| {
+                    self.allocator.free(field_val.field_name);
+                    field_val.value.destroy();
+                }
+                struct_init.field_values.deinit();
             },
             .qualified_identifier => |qual_id| {
                 qual_id.base.destroy();
@@ -375,7 +425,12 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
 
     switch (node.data) {
         .program => |prog| {
-            std.debug.print("📁 Program ({} function{s})\n", .{ prog.functions.items.len, if (prog.functions.items.len == 1) @as([]const u8, "") else "s" });
+            const total_items = prog.functions.items.len + prog.globals.items.len;
+            std.debug.print("📁 Program ({} item{s})\n", .{ total_items, if (total_items == 1) @as([]const u8, "") else "s" });
+            for (prog.globals.items, 0..) |glob, i| {
+                const is_glob_last = i == prog.globals.items.len - 1 and prog.functions.items.len == 0;
+                printAST(glob, indent + 1, is_glob_last, false);
+            }
             for (prog.functions.items, 0..) |func, i| {
                 const is_func_last = i == prog.functions.items.len - 1;
                 printAST(func, indent + 1, is_func_last, false);
@@ -418,6 +473,15 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             std.debug.print("{s} FunctionCall: \x1b[35m{s}{s}\x1b[0m ({} arg{s})\n", .{ icon, prefix, call.name, call.args.items.len, if (call.args.items.len == 1) @as([]const u8, "") else "s" });
             for (call.args.items, 0..) |arg, i| {
                 const is_arg_last = i == call.args.items.len - 1;
+                printAST(arg, indent + 1, is_arg_last, false);
+            }
+        },
+        .method_call => |method| {
+            std.debug.print("📞 MethodCall: \x1b[35m{s}\x1b[0m ({} arg{s})\n", .{ method.method_name, method.args.items.len, if (method.args.items.len == 1) @as([]const u8, "") else "s" });
+            std.debug.print("    Object:\n", .{});
+            printAST(method.object, indent + 1, false, false);
+            for (method.args.items, 0..) |arg, i| {
+                const is_arg_last = i == method.args.items.len - 1;
                 printAST(arg, indent + 1, is_arg_last, false);
             }
         },
@@ -498,6 +562,9 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         },
         .bool_literal => |bool_val| {
             std.debug.print("✅ Boolean: \x1b[35m{s}\x1b[0m\n", .{if (bool_val.value) "true" else "false"});
+        },
+        .null_literal => {
+            std.debug.print("⬛ Null: \x1b[35mnull\x1b[0m\n", .{});
         },
         .if_stmt => |if_stmt| {
             const has_else = if (if_stmt.else_body) |else_body| else_body.items.len > 0 else false;
@@ -617,7 +684,22 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             for (struct_decl.fields.items, 0..) |field, i| {
                 const is_last_field = i == struct_decl.fields.items.len - 1;
                 printIndent(indent + 1, is_last_field, false);
-                std.debug.print("Field: \x1b[36m{s}\x1b[0m: \x1b[33m{s}\x1b[0m\n", .{ field.name, field.type_name });
+                std.debug.print("Field: \x1b[36m{s}\x1b[0m: \x1b[33m{s}\x1b[0m", .{ field.name, field.type_name });
+                if (field.default_value) |default_val| {
+                    std.debug.print(" = \n", .{});
+                    printAST(default_val, indent + 2, true, false);
+                } else {
+                    std.debug.print("\n", .{});
+                }
+            }
+        },
+        .struct_initializer => |struct_init| {
+            std.debug.print("🏗️  Struct Initializer: \x1b[32m{s}\x1b[0m ({} field values)\n", .{ struct_init.struct_name, struct_init.field_values.items.len });
+            for (struct_init.field_values.items, 0..) |field_val, i| {
+                const is_last_val = i == struct_init.field_values.items.len - 1;
+                printIndent(indent + 1, is_last_val, false);
+                std.debug.print("Field: \x1b[36m{s}\x1b[0m = \n", .{field_val.field_name});
+                printAST(field_val.value, indent + 2, true, false);
             }
         },
     }
