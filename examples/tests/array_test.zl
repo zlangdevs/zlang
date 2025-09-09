@@ -29,5 +29,21 @@ fun main() >> i32 {
     myarr[4] = myarr[2] * 5 + 3;
     @printf("myarr[2] (expected 8):%d\n", myarr[4]);
     
+    u32 sum = 0;
+    arr<arr<arr<arr<i32, 5>, 5>, 5>, 5> field;
+    field[0][0][0][0] = 1;
+    
+    ?? filling 4D array lmao
+    for i8 a = 0; a < 5; a++ {
+        for i8 b = 0; b < 5; b++ {
+            for i8 c = 0; c < 5; c++ {
+                for i8 d = 0; d < 5; d++ {
+                    field[a][b][c][d] = a + b + c + d;
+                    sum += field[a][b][c][d];
+                }
+            }
+        }
+    }
+    @printf("sum: (expected 80):%d\n");
     return 0;
 }

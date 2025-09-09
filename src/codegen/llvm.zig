@@ -29,6 +29,7 @@ pub const CodeGenerator = struct {
     uses_float_modulo: bool,
     struct_types: std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     struct_fields: std.HashMap([]const u8, std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    struct_declarations: std.HashMap([]const u8, ast.StructDecl, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
 
     const VariableInfo = struct {
         value: c.LLVMValueRef,
@@ -75,6 +76,7 @@ pub const CodeGenerator = struct {
             .uses_float_modulo = false,
             .struct_types = std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .struct_fields = std.HashMap([]const u8, std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .struct_declarations = std.HashMap([]const u8, ast.StructDecl, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
         };
     }
 
@@ -88,6 +90,7 @@ pub const CodeGenerator = struct {
             entry.value_ptr.deinit();
         }
         self.struct_fields.deinit();
+        self.struct_declarations.deinit();
 
         for (self.variable_scopes.items) |*scope| {
             scope.deinit();
@@ -156,6 +159,18 @@ pub const CodeGenerator = struct {
             .array_index => |arr_idx| return arr_idx,
             .qualified_identifier => |qual_id| return try self.extractArrayIndex(qual_id.base),
             else => return errors.CodegenError.TypeMismatch,
+        }
+    }
+
+    fn collectArrayIndices(self: *CodeGenerator, node: *ast.Node, indices: *std.ArrayList(c.LLVMValueRef)) !*ast.Node {
+        switch (node.data) {
+            .array_index => |arr_idx| {
+                const base = try self.collectArrayIndices(arr_idx.array, indices);
+                const index_value = try self.generateExpression(arr_idx.index);
+                try indices.append(index_value);
+                return base;
+            },
+            else => return node,
         }
     }
 
@@ -294,7 +309,9 @@ pub const CodeGenerator = struct {
             return;
         }
         const value = try self.generateExpression(value_expr);
+
         const casted_value = self.castToType(value, field_type);
+
         const store_instr = c.LLVMBuildStore(self.builder, casted_value, field_ptr);
         const alignment = self.getAlignmentForType(field_type);
         c.LLVMSetAlignment(store_instr, alignment);
@@ -520,6 +537,43 @@ pub const CodeGenerator = struct {
 
         try self.struct_types.put(struct_decl.name, struct_type);
         try self.struct_fields.put(struct_decl.name, field_map);
+        try self.struct_declarations.put(struct_decl.name, struct_decl);
+    }
+
+    fn generateStructInitializer(self: *CodeGenerator, struct_init: ast.StructInitializer) errors.CodegenError!c.LLVMValueRef {
+        const struct_type = self.struct_types.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
+        const field_map = self.struct_fields.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
+        const struct_ptr = c.LLVMBuildAlloca(self.builder, struct_type, "struct_init");
+        const struct_decl = self.getStructDecl(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
+        for (struct_decl.fields.items, 0..) |field, i| {
+            if (field.default_value) |default_val| {
+                const field_ptr = try self.getStructFieldPointer(struct_type, struct_ptr, @intCast(i));
+                const field_type = self.getLLVMType(field.type_name);
+                const field_type_kind = c.LLVMGetTypeKind(field_type);
+                if (default_val.data == .string_literal and field_type_kind == c.LLVMArrayTypeKind) {
+                    try self.assignStringLiteralToArrayField(field_ptr, field_type, default_val.data.string_literal);
+                } else {
+                    const value = try self.generateExpression(default_val);
+                    const casted_value = self.castToType(value, field_type);
+                    _ = c.LLVMBuildStore(self.builder, casted_value, field_ptr);
+                }
+            }
+        }
+
+        for (struct_init.field_values.items) |field_val| {
+            const field_index = field_map.get(field_val.field_name) orelse return errors.CodegenError.UndefinedVariable;
+            const field_ptr = try self.getStructFieldPointer(struct_type, struct_ptr, field_index);
+            const value = try self.generateExpression(field_val.value);
+            const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+            const casted_value = self.castToType(value, field_type);
+            _ = c.LLVMBuildStore(self.builder, casted_value, field_ptr);
+        }
+
+        return struct_ptr;
+    }
+
+    fn getStructDecl(self: *CodeGenerator, struct_name: []const u8) ?ast.StructDecl {
+        return self.struct_declarations.get(struct_name);
     }
 
     pub fn generateCode(self: *CodeGenerator, program: *ast.Node) errors.CodegenError!void {
@@ -530,6 +584,9 @@ pub const CodeGenerator = struct {
                 // For now structures are not allowed inside functions (sad but true)
                 // -- Why would you declare a structure inside of a function???
                 // -- And why not?
+                for (prog.globals.items) |glob| {
+                      try self.generateGlobalDeclaration(glob);
+                }
                 for (prog.functions.items) |func| {
                     if (func.data == .struct_decl) {
                         try self.generateStructType(func.data.struct_decl);
@@ -606,7 +663,7 @@ pub const CodeGenerator = struct {
         }
 
         // There is some confusing shit going on down there....
-        const valid_control_flow = try self.control_flow_analyzer.hasValidControlFlow(func);
+        const valid_control_flow = try self.hasValidControlFlow(func_node);
         if (!valid_control_flow and !std.mem.eql(u8, func.return_type, "void")) {
             if (func.body.items.len == 0 or !utils.isReturnStatement(func.body.items[func.body.items.len - 1])) {
                 return errors.CodegenError.TypeMismatch;
@@ -640,7 +697,39 @@ pub const CodeGenerator = struct {
             .assignment => |as| {
                 switch (as.target.data) {
                     .identifier => {
-                        try self.generateRegularVariableAssignment(as);
+                        if (as.value.data == .struct_initializer) {
+                            const ident = as.target.data.identifier;
+                            const var_info = self.getVariable(ident.name) orelse return errors.CodegenError.UndefinedVariable;
+                            const struct_init = as.value.data.struct_initializer;
+                            const struct_type = self.struct_types.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
+                            const field_map = self.struct_fields.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
+                            const struct_decl = self.getStructDecl(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
+                            for (struct_decl.fields.items, 0..) |field, i| {
+                                if (field.default_value) |default_val| {
+                                    const field_ptr = try self.getStructFieldPointer(struct_type, var_info.value, @intCast(i));
+                                    const field_type = self.getLLVMType(field.type_name);
+                                    const field_type_kind = c.LLVMGetTypeKind(field_type);
+                                    if (default_val.data == .string_literal and field_type_kind == c.LLVMArrayTypeKind) {
+                                        try self.assignStringLiteralToArrayField(field_ptr, field_type, default_val.data.string_literal);
+                                    } else {
+                                        const value = try self.generateExpression(default_val);
+                                        const casted_value = self.castToType(value, field_type);
+                                        _ = c.LLVMBuildStore(self.builder, casted_value, field_ptr);
+                                    }
+                                }
+                            }
+
+                            for (struct_init.field_values.items) |field_val| {
+                                const field_index = field_map.get(field_val.field_name) orelse return errors.CodegenError.UndefinedVariable;
+                                const field_ptr = try self.getStructFieldPointer(struct_type, var_info.value, field_index);
+                                const value = try self.generateExpression(field_val.value);
+                                const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+                                const casted_value = self.castToType(value, field_type);
+                                _ = c.LLVMBuildStore(self.builder, casted_value, field_ptr);
+                            }
+                        } else {
+                            try self.generateRegularVariableAssignment(as);
+                        }
                     },
                     .qualified_identifier => {
                         const qual_id = as.target.data.qualified_identifier;
@@ -664,6 +753,14 @@ pub const CodeGenerator = struct {
 
                             try self.generateStructFieldAssignment(struct_name, field_path, as.value);
                         }
+                    },
+                    .array_index => |arr_idx| {
+                        const arr_ass = ast.ArrayAssignment{
+                            .array = arr_idx.array,
+                            .index = arr_idx.index,
+                            .value = as.value,
+                        };
+                        try self.generateArrayAssignment(arr_ass);
                     },
                     else => {
                         return errors.CodegenError.TypeMismatch;
@@ -694,13 +791,90 @@ pub const CodeGenerator = struct {
                         .type_name = decl.type_name,
                     });
                     if (decl.initializer) |initializer| {
-                        const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
-                        const casted_value = self.castToType(init_value, var_type);
-                        _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
+                        if (initializer.data == .struct_initializer) {
+                            const struct_init = initializer.data.struct_initializer;
+                            const struct_type = self.struct_types.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
+                            const field_map = self.struct_fields.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
+                            const struct_decl = self.getStructDecl(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
+                            for (struct_decl.fields.items, 0..) |field, i| {
+                                if (field.default_value) |default_val| {
+                                    const field_ptr = try self.getStructFieldPointer(struct_type, alloca, @intCast(i));
+                                    const field_type = self.getLLVMType(field.type_name);
+                                    const field_type_kind = c.LLVMGetTypeKind(field_type);
+                                    if (default_val.data == .string_literal and field_type_kind == c.LLVMArrayTypeKind) {
+                                        try self.assignStringLiteralToArrayField(field_ptr, field_type, default_val.data.string_literal);
+                                    } else {
+                                        const value = try self.generateExpression(default_val);
+                                        const casted_value = self.castToType(value, field_type);
+                                        _ = c.LLVMBuildStore(self.builder, casted_value, field_ptr);
+                                    }
+                                }
+                            }
+                            for (struct_init.field_values.items) |field_val| {
+                                const field_index = field_map.get(field_val.field_name) orelse return errors.CodegenError.UndefinedVariable;
+                                const field_ptr = try self.getStructFieldPointer(struct_type, alloca, field_index);
+                                const value = try self.generateExpression(field_val.value);
+                                const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+                                const casted_value = self.castToType(value, field_type);
+                                _ = c.LLVMBuildStore(self.builder, casted_value, field_ptr);
+                            }
+                        } else if (c.LLVMGetTypeKind(var_type) == c.LLVMStructTypeKind) {
+                            const struct_name = std.mem.span(c.LLVMGetStructName(var_type));
+                            const struct_decl = self.getStructDecl(struct_name) orelse return errors.CodegenError.TypeMismatch;
+
+                            // Zero-initialize all fields
+                            for (struct_decl.fields.items, 0..) |field, i| {
+                                const field_ptr = try self.getStructFieldPointer(var_type, alloca, @intCast(i));
+                                const zero_value = self.getDefaultValueForType(field.type_name);
+                                _ = c.LLVMBuildStore(self.builder, zero_value, field_ptr);
+                            }
+
+                            // Apply default values if they exist
+                            for (struct_decl.fields.items, 0..) |field, i| {
+                                if (field.default_value) |default_val| {
+                                    const field_ptr = try self.getStructFieldPointer(var_type, alloca, @intCast(i));
+                                    const value = try self.generateExpression(default_val);
+                                    const casted_value = self.castToType(value, self.getLLVMType(field.type_name));
+                                    _ = c.LLVMBuildStore(self.builder, casted_value, field_ptr);
+                                }
+                            }
+                            const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
+                            const casted_value = self.castToType(init_value, var_type);
+                            _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
+                        } else {
+                            const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
+                            const casted_value = self.castToType(init_value, var_type);
+                            _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
+                        }
+                    } else if (c.LLVMGetTypeKind(var_type) == c.LLVMStructTypeKind) {
+                        const struct_name = std.mem.span(c.LLVMGetStructName(var_type));
+                        const struct_decl = self.getStructDecl(struct_name) orelse return errors.CodegenError.TypeMismatch;
+                        for (struct_decl.fields.items, 0..) |field, i| {
+                            const field_ptr = try self.getStructFieldPointer(var_type, alloca, @intCast(i));
+                            const zero_value = self.getDefaultValueForType(field.type_name);
+                            _ = c.LLVMBuildStore(self.builder, zero_value, field_ptr);
+                        }
+                        for (struct_decl.fields.items, 0..) |field, i| {
+                            if (field.default_value) |default_val| {
+                                const field_ptr = try self.getStructFieldPointer(var_type, alloca, @intCast(i));
+                                const field_type = self.getLLVMType(field.type_name);
+                                const field_type_kind = c.LLVMGetTypeKind(field_type);
+                                if (default_val.data == .string_literal and field_type_kind == c.LLVMArrayTypeKind) {
+                                    try self.assignStringLiteralToArrayField(field_ptr, field_type, default_val.data.string_literal);
+                                } else {
+                                    const value = try self.generateExpression(default_val);
+                                    const casted_value = self.castToType(value, field_type);
+                                    _ = c.LLVMBuildStore(self.builder, casted_value, field_ptr);
+                                }
+                            }
+                        }
                     }
                 }
             },
             .function_call => {
+                _ = try self.generateExpression(stmt);
+            },
+            .method_call => {
                 _ = try self.generateExpression(stmt);
             },
             .return_stmt => |ret| {
@@ -919,19 +1093,37 @@ pub const CodeGenerator = struct {
     }
 
     fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignment) errors.CodegenError!void {
-        const array_name = try self.getBaseIdentifierName(arr_ass.array);
+        var collected_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+        defer collected_indices.deinit();
+
+        const base_node = try self.collectArrayIndices(arr_ass.array, &collected_indices);
+        const index_value = try self.generateExpression(arr_ass.index);
+        try collected_indices.append(index_value);
+
+        const array_name = try self.getBaseIdentifierName(base_node);
         defer self.allocator.free(array_name);
         const var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
 
-        const index_value = try self.generateExpression(arr_ass.index);
         const value = try self.generateExpression(arr_ass.value);
 
-        const element_type = c.LLVMGetElementType(var_info.type_ref);
+        var final_type = var_info.type_ref;
+        for (0..collected_indices.items.len) |_| {
+            final_type = c.LLVMGetElementType(final_type);
+        }
 
-        var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
-        const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
+        var all_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+        defer all_indices.deinit();
+        try all_indices.append(c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
 
-        const casted_value = self.castToType(value, element_type);
+        var i = collected_indices.items.len;
+        while (i > 0) {
+            i -= 1;
+            try all_indices.append(collected_indices.items[i]);
+        }
+
+        const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
+
+        const casted_value = self.castToType(value, final_type);
         _ = c.LLVMBuildStore(self.builder, casted_value, element_ptr);
     }
 
@@ -1090,6 +1282,34 @@ pub const CodeGenerator = struct {
         }
     }
 
+    fn generateGlobalDeclaration(self: *CodeGenerator, global_node: *ast.Node) errors.CodegenError!void {
+        switch (global_node.data) {
+            .var_decl => |decl| {
+                const var_type = self.getLLVMType(decl.type_name);
+                const var_name_z = self.allocator.dupeZ(u8, decl.name) catch return errors.CodegenError.OutOfMemory;
+                defer self.allocator.free(var_name_z);
+                const global_var = c.LLVMAddGlobal(self.module, var_type, var_name_z.ptr);
+
+                if (decl.initializer) |initializer| {
+                    const init_value = try self.generateExpression(initializer);
+                    const casted_init_value = self.castToType(init_value, var_type);
+                    c.LLVMSetInitializer(global_var, casted_init_value);
+                } else {
+                    const default_value = self.getDefaultValueForType(decl.type_name);
+                    c.LLVMSetInitializer(global_var, default_value);
+                }
+
+                c.LLVMSetLinkage(global_var, c.LLVMExternalLinkage);
+                try self.variables.put(try self.allocator.dupe(u8, decl.name), VariableInfo{
+                    .value = global_var,
+                    .type_ref = var_type,
+                    .type_name = decl.type_name,
+                });
+            },
+            else => return errors.CodegenError.TypeMismatch,
+        }
+    }
+
     fn generateEnumDeclaration(self: *CodeGenerator, enum_decl: ast.EnumDecl) errors.CodegenError!void {
         var current_value: i32 = 0;
         for (enum_decl.values.items) |enum_value| {
@@ -1167,6 +1387,11 @@ pub const CodeGenerator = struct {
             target_kind == c.LLVMIntegerTypeKind)
         {
             return c.LLVMBuildFPToSI(self.builder, value, target_type, "fptosi");
+        } else if (value_kind == c.LLVMPointerTypeKind and target_kind == c.LLVMStructTypeKind) {
+            const pointee_type = c.LLVMGetElementType(value_type);
+            if (pointee_type == target_type) {
+                return c.LLVMBuildLoad2(self.builder, target_type, value, "struct_load");
+            }
         }
 
         return value;
@@ -1300,6 +1525,19 @@ pub const CodeGenerator = struct {
                     return c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load");
                 }
                 return errors.CodegenError.UndefinedVariable;
+            },
+            .null_literal => {
+                if (expected_type) |type_name| {
+                    if (std.mem.startsWith(u8, type_name, "ptr<")) {
+                        const llvm_type = self.getLLVMType(type_name);
+                        return c.LLVMConstNull(llvm_type);
+                    } else {
+                        return errors.CodegenError.NullNotAllowedInNonPointerType;
+                    }
+                } else {
+                    const void_ptr_type = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+                    return c.LLVMConstNull(void_ptr_type);
+                }
             },
             else => return self.generateExpression(expr),
         }
@@ -1441,6 +1679,10 @@ pub const CodeGenerator = struct {
             },
             .bool_literal => |bool_val| {
                 return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), if (bool_val.value) 1 else 0, 0);
+            },
+            .null_literal => {
+                const void_ptr_type = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+                return c.LLVMConstNull(void_ptr_type);
             },
             .string_literal => |str| {
                 const parsed_str = try self.parse_escape(str.value);
@@ -1698,132 +1940,165 @@ pub const CodeGenerator = struct {
             .binary_op => |b| {
                 return self.generateBinaryOp(b);
             },
-            .function_call => |call| {
-                var func: c.LLVMValueRef = undefined;
-                if (call.is_libc) {
-                    // For libc calls, we need to be very careful about which function we call
-                    // The issue is that there might be both a declaration and a definition with the same name
-                    // First, try to find an external declaration by iterating through all functions in the module
-                    var found_external = false;
-                    var func_iter = c.LLVMGetFirstFunction(self.module);
-                    while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
-                        const func_name_ptr = c.LLVMGetValueName(func_iter);
-                        if (func_name_ptr != null) {
-                            const func_name_slice = std.mem.span(func_name_ptr);
-                            // Look for a function with the exact name that is a declaration (external function)
-                            if (std.mem.eql(u8, func_name_slice, call.name) and c.LLVMIsDeclaration(func_iter) != 0) {
-                                func = func_iter;
-                                found_external = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!found_external) {
-                        // If we didn't find an external declaration, create one
-                        if (utils.LIBC_FUNCTIONS.get(call.name)) |signature| {
-                            func = try self.createFunctionFromSignature(call.name, signature);
-                        } else {
-                            func = try self.declareLibcFunction(call.name);
-                        }
-                    }
-                } else {
-                    // For non-libc calls, always prioritize external declarations over defined functions
-                    // This is critical for wrapper functions that need to call external C functions
-                    var found_external = false;
-                    var func_iter = c.LLVMGetFirstFunction(self.module);
-                    while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
-                        const func_name_ptr = c.LLVMGetValueName(func_iter);
-                        if (func_name_ptr != null) {
-                            const func_name_slice = std.mem.span(func_name_ptr);
-                            if (std.mem.eql(u8, func_name_slice, call.name) and c.LLVMIsDeclaration(func_iter) != 0) {
-                                func = func_iter;
-                                found_external = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!found_external) {
-                        if (self.functions.get(call.name)) |declared_func| {
-                            func = declared_func;
-                        } else {
-                            return errors.CodegenError.UndefinedFunction;
-                        }
-                    }
-                }
-
-                var args = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+            .method_call => |method| {
+                // Convert method call to function call: obj.method(args) -> method(obj, args)
+                var args = std.ArrayList(*ast.Node).init(self.allocator);
                 defer args.deinit();
-
-                for (call.args.items, 0..) |arg, i| {
-                    var arg_value = try self.generateExpression(arg);
-
-                    // Cast argument to match the expected parameter type
-                    if (call.is_libc) {
-                        if (utils.LIBC_FUNCTIONS.get(call.name)) |signature| {
-                            if (i < signature.param_types.len) {
-                                const expected_type = utils.libcTypeToLLVM(self, signature.param_types[i]);
-                                arg_value = self.castToType(arg_value, expected_type);
-                            }
-                        }
-                    } else {
-                        // For non-libc functions, try to cast based on external declaration
-                        var func_iter = c.LLVMGetFirstFunction(self.module);
-                        while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
-                            const func_name_ptr = c.LLVMGetValueName(func_iter);
-                            if (func_name_ptr != null) {
-                                const func_name_slice = std.mem.span(func_name_ptr);
-                                if (std.mem.eql(u8, func_name_slice, call.name) and c.LLVMIsDeclaration(func_iter) != 0) {
-                                    // Found external declaration, cast to match parameter type
-                                    const func_type = c.LLVMGlobalGetValueType(func_iter);
-                                    const param_count = c.LLVMCountParamTypes(func_type);
-                                    if (i < @as(usize, @intCast(param_count))) {
-                                        var param_types = std.ArrayList(c.LLVMTypeRef).init(self.allocator);
-                                        defer param_types.deinit();
-                                        try param_types.resize(@as(usize, @intCast(param_count)));
-                                        c.LLVMGetParamTypes(func_type, param_types.items.ptr);
-                                        const expected_type = param_types.items[i];
-                                        arg_value = self.castToType(arg_value, expected_type);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    if (call.is_libc) {
-                        arg_value = self.prepareArgumentForLibcCall(arg_value, call.name, i);
-                    }
-
-                    try args.append(arg_value);
+                try args.append(method.object);
+                for (method.args.items) |arg| {
+                    try args.append(arg);
                 }
-
-                const func_type = c.LLVMGlobalGetValueType(func);
-                const return_type = c.LLVMGetReturnType(func_type);
-                const is_void = c.LLVMGetTypeKind(return_type) == c.LLVMVoidTypeKind;
-
-                const call_name = if (is_void) "" else call.name;
-                const call_name_z = self.allocator.dupeZ(u8, call_name) catch return errors.CodegenError.OutOfMemory;
-                defer self.allocator.free(call_name_z);
-
-                if (args.items.len > 0) {
-                    return c.LLVMBuildCall2(self.builder, func_type, func, args.items.ptr, @as(c_uint, @intCast(args.items.len)), call_name_z.ptr);
-                } else {
-                    return c.LLVMBuildCall2(self.builder, func_type, func, null, 0, call_name_z.ptr);
-                }
+                const function_call = ast.FunctionCall{
+                    .name = method.method_name,
+                    .is_libc = false,
+                    .args = args,
+                };
+                return try self.generateFunctionCall(function_call);
+            },
+            .function_call => |call| {
+                return try self.generateFunctionCall(call);
             },
             .array_index => |arr_idx| {
-                const array_name = try self.getBaseIdentifierName(arr_idx.array);
+                var collected_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+                defer collected_indices.deinit();
+
+                const base_node = try self.collectArrayIndices(arr_idx.array, &collected_indices);
+                const index_value = try self.generateExpression(arr_idx.index);
+                try collected_indices.append(index_value);
+
+                const array_name = try self.getBaseIdentifierName(base_node);
                 defer self.allocator.free(array_name);
                 const var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
-                const index_value = try self.generateExpression(arr_idx.index);
-                const element_type = c.LLVMGetElementType(var_info.type_ref);
-                var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
-                const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
 
-                return c.LLVMBuildLoad2(self.builder, element_type, element_ptr, "array_element");
+                var final_type = var_info.type_ref;
+                for (0..collected_indices.items.len) |_| {
+                    final_type = c.LLVMGetElementType(final_type);
+                }
+
+                var all_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+                defer all_indices.deinit();
+                try all_indices.append(c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
+
+                var i = collected_indices.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    try all_indices.append(collected_indices.items[i]);
+                }
+
+                const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
+
+                return c.LLVMBuildLoad2(self.builder, final_type, element_ptr, "array_element");
+            },
+            .struct_initializer => |struct_init| {
+                return try self.generateStructInitializer(struct_init);
             },
             else => return errors.CodegenError.TypeMismatch,
         }
+    }
+
+    fn generateFunctionCall(self: *CodeGenerator, call: ast.FunctionCall) errors.CodegenError!c.LLVMValueRef {
+        var func: c.LLVMValueRef = undefined;
+        if (call.is_libc) {
+            var found_external = false;
+            var func_iter = c.LLVMGetFirstFunction(self.module);
+            while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
+                const func_name_ptr = c.LLVMGetValueName(func_iter);
+                if (func_name_ptr != null) {
+                    const func_name_slice = std.mem.span(func_name_ptr);
+                    if (std.mem.eql(u8, func_name_slice, call.name) and c.LLVMIsDeclaration(func_iter) != 0) {
+                        func = func_iter;
+                        found_external = true;
+                        break;
+                    }
+                }
+            }
+            if (!found_external) {
+                if (LIBC_FUNCTIONS.get(call.name)) |signature| {
+                    func = try self.createFunctionFromSignature(call.name, signature);
+                } else {
+                    func = try self.declareLibcFunction(call.name);
+                }
+            }
+        } else {
+            var found_external = false;
+            var func_iter = c.LLVMGetFirstFunction(self.module);
+            while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
+                const func_name_ptr = c.LLVMGetValueName(func_iter);
+                if (func_name_ptr != null) {
+                    const func_name_slice = std.mem.span(func_name_ptr);
+                    if (std.mem.eql(u8, func_name_slice, call.name) and c.LLVMIsDeclaration(func_iter) != 0) {
+                        func = func_iter;
+                        found_external = true;
+                        break;
+                    }
+                }
+            }
+            if (!found_external) {
+                if (self.functions.get(call.name)) |declared_func| {
+                    func = declared_func;
+                } else {
+                    return errors.CodegenError.UndefinedFunction;
+                }
+            }
+        }
+
+        var args = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+        defer args.deinit();
+
+
+        for (call.args.items, 0..) |arg, i| {
+            var arg_value = try self.generateExpression(arg);
+            if (call.is_libc) {
+                if (LIBC_FUNCTIONS.get(call.name)) |signature| {
+                    if (i < signature.param_types.len) {
+                        const expected_type = self.libcTypeToLLVM(signature.param_types[i]);
+                        arg_value = self.castToType(arg_value, expected_type);
+                    }
+                }
+            } else {
+                var func_iter = c.LLVMGetFirstFunction(self.module);
+                while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
+                    const func_name_ptr = c.LLVMGetValueName(func_iter);
+                    if (func_name_ptr != null) {
+                        const func_name_slice = std.mem.span(func_name_ptr);
+                        if (std.mem.eql(u8, func_name_slice, call.name) and c.LLVMIsDeclaration(func_iter) != 0) {
+                            const func_type = c.LLVMGlobalGetValueType(func_iter);
+                            const param_count = c.LLVMCountParamTypes(func_type);
+                            if (i < @as(usize, @intCast(param_count))) {
+                                var param_types = std.ArrayList(c.LLVMTypeRef).init(self.allocator);
+                                defer param_types.deinit();
+                                try param_types.resize(@as(usize, @intCast(param_count)));
+                                c.LLVMGetParamTypes(func_type, param_types.items.ptr);
+                                const expected_type = param_types.items[i];
+                                arg_value = self.castToType(arg_value, expected_type);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (call.is_libc) {
+                arg_value = self.prepareArgumentForLibcCall(arg_value, call.name, i);
+            }
+
+            try args.append(arg_value);
+        }
+
+        const func_type = c.LLVMGlobalGetValueType(func);
+        const return_type = c.LLVMGetReturnType(func_type);
+        const is_void = c.LLVMGetTypeKind(return_type) == c.LLVMVoidTypeKind;
+
+        const call_name = if (is_void) "" else call.name;
+        const call_name_z = self.allocator.dupeZ(u8, call_name) catch return errors.CodegenError.OutOfMemory;
+        defer self.allocator.free(call_name_z);
+
+        const result = if (args.items.len > 0)
+            c.LLVMBuildCall2(self.builder, func_type, func, args.items.ptr, @as(c_uint, @intCast(args.items.len)), call_name_z.ptr)
+        else
+            c.LLVMBuildCall2(self.builder, func_type, func, null, 0, call_name_z.ptr);
+
+        return result;
     }
 
     fn generateComparison(self: *CodeGenerator, comparison: ast.Comparison) errors.CodegenError!c.LLVMValueRef {

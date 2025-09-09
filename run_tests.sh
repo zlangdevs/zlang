@@ -147,6 +147,10 @@ fi
 
 echo "Building compiler..."
 zig build
+if [ $? -ne 0 ]; then
+    echo "Error: zig build failed"
+    exit 1
+fi
 
 echo ""
 echo "Running tests"

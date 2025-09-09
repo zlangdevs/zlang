@@ -1,8 +1,8 @@
 struct Person {
-    name arr<u8, 15>,
-    age i32,
-    is_male bool,
-    id u64
+    name arr<u8, 15> = "unnamed",
+    age i32 = 0,
+    is_male bool = false,
+    id u64 = 1
 }
 
 struct Point {
@@ -36,13 +36,20 @@ fun gen_line(x1: i32, y1: i32, x2: i32, y2: i32) >> Line {
 
 fun main() >> i32 {
     Person alex;
+    Person default; ?? normies lol
     Point origin;
 
     alex.name = "Alex Johnson";
     alex.age = 25;
     alex.id = 12345;
     alex.is_male = true;
-
+    
+    Person bob = Person{
+        name = "Bob Smith", ?? there is a bug with converting string to char array here now
+        age = 30,
+        is_male = true
+    };
+    
     origin.x = 10;
     origin.y = 20;
 
@@ -53,7 +60,9 @@ fun main() >> i32 {
     i32 point_x = origin.x;
     @printf("(expected 35):%d\n", current_age + point_x);
     
+    print_info(default);
     print_info(alex);
+    bob.print_info();
     Line tline = gen_line(0, 1, 2, 3);
     @printf("Line start: %d, %d\n", tline.start.x, tline.start.y);
     tline.start.x = 10;
