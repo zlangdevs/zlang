@@ -5,6 +5,7 @@ const utils = @import("utils.zig");
 const structs = @import("structs.zig");
 const bfck = @import("bf.zig");
 const control_flow = @import("control_flow.zig");
+const variables = @import("variables.zig");
 
 const c = @cImport({
     @cInclude("llvm-c/Core.h");
@@ -91,25 +92,6 @@ pub const CodeGenerator = struct {
         c.LLVMContextDispose(self.context);
     }
 
-    fn pushScope(self: *CodeGenerator) !void {
-        const new_scope = std.HashMap([]const u8, structs.VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(self.allocator);
-        try self.variable_scopes.append(new_scope);
-    }
-
-    fn popScope(self: *CodeGenerator) void {
-        if (self.variable_scopes.items.len > 1) {
-            var scope = self.variable_scopes.pop().?;
-            scope.deinit();
-        }
-    }
-
-    fn clearCurrentFunctionScopes(self: *CodeGenerator) void {
-        while (self.variable_scopes.items.len > 1) {
-            var scope = self.variable_scopes.pop().?;
-            scope.deinit();
-        }
-    }
-
     fn buildQualifiedName(self: *CodeGenerator, node: *ast.Node) ![]const u8 {
         switch (node.data) {
             .identifier => |ident| {
@@ -167,7 +149,7 @@ pub const CodeGenerator = struct {
     fn generateArrayElementFieldAssignment(self: *CodeGenerator, array_index: ast.ArrayIndex, field_path: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
         const array_name = try self.getBaseIdentifierName(array_index.array);
         defer self.allocator.free(array_name);
-        const array_var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
+        const array_var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
         const index_value = try self.generateExpression(array_index.index);
         const element_type = c.LLVMGetElementType(array_var_info.type_ref);
         const element_type_kind = c.LLVMGetTypeKind(element_type);
@@ -185,6 +167,20 @@ pub const CodeGenerator = struct {
 
     pub const generateRecursiveFieldAssignment = structs.generateRecursiveFieldAssignment;
 
+    pub const pushScope = variables.pushScope;
+
+    pub const popScope = variables.popScope;
+
+    pub const clearCurrentFunctionScopes = variables.clearCurrentFunctionScopes;
+
+    pub const getVariable = variables.getVariable;
+
+    pub const putVariable = variables.putVariable;
+
+    pub const variableExistsInCurrentScope = variables.variableExistsInCurrentScope;
+
+    pub const generateRecursiveFieldAccess = structs.generateRecursiveFieldAccess;
+
     pub const generateStructFieldAssignment = structs.generateStructFieldAssignment;
 
     pub fn generateExpressionFromString(self: *CodeGenerator, expr_str: []const u8) errors.CodegenError!c.LLVMValueRef {
@@ -197,7 +193,7 @@ pub const CodeGenerator = struct {
 
     fn generateRegularVariableAssignment(self: *CodeGenerator, as: ast.Assignment) errors.CodegenError!void {
         const ident = as.target.data.identifier;
-        const var_info = self.getVariable(ident.name) orelse return errors.CodegenError.UndefinedVariable;
+        const var_info = CodeGenerator.getVariable(self, ident.name) orelse return errors.CodegenError.UndefinedVariable;
         const var_type_kind = c.LLVMGetTypeKind(var_info.type_ref);
         if (var_type_kind == c.LLVMArrayTypeKind) {
             try self.generateArrayReassignment(ident.name, as.value);
@@ -227,109 +223,7 @@ pub const CodeGenerator = struct {
 
     pub const assignStringLiteralToArrayField = structs.assignStringLiteralToArrayField;
 
-    fn generateRecursiveFieldAccess(self: *CodeGenerator, base_value: c.LLVMValueRef, base_type: c.LLVMTypeRef, base_type_name: []const u8, field_path: []const u8) errors.CodegenError!c.LLVMValueRef {
-        var current_value = base_value;
-        var current_type = base_type;
-        var current_type_name = base_type_name;
-        var path = field_path;
-        while (path.len > 0) {
-            if (std.mem.startsWith(u8, path, "[")) {
-                const close_bracket_pos = std.mem.indexOfScalar(u8, path, ']') orelse return errors.CodegenError.TypeMismatch;
-                const index_str = path[1..close_bracket_pos];
-                const index_expr = if (self.getVariable(index_str)) |var_info| blk: {
-                    break :blk c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "index_var");
-                } else blk: {
-                    break :blk try self.generateExpressionFromString(index_str);
-                };
-                const var_type_kind = c.LLVMGetTypeKind(current_type);
-                if (var_type_kind != c.LLVMArrayTypeKind) return errors.CodegenError.TypeMismatch;
-                const element_type = c.LLVMGetElementType(current_type);
-                var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_expr };
-                const element_ptr = c.LLVMBuildGEP2(self.builder, current_type, current_value, &indices[0], 2, "array_element_ptr");
-                current_value = element_ptr;
-                current_type = element_type;
-                const elem_type_kind = c.LLVMGetTypeKind(element_type);
-                if (elem_type_kind == c.LLVMStructTypeKind) {
-                    const name_ptr = c.LLVMGetStructName(element_type);
-                    if (name_ptr != null) {
-                        current_type_name = std.mem.span(name_ptr);
-                    }
-                }
-                path = path[close_bracket_pos + 1 ..];
-                if (std.mem.startsWith(u8, path, ".")) {
-                    path = path[1..];
-                }
-            } else {
-                const dot_pos = std.mem.indexOfScalar(u8, path, '.');
-                const field_name_len = if (dot_pos) |pos| pos else path.len;
-                const field_name = path[0..field_name_len];
-                const var_type_kind = c.LLVMGetTypeKind(current_type);
-                if (var_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
-                const struct_type = self.struct_types.get(current_type_name) orelse {
-                    return errors.CodegenError.TypeMismatch;
-                };
-                const field_map = self.struct_fields.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
-                const field_index = field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable;
-                const field_count = c.LLVMCountStructElementTypes(struct_type);
-                if (field_index >= field_count) {
-                    return errors.CodegenError.TypeMismatch;
-                }
-                const field_ptr = try self.getStructFieldPointer(struct_type, current_value, field_index);
-                const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
-                if (dot_pos != null) {
-                    const field_type_kind = c.LLVMGetTypeKind(field_type);
-                    if (field_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
-                    current_value = field_ptr;
-                    current_type = field_type;
-                    const name_ptr = c.LLVMGetStructName(field_type);
-                    if (name_ptr == null) return errors.CodegenError.TypeMismatch;
-                    current_type_name = std.mem.span(name_ptr);
-                    path = path[dot_pos.? + 1 ..];
-                } else {
-                    const field_type_kind = c.LLVMGetTypeKind(field_type);
-                    if (field_type_kind == c.LLVMArrayTypeKind) {
-                        return field_ptr;
-                    }
-                    const load_instr = c.LLVMBuildLoad2(self.builder, field_type, field_ptr, "struct_field");
-                    const alignment = self.getAlignmentForType(field_type);
-                    c.LLVMSetAlignment(load_instr, alignment);
-                    return load_instr;
-                }
-            }
-        }
-        return errors.CodegenError.TypeMismatch;
-    }
-
     pub const generateStructFieldAccess = structs.generateStructFieldAccess;
-
-    pub fn getVariable(self: *CodeGenerator, name: []const u8) ?structs.VariableInfo {
-        var i = self.variable_scopes.items.len;
-        while (i > 0) {
-            i -= 1;
-            if (self.variable_scopes.items[i].get(name)) |var_info| {
-                return var_info;
-            }
-        }
-        if (self.variables.get(name)) |var_info| {
-            return var_info;
-        }
-        return null;
-    }
-
-    fn putVariable(self: *CodeGenerator, name: []const u8, var_info: structs.VariableInfo) !void {
-        const current_scope = &self.variable_scopes.items[self.variable_scopes.items.len - 1];
-        if (current_scope.contains(name)) {
-            return errors.CodegenError.RedeclaredVariable;
-        }
-
-        try current_scope.put(name, var_info);
-    }
-
-    fn variableExistsInCurrentScope(self: *CodeGenerator, name: []const u8) bool {
-        if (self.variable_scopes.items.len == 0) return false;
-        const current_scope = &self.variable_scopes.items[self.variable_scopes.items.len - 1];
-        return current_scope.contains(name);
-    }
 
     pub const getLLVMStructType = structs.getLLVMStructType;
 
@@ -410,9 +304,9 @@ pub const CodeGenerator = struct {
     pub const generateStructType = structs.generateStructType;
 
     pub const generateStructInitializer = structs.generateStructInitializer;
-    
+
     pub const getStructDecl = structs.getStructDecl;
-    
+
     pub fn generateCode(self: *CodeGenerator, program: *ast.Node) errors.CodegenError!void {
         switch (program.data) {
             .program => |prog| {
@@ -481,16 +375,16 @@ pub const CodeGenerator = struct {
                 const entry_block = c.LLVMAppendBasicBlockInContext(self.context, llvm_func, "entry");
                 c.LLVMPositionBuilderAtEnd(self.builder, entry_block);
                 // Reset scopes for new function (keep global scope)
-                self.clearCurrentFunctionScopes();
+                CodeGenerator.clearCurrentFunctionScopes(self);
                 // Create a new function-level scope for this function
-                try self.pushScope();
+                try CodeGenerator.pushScope(self);
                 // Add parameters to the function-level scope
                 for (func.parameters.items, 0..) |param, i| {
                     const param_value = c.LLVMGetParam(llvm_func, @intCast(i));
                     const param_type = self.getLLVMType(param.type_name);
                     const alloca = c.LLVMBuildAlloca(self.builder, param_type, param.name.ptr);
                     _ = c.LLVMBuildStore(self.builder, param_value, alloca);
-                    try self.putVariable(param.name, structs.VariableInfo{
+                    try CodeGenerator.putVariable(self, param.name, structs.VariableInfo{
                         .value = alloca,
                         .type_ref = param_type,
                         .type_name = param.type_name,
@@ -552,7 +446,7 @@ pub const CodeGenerator = struct {
                     .identifier => {
                         if (as.value.data == .struct_initializer) {
                             const ident = as.target.data.identifier;
-                            const var_info = self.getVariable(ident.name) orelse return errors.CodegenError.UndefinedVariable;
+                            const var_info = CodeGenerator.getVariable(self, ident.name) orelse return errors.CodegenError.UndefinedVariable;
                             const struct_init = as.value.data.struct_initializer;
                             const struct_type = self.struct_types.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
                             const field_map = self.struct_fields.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
@@ -630,8 +524,8 @@ pub const CodeGenerator = struct {
                     if (decl.initializer != null) {
                         return errors.CodegenError.TypeMismatch;
                     }
-                    try self.putVariable(decl.name, structs.VariableInfo{
-                        .value = undefined,
+                    try CodeGenerator.putVariable(self, decl.name, structs.VariableInfo{
+                        .value = null,
                         .type_ref = c.LLVMVoidTypeInContext(self.context),
                         .type_name = decl.type_name,
                     });
@@ -643,7 +537,7 @@ pub const CodeGenerator = struct {
                 } else {
                     const var_type = self.getLLVMType(decl.type_name);
                     const alloca = c.LLVMBuildAlloca(self.builder, var_type, decl.name.ptr);
-                    try self.putVariable(decl.name, structs.VariableInfo{
+                    try CodeGenerator.putVariable(self, decl.name, structs.VariableInfo{
                         .value = alloca,
                         .type_ref = var_type,
                         .type_name = decl.type_name,
@@ -804,11 +698,11 @@ pub const CodeGenerator = struct {
         }
 
         c.LLVMPositionBuilderAtEnd(self.builder, then_bb);
-        try self.pushScope();
+        try CodeGenerator.pushScope(self);
         for (if_stmt.then_body.items) |stmt| {
             try self.generateStatement(stmt);
         }
-        self.popScope();
+        CodeGenerator.popScope(self);
         if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
             _ = c.LLVMBuildBr(self.builder, merge_bb);
         }
@@ -816,11 +710,11 @@ pub const CodeGenerator = struct {
         if (else_bb) |else_block| {
             c.LLVMPositionBuilderAtEnd(self.builder, else_block);
             if (if_stmt.else_body) |else_body| {
-                try self.pushScope();
+                try CodeGenerator.pushScope(self);
                 for (else_body.items) |stmt| {
                     try self.generateStatement(stmt);
                 }
-                self.popScope();
+                CodeGenerator.popScope(self);
             }
             if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
                 _ = c.LLVMBuildBr(self.builder, merge_bb);
@@ -846,11 +740,11 @@ pub const CodeGenerator = struct {
             const cond_bool = self.convertToBool(cond_value);
             _ = c.LLVMBuildCondBr(self.builder, cond_bool, body_bb, exit_bb);
             c.LLVMPositionBuilderAtEnd(self.builder, body_bb);
-            try self.pushScope();
+            try CodeGenerator.pushScope(self);
             for (for_stmt.body.items) |stmt| {
                 try self.generateStatement(stmt);
             }
-            self.popScope();
+            CodeGenerator.popScope(self);
             if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
                 _ = c.LLVMBuildBr(self.builder, condition_bb);
             }
@@ -866,11 +760,11 @@ pub const CodeGenerator = struct {
             try self.loop_context_stack.append(loop_context);
             _ = c.LLVMBuildBr(self.builder, body_bb);
             c.LLVMPositionBuilderAtEnd(self.builder, body_bb);
-            try self.pushScope();
+            try CodeGenerator.pushScope(self);
             for (for_stmt.body.items) |stmt| {
                 try self.generateStatement(stmt);
             }
-            self.popScope();
+            CodeGenerator.popScope(self);
 
             if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
                 _ = c.LLVMBuildBr(self.builder, body_bb);
@@ -883,7 +777,7 @@ pub const CodeGenerator = struct {
 
     fn generateCForStatement(self: *CodeGenerator, c_for_stmt: ast.CForStmt) errors.CodegenError!void {
         const current_function = self.current_function orelse return errors.CodegenError.TypeMismatch;
-        try self.pushScope();
+        try CodeGenerator.pushScope(self);
         if (c_for_stmt.init) |cinit| {
             try self.generateStatement(cinit);
         }
@@ -920,7 +814,7 @@ pub const CodeGenerator = struct {
         _ = c.LLVMBuildBr(self.builder, condition_bb);
         c.LLVMPositionBuilderAtEnd(self.builder, exit_bb);
         _ = self.loop_context_stack.pop();
-        self.popScope();
+        CodeGenerator.popScope(self);
     }
 
     fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignment) errors.CodegenError!void {
@@ -933,7 +827,7 @@ pub const CodeGenerator = struct {
 
         const array_name = try self.getBaseIdentifierName(base_node);
         defer self.allocator.free(array_name);
-        const var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
+        const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
 
         const value = try self.generateExpression(arr_ass.value);
 
@@ -959,7 +853,7 @@ pub const CodeGenerator = struct {
     }
 
     fn generateArrayReassignment(self: *CodeGenerator, array_name: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
-        const var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
+        const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
 
         switch (value_expr.data) {
             .array_initializer => |init_list| {
@@ -1028,7 +922,7 @@ pub const CodeGenerator = struct {
             const array_type = c.LLVMArrayType(element_type, @intCast(array_size));
             const alloca = c.LLVMBuildAlloca(self.builder, array_type, decl.name.ptr);
 
-            try self.putVariable(decl.name, structs.VariableInfo{
+            try CodeGenerator.putVariable(self, decl.name, structs.VariableInfo{
                 .value = alloca,
                 .type_ref = array_type,
                 .type_name = decl.type_name,
@@ -1367,7 +1261,7 @@ pub const CodeGenerator = struct {
                 } else if (std.mem.eql(u8, ident.name, "false")) {
                     return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 0, 0);
                 }
-                if (self.getVariable(ident.name)) |var_info| {
+                if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                     if (c.LLVMGetTypeKind(var_info.type_ref) == c.LLVMVoidTypeKind) {
                         return errors.CodegenError.TypeMismatch;
                     }
@@ -1401,7 +1295,7 @@ pub const CodeGenerator = struct {
                     return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 0, 0);
                 }
 
-                if (self.getVariable(ident.name)) |var_info| {
+                if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                     return c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load");
                 }
                 return errors.CodegenError.UndefinedVariable;
@@ -1412,7 +1306,7 @@ pub const CodeGenerator = struct {
                     const base_name = qual_id.base.data.identifier.name;
                     const enum_var_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ base_name, qual_id.field });
                     defer self.allocator.free(enum_var_name);
-                    if (self.getVariable(enum_var_name)) |enum_var_info| {
+                    if (CodeGenerator.getVariable(self, enum_var_name)) |enum_var_info| {
                         const load_instr = c.LLVMBuildLoad2(self.builder, enum_var_info.type_ref, enum_var_info.value, "enum_value");
                         const alignment = self.getAlignmentForType(enum_var_info.type_ref);
                         c.LLVMSetAlignment(load_instr, alignment);
@@ -1425,7 +1319,7 @@ pub const CodeGenerator = struct {
                 switch (qual_id.base.data) {
                     .identifier => {
                         const base_name = qual_id.base.data.identifier.name;
-                        const var_info = self.getVariable(base_name) orelse return errors.CodegenError.UndefinedVariable;
+                        const var_info = CodeGenerator.getVariable(self, base_name) orelse return errors.CodegenError.UndefinedVariable;
                         result_value = var_info.value;
                         result_type = var_info.type_ref;
                         result_type_name = var_info.type_name;
@@ -1434,7 +1328,7 @@ pub const CodeGenerator = struct {
                         const array_index = qual_id.base.data.array_index;
                         const array_name = try self.getBaseIdentifierName(qual_id.base);
                         defer self.allocator.free(array_name);
-                        const array_var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
+                        const array_var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
                         const index_value = try self.generateExpression(array_index.index);
                         const element_type = c.LLVMGetElementType(array_var_info.type_ref);
                         var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
@@ -1574,7 +1468,7 @@ pub const CodeGenerator = struct {
                     '&' => {
                         if (un.operand.data == .identifier) {
                             const ident = un.operand.data.identifier;
-                            if (self.getVariable(ident.name)) |var_info| {
+                            if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                                 return var_info.value;
                             }
                         } else if (un.operand.data == .qualified_identifier) {
@@ -1583,7 +1477,7 @@ pub const CodeGenerator = struct {
                             const arr_idx = un.operand.data.array_index;
                             const array_name = try self.getBaseIdentifierName(arr_idx.array);
                             defer self.allocator.free(array_name);
-                            const var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
+                            const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
                             const index_value = try self.generateExpression(arr_idx.index);
                             var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
                             const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
@@ -1604,7 +1498,7 @@ pub const CodeGenerator = struct {
                     'D' => {
                         if (un.operand.data == .identifier) {
                             const ident = un.operand.data.identifier;
-                            if (self.getVariable(ident.name)) |var_info| {
+                            if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                                 const var_type_name = self.getTypeNameFromLLVMType(var_info.type_ref);
 
                                 const allowed_types = [_][]const u8{ "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64" };
@@ -1647,7 +1541,7 @@ pub const CodeGenerator = struct {
                             const arr_idx = un.operand.data.array_index;
                             const array_name = try self.getBaseIdentifierName(arr_idx.array);
                             defer self.allocator.free(array_name);
-                            if (self.getVariable(array_name)) |var_info| {
+                            if (CodeGenerator.getVariable(self, array_name)) |var_info| {
                                 const index_value = try self.generateExpression(arr_idx.index);
                                 const element_type = c.LLVMGetElementType(var_info.type_ref);
 
@@ -1695,7 +1589,7 @@ pub const CodeGenerator = struct {
                     'I' => {
                         if (un.operand.data == .identifier) {
                             const ident = un.operand.data.identifier;
-                            if (self.getVariable(ident.name)) |var_info| {
+                            if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                                 const var_type_name = self.getTypeNameFromLLVMType(var_info.type_ref);
                                 const allowed_types = [_][]const u8{ "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64" };
                                 var is_allowed = false;
@@ -1733,7 +1627,7 @@ pub const CodeGenerator = struct {
                             const arr_idx = un.operand.data.array_index;
                             const array_name = try self.getBaseIdentifierName(arr_idx.array);
                             defer self.allocator.free(array_name);
-                            if (self.getVariable(array_name)) |var_info| {
+                            if (CodeGenerator.getVariable(self, array_name)) |var_info| {
                                 const index_value = try self.generateExpression(arr_idx.index);
                                 const element_type = c.LLVMGetElementType(var_info.type_ref);
 
@@ -1817,7 +1711,7 @@ pub const CodeGenerator = struct {
 
                 const array_name = try self.getBaseIdentifierName(base_node);
                 defer self.allocator.free(array_name);
-                const var_info = self.getVariable(array_name) orelse return errors.CodegenError.UndefinedVariable;
+                const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
 
                 var final_type = var_info.type_ref;
                 for (0..collected_indices.items.len) |_| {
