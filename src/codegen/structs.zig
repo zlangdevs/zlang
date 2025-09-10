@@ -3,6 +3,7 @@ const ast = @import("../parser/ast.zig");
 const errors = @import("../errors.zig");
 const utils = @import("utils.zig");
 const llvm = @import("llvm.zig");
+const variables = @import("variables.zig");
 
 const c = @cImport({
     @cInclude("llvm-c/Core.h");
@@ -48,7 +49,7 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
         if (std.mem.startsWith(u8, path, "[")) {
             const close_bracket_pos = std.mem.indexOfScalar(u8, path, ']') orelse return errors.CodegenError.TypeMismatch;
             const index_str = path[1..close_bracket_pos];
-            const index_expr = if (cg.getVariable(index_str)) |var_info| blk: {
+            const index_expr = if (variables.getVariable(cg, index_str)) |var_info| blk: {
                 break :blk c.LLVMBuildLoad2(cg.builder, var_info.type_ref, var_info.value, "index_var");
             } else blk: {
                 break :blk try cg.generateExpressionFromString(index_str);
@@ -105,7 +106,7 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
 }
 
 pub fn generateStructFieldAssignment(cg: *llvm.CodeGenerator, struct_name: []const u8, field_path: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
-    const struct_var_info = cg.getVariable(struct_name) orelse return errors.CodegenError.UndefinedVariable;
+    const struct_var_info = variables.getVariable(cg, struct_name) orelse return errors.CodegenError.UndefinedVariable;
     return try generateRecursiveFieldAssignment(cg, struct_var_info.value, struct_var_info.type_ref, struct_var_info.type_name, field_path, value_expr);
 }
 
@@ -162,7 +163,7 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
         if (std.mem.startsWith(u8, path, "[")) {
             const close_bracket_pos = std.mem.indexOfScalar(u8, path, ']') orelse return errors.CodegenError.TypeMismatch;
             const index_str = path[1..close_bracket_pos];
-            const index_expr = if (cg.getVariable(index_str)) |var_info| blk: {
+            const index_expr = if (variables.getVariable(cg, index_str)) |var_info| blk: {
                 break :blk c.LLVMBuildLoad2(cg.builder, var_info.type_ref, var_info.value, "index_var");
             } else blk: {
                 break :blk try cg.generateExpressionFromString(index_str);
