@@ -14,51 +14,6 @@ const c = @cImport({
     @cInclude("llvm-c/ExecutionEngine.h");
 });
 
-const LibcFunctionSignature = struct {
-    return_type: LibcType,
-    param_types: []const LibcType,
-    is_varargs: bool = false,
-};
-
-const LibcType = enum {
-    void_type,
-    int_type,
-    char_ptr_type,
-    size_t_type,
-    file_ptr_type,
-    long_type,
-    double_type,
-};
-
-const LIBC_FUNCTIONS = std.StaticStringMap(LibcFunctionSignature).initComptime(.{
-    .{ "printf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type}, .is_varargs = true } },
-    .{ "puts", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type} } },
-    .{ "scanf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type}, .is_varargs = true } },
-    .{ "fprintf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{ .file_ptr_type, .char_ptr_type }, .is_varargs = true } },
-    .{ "sprintf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type }, .is_varargs = true } },
-    .{ "snprintf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{ .char_ptr_type, .size_t_type, .char_ptr_type }, .is_varargs = true } },
-    .{ "malloc", LibcFunctionSignature{ .return_type = .char_ptr_type, .param_types = &[_]LibcType{.size_t_type} } },
-    .{ "free", LibcFunctionSignature{ .return_type = .void_type, .param_types = &[_]LibcType{.char_ptr_type} } },
-    .{ "strlen", LibcFunctionSignature{ .return_type = .size_t_type, .param_types = &[_]LibcType{.char_ptr_type} } },
-    .{ "strcpy", LibcFunctionSignature{ .return_type = .char_ptr_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type } } },
-    .{ "strcmp", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type } } },
-    .{ "memset", LibcFunctionSignature{ .return_type = .char_ptr_type, .param_types = &[_]LibcType{ .char_ptr_type, .int_type, .size_t_type } } },
-    .{ "memcpy", LibcFunctionSignature{ .return_type = .char_ptr_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type, .size_t_type } } },
-    .{ "exit", LibcFunctionSignature{ .return_type = .void_type, .param_types = &[_]LibcType{.int_type} } },
-    .{ "atoi", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type} } },
-    .{ "atol", LibcFunctionSignature{ .return_type = .long_type, .param_types = &[_]LibcType{.char_ptr_type} } },
-    .{ "fopen", LibcFunctionSignature{ .return_type = .file_ptr_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type } } },
-    .{ "fclose", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.file_ptr_type} } },
-    .{ "fread", LibcFunctionSignature{ .return_type = .size_t_type, .param_types = &[_]LibcType{ .char_ptr_type, .size_t_type, .size_t_type, .file_ptr_type } } },
-    .{ "fwrite", LibcFunctionSignature{ .return_type = .size_t_type, .param_types = &[_]LibcType{ .char_ptr_type, .size_t_type, .size_t_type, .file_ptr_type } } },
-    .{ "system", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type} } },
-    .{ "putchar", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.int_type} } },
-    .{ "getchar", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{} } },
-    .{ "rand", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{} } },
-    .{ "srand", LibcFunctionSignature{ .return_type = .void_type, .param_types = &[_]LibcType{.int_type} } },
-    .{ "square", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.int_type} } },
-});
-
 pub const CodeGenerator = struct {
     context: c.LLVMContextRef,
     module: c.LLVMModuleRef,
@@ -511,7 +466,7 @@ pub const CodeGenerator = struct {
 
     pub const getTypeNameFromLLVMType = utils.getTypeNameFromLLVMType;
 
-    fn libcTypeToLLVM(self: *CodeGenerator, libc_type: LibcType) c.LLVMTypeRef {
+    fn libcTypeToLLVM(self: *CodeGenerator, libc_type: utils.LibcType) c.LLVMTypeRef {
         return switch (libc_type) {
             .void_type => c.LLVMVoidTypeInContext(self.context),
             .int_type => c.LLVMInt32TypeInContext(self.context),
@@ -527,7 +482,7 @@ pub const CodeGenerator = struct {
         if (self.functions.get(func_name)) |existing| {
             return existing;
         }
-        if (LIBC_FUNCTIONS.get(func_name)) |signature| {
+        if (utils.LIBC_FUNCTIONS.get(func_name)) |signature| {
             const func = try self.createFunctionFromSignature(func_name, signature);
             try self.functions.put(try self.allocator.dupe(u8, func_name), func);
             return func;
@@ -537,7 +492,7 @@ pub const CodeGenerator = struct {
         return func;
     }
 
-    fn createFunctionFromSignature(self: *CodeGenerator, func_name: []const u8, signature: LibcFunctionSignature) !c.LLVMValueRef {
+    fn createFunctionFromSignature(self: *CodeGenerator, func_name: []const u8, signature: utils.LibcFunctionSignature) !c.LLVMValueRef {
         const return_type = self.libcTypeToLLVM(signature.return_type);
 
         var param_types = std.ArrayList(c.LLVMTypeRef).init(self.allocator);
@@ -736,13 +691,13 @@ pub const CodeGenerator = struct {
                     try self.generateStatement(stmt);
                 }
                 if (!valid_control_flow and !std.mem.eql(u8, func.return_type, "void")) {
-                    if (func.body.items.len == 0 or !self.isReturnStatement(func.body.items[func.body.items.len - 1])) {
+                    if (func.body.items.len == 0 or !utils.isReturnStatement(func.body.items[func.body.items.len - 1])) {
                         return errors.CodegenError.TypeMismatch;
                     }
                 }
                 if (valid_control_flow) {
                     const last_is_return = if (func.body.items.len > 0)
-                        self.isReturnStatement(func.body.items[func.body.items.len - 1])
+                        utils.isReturnStatement(func.body.items[func.body.items.len - 1])
                     else
                         false;
                     if (std.mem.eql(u8, func.return_type, "void")) {
@@ -751,11 +706,11 @@ pub const CodeGenerator = struct {
                         }
                     } else {
                         if (!last_is_return) {
-                            const default_value = self.getDefaultValueForType(func.return_type);
+                            const default_value = utils.getDefaultValueForType(self, func.return_type);
                             _ = c.LLVMBuildRet(self.builder, default_value);
                         } else {
                             if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
-                                const default_value = self.getDefaultValueForType(func.return_type);
+                                const default_value = utils.getDefaultValueForType(self, func.return_type);
                                 _ = c.LLVMBuildRet(self.builder, default_value);
                             }
                         }
@@ -776,42 +731,6 @@ pub const CodeGenerator = struct {
             },
             else => return errors.CodegenError.TypeMismatch,
         }
-    }
-
-    fn getDefaultValueForType(self: *CodeGenerator, type_name: []const u8) c.LLVMValueRef {
-        if (std.mem.eql(u8, type_name, "i8")) {
-            return c.LLVMConstInt(c.LLVMInt8TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "i16")) {
-            return c.LLVMConstInt(c.LLVMInt16TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "i32")) {
-            return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "i64")) {
-            return c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "u8")) {
-            return c.LLVMConstInt(c.LLVMInt8TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "u16")) {
-            return c.LLVMConstInt(c.LLVMInt16TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "u32")) {
-            return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "u64")) {
-            return c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), 0, 0);
-        } else if (std.mem.eql(u8, type_name, "f16")) {
-            return c.LLVMConstReal(c.LLVMHalfTypeInContext(self.context), 0.0);
-        } else if (std.mem.eql(u8, type_name, "f32")) {
-            return c.LLVMConstReal(c.LLVMFloatTypeInContext(self.context), 0.0);
-        } else if (std.mem.eql(u8, type_name, "f64")) {
-            return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), 0.0);
-        } else if (std.mem.eql(u8, type_name, "bool")) {
-            return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 0, 0);
-        }
-        return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0);
-    }
-    fn isReturnStatement(self: *CodeGenerator, stmt: *ast.Node) bool {
-        _ = self;
-        return switch (stmt.data) {
-            .return_stmt => true,
-            else => false,
-        };
     }
 
     fn generateStatement(self: *CodeGenerator, stmt: *ast.Node) errors.CodegenError!void {
@@ -957,7 +876,7 @@ pub const CodeGenerator = struct {
                             // Zero-initialize all fields
                             for (struct_decl.fields.items, 0..) |field, i| {
                                 const field_ptr = try self.getStructFieldPointer(var_type, alloca, @intCast(i));
-                                const zero_value = self.getDefaultValueForType(field.type_name);
+                                const zero_value = utils.getDefaultValueForType(self, field.type_name);
                                 _ = c.LLVMBuildStore(self.builder, zero_value, field_ptr);
                             }
 
@@ -983,7 +902,7 @@ pub const CodeGenerator = struct {
                         const struct_decl = self.getStructDecl(struct_name) orelse return errors.CodegenError.TypeMismatch;
                         for (struct_decl.fields.items, 0..) |field, i| {
                             const field_ptr = try self.getStructFieldPointer(var_type, alloca, @intCast(i));
-                            const zero_value = self.getDefaultValueForType(field.type_name);
+                            const zero_value = utils.getDefaultValueForType(self, field.type_name);
                             _ = c.LLVMBuildStore(self.builder, zero_value, field_ptr);
                         }
                         for (struct_decl.fields.items, 0..) |field, i| {
@@ -1413,7 +1332,7 @@ pub const CodeGenerator = struct {
                     const casted_init_value = self.castToType(init_value, var_type);
                     c.LLVMSetInitializer(global_var, casted_init_value);
                 } else {
-                    const default_value = self.getDefaultValueForType(decl.type_name);
+                    const default_value = utils.getDefaultValueForType(self, decl.type_name);
                     c.LLVMSetInitializer(global_var, default_value);
                 }
 
@@ -2131,7 +2050,7 @@ pub const CodeGenerator = struct {
                 }
             }
             if (!found_external) {
-                if (LIBC_FUNCTIONS.get(call.name)) |signature| {
+                if (utils.LIBC_FUNCTIONS.get(call.name)) |signature| {
                     func = try self.createFunctionFromSignature(call.name, signature);
                 } else {
                     func = try self.declareLibcFunction(call.name);
@@ -2166,7 +2085,7 @@ pub const CodeGenerator = struct {
         for (call.args.items, 0..) |arg, i| {
             var arg_value = try self.generateExpression(arg);
             if (call.is_libc) {
-                if (LIBC_FUNCTIONS.get(call.name)) |signature| {
+                if (utils.LIBC_FUNCTIONS.get(call.name)) |signature| {
                     if (i < signature.param_types.len) {
                         const expected_type = self.libcTypeToLLVM(signature.param_types[i]);
                         arg_value = self.castToType(arg_value, expected_type);
