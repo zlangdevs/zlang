@@ -59,6 +59,9 @@ fun main() >> i32 {
     i32 current_age = alex.age;
     i32 point_x = origin.x;
     @printf("(expected 35):%d\n", current_age + point_x);
+    @printf("(expected 30):%d\n", bob.age);
+    @printf("(expected 1):%d\n", default.id);
+    ?? @printf("(expected 66): %d\n". bob.name[0]); causes strange error (compiler segfault)
     
     print_info(default);
     print_info(alex);
