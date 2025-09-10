@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../parser/ast.zig");
 const errors = @import("../errors.zig");
+const utils = @import("utils.zig");
 const bfck = @import("bf.zig");
 const control_flow = @import("control_flow.zig");
 
@@ -502,119 +503,13 @@ pub const CodeGenerator = struct {
         return errors.CodegenError.TypeMismatch;
     }
 
-    fn getLLVMType(self: *CodeGenerator, type_name: []const u8) c.LLVMTypeRef {
-        if (std.mem.startsWith(u8, type_name, "ptr<") and std.mem.endsWith(u8, type_name, ">")) {
-            const inner_type_name = type_name[4 .. type_name.len - 1];
-            const inner_type = self.getLLVMType(inner_type_name);
-            return c.LLVMPointerType(inner_type, 0);
-        } else if (std.mem.startsWith(u8, type_name, "arr<") and std.mem.endsWith(u8, type_name, ">")) {
-            const inner = type_name[4 .. type_name.len - 1];
-            var comma_pos: ?usize = null;
-            var search_idx: usize = inner.len;
-            while (search_idx > 0) {
-                search_idx -= 1;
-                if (inner[search_idx] == ',') {
-                    comma_pos = search_idx;
-                    break;
-                }
-            }
+    pub const getLLVMType = utils.getLLVMType;
 
-            if (comma_pos) |pos| {
-                const element_type_part = inner[0..pos];
-                const element_type_name = std.mem.trim(u8, element_type_part, " \t");
-                const size_part = inner[pos + 1 ..];
-                const size_str = std.mem.trim(u8, size_part, " \t");
+    pub const isUnsignedType = utils.isUnsignedType;
 
-                if (std.fmt.parseInt(u32, size_str, 10)) |array_size| {
-                    const element_type = self.getLLVMType(element_type_name);
-                    return c.LLVMArrayType(element_type, array_size);
-                } else |_| {}
-            } else {}
-            return c.LLVMInt32TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "i8")) {
-            return c.LLVMInt8TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "i16")) {
-            return c.LLVMInt16TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "i32")) {
-            return c.LLVMInt32TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "i64")) {
-            return c.LLVMInt64TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "u8")) {
-            return c.LLVMInt8TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "u16")) {
-            return c.LLVMInt16TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "u32")) {
-            return c.LLVMInt32TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "u64")) {
-            return c.LLVMInt64TypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "f16")) {
-            return c.LLVMHalfTypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "f32")) {
-            return c.LLVMFloatTypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "f64")) {
-            return c.LLVMDoubleTypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "void")) {
-            return c.LLVMVoidTypeInContext(self.context);
-        } else if (std.mem.eql(u8, type_name, "bool")) {
-            return c.LLVMInt1TypeInContext(self.context);
-        } else {
-            if (self.struct_types.get(type_name)) |struct_type| {
-                return struct_type;
-            }
-        }
-        return c.LLVMInt32TypeInContext(self.context);
-    }
+    pub const getAlignmentForType = utils.getAlignmentForType;
 
-    fn isUnsignedType(type_name: []const u8) bool {
-        return std.mem.startsWith(u8, type_name, "u");
-    }
-
-    fn getAlignmentForType(self: *CodeGenerator, llvm_type: c.LLVMTypeRef) c_uint {
-        const type_kind = c.LLVMGetTypeKind(llvm_type);
-        return switch (type_kind) {
-            c.LLVMIntegerTypeKind => {
-                const bit_width = c.LLVMGetIntTypeWidth(llvm_type);
-                if (bit_width <= 8) return 1;
-                if (bit_width <= 16) return 2;
-                if (bit_width <= 32) return 4;
-                if (bit_width <= 64) return 8;
-                return 8;
-            },
-            c.LLVMFloatTypeKind => 4,
-            c.LLVMDoubleTypeKind => 8,
-            c.LLVMHalfTypeKind => 2,
-            c.LLVMPointerTypeKind => 8,
-            c.LLVMArrayTypeKind => self.getAlignmentForType(c.LLVMGetElementType(llvm_type)),
-            c.LLVMStructTypeKind => 8,
-            else => 4,
-        };
-    }
-
-    fn getTypeNameFromLLVMType(self: *CodeGenerator, llvm_type: c.LLVMTypeRef) []const u8 {
-        _ = self;
-        const type_kind = c.LLVMGetTypeKind(llvm_type);
-        const width = c.LLVMGetIntTypeWidth(llvm_type);
-
-        return switch (type_kind) {
-            c.LLVMIntegerTypeKind => {
-                if (width == 1) {
-                    return "bool";
-                } else {
-                    return switch (width) {
-                        8 => "i8",
-                        16 => "i16",
-                        32 => "i32",
-                        64 => "i64",
-                        else => "i32",
-                    };
-                }
-            },
-            c.LLVMFloatTypeKind => "f32",
-            c.LLVMDoubleTypeKind => "f64",
-            c.LLVMHalfTypeKind => "f16",
-            else => "i32",
-        };
-    }
+    pub const getTypeNameFromLLVMType = utils.getTypeNameFromLLVMType;
 
     fn libcTypeToLLVM(self: *CodeGenerator, libc_type: LibcType) c.LLVMTypeRef {
         return switch (libc_type) {
@@ -2600,26 +2495,7 @@ pub const CodeGenerator = struct {
         return phi;
     }
 
-    fn convertToBool(self: *CodeGenerator, value: c.LLVMValueRef) c.LLVMValueRef {
-        const value_type = c.LLVMTypeOf(value);
-        const type_kind = c.LLVMGetTypeKind(value_type);
-        if (type_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(value_type) == 1) {
-            return value;
-        }
-        if (type_kind == c.LLVMIntegerTypeKind) {
-            const zero = c.LLVMConstInt(value_type, 0, 0);
-            return c.LLVMBuildICmp(self.builder, c.LLVMIntNE, value, zero, "tobool");
-        }
-        if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind) {
-            const zero = c.LLVMConstReal(value_type, 0.0);
-            return c.LLVMBuildFCmp(self.builder, c.LLVMRealONE, value, zero, "tobool");
-        }
-        if (type_kind == c.LLVMPointerTypeKind) {
-            const null_ptr = c.LLVMConstNull(value_type);
-            return c.LLVMBuildICmp(self.builder, c.LLVMIntNE, value, null_ptr, "tobool");
-        }
-        return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 1, 0);
-    }
+    pub const convertToBool = utils.convertToBool;
 
     pub const generateBrainfuck = bfck.generateBrainfuck;
 
