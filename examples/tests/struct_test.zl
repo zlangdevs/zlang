@@ -45,7 +45,7 @@ fun main() >> i32 {
     alex.is_male = true;
     
     Person bob = Person{
-        name = "Bob Smith", ?? there is a bug with converting string to char array here now
+        name = "Bob Smith",
         age = 30,
         is_male = true
     };
