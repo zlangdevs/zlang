@@ -3,6 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 extern YYSTYPE yylval;
+
+static int template_depth = 0;
+static int last_was_identifier = 0;
 %}
 
 %option noyywrap
@@ -37,7 +40,7 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "struct"    { return TOKEN_STRUCT; }
 "null"      { return TOKEN_NULL; }
 "brainfuck"[ \t\n]*"{" { BEGIN(BRAINFUCK); yylval.string = strdup(""); }
-{IDENT}     { yylval.string = strdup(yytext); return TOKEN_IDENTIFIER; }
+{IDENT}     { yylval.string = strdup(yytext); last_was_identifier = 1; return TOKEN_IDENTIFIER; }
 {FLOAT_EXP_DOT}  { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
 {FLOAT_EXP_INT}  { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
 {FLOAT_DOT}      { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
@@ -86,30 +89,51 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "*="        { return TOKEN_MULTIPLY_ASSIGN; }
 "/="        { return TOKEN_DIVIDE_ASSIGN; }
 "%="        { return TOKEN_MODULUS_ASSIGN; }
-"+"         { return TOKEN_PLUS; }
-"-"         { return TOKEN_MINUS; }
-"*"         { return TOKEN_MULTIPLY; }
-"/"         { return TOKEN_DIVIDE; }
+"+"         { last_was_identifier = 0; return TOKEN_PLUS; }
+"-"         { last_was_identifier = 0; return TOKEN_MINUS; }
+"*"         { last_was_identifier = 0; return TOKEN_MULTIPLY; }
+"/"         { last_was_identifier = 0; return TOKEN_DIVIDE; }
 "%"         { return TOKEN_MODULUS; }
 "<="        { return TOKEN_EQ_LESS; }
 ">="        { return TOKEN_EQ_GREATER; }
 "!="        { return TOKEN_NON_EQUAL; }
 "=="        { return TOKEN_EQUAL; }
-"<"         { return TOKEN_LESS; }
-">"         { return TOKEN_GREATER; }
+"<"         {
+    if (last_was_identifier) {
+        template_depth++;
+    }
+    last_was_identifier = 0;
+    return TOKEN_LESS;
+}
+">"         {
+    if (template_depth > 0) {
+        template_depth--;
+    }
+    last_was_identifier = 0;
+    return TOKEN_GREATER;
+}
 "!"         { return TOKEN_NOT; }
 "&"         { return TOKEN_AMPERSAND; }
 "."         { return TOKEN_DOT; }
 "="         { return TOKEN_ASSIGN; }
-">>"        { return TOKEN_RSHIFT; }
-"{"         { return TOKEN_LBRACE; }
+">>"        {
+    if (template_depth > 0) {
+        template_depth--;
+        yyless(1);
+        last_was_identifier = 0;
+        return TOKEN_GREATER;
+    }
+    last_was_identifier = 0;
+    return TOKEN_RSHIFT;
+}
+"{"         { last_was_identifier = 0; return TOKEN_LBRACE; }
 "}"         { return TOKEN_RBRACE; }
 "("         { return TOKEN_LPAREN; }
 ")"         { return TOKEN_RPAREN; }
 "["         { return TOKEN_LBRACKET; }
 "]"         { return TOKEN_RBRACKET; }
 "@"         { return TOKEN_AT; }
-","         { return TOKEN_COMMA; }
+","         { last_was_identifier = 0; return TOKEN_COMMA; }
 ":"         { return TOKEN_COLON; }
 ";"         { return TOKEN_SEMICOLON; }
 [ \t\n]+    { /* skip spaces */ }
