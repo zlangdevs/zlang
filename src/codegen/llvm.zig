@@ -272,7 +272,6 @@ pub const CodeGenerator = struct {
                         try self.declareFunction(func.data.function);
                     }
                 }
-                self.external_c_functions = std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(self.allocator);
                 for (prog.functions.items) |func| {
                     if (func.data == .function) try self.generateFunctionBody(func.data.function);
                 }
