@@ -56,6 +56,75 @@ fun testAllTypes() >> i32 {
     return 13;
 }
 
+fun test_simple_return() >> i32 {
+    return 42;
+}
+
+fun test_ptr_simple() >> ptr<i32> {
+    i32 x = 10;
+    return &x;
+}
+
+fun test_double_nested() >> ptr<ptr<i32>> {
+    i32 x = 20;
+    ptr<i32> xptr = &x;
+    return &xptr;
+}
+
+fun test_triple_nested() >> ptr<ptr<ptr<i32>>> {
+    i32 x = 30;
+    ptr<i32> xptr = &x;
+    ptr<ptr<i32>> xptrptr = &xptr;
+    return &xptrptr;
+}
+
+fun test_quadruple_nested() >> ptr<ptr<ptr<ptr<i32>>>> {
+    i32 x = 40;
+    ptr<i32> xptr = &x;
+    ptr<ptr<i32>> xptrptr = &xptr;
+    ptr<ptr<ptr<i32>>> xptrptrptr = &xptrptr;
+    return &xptrptrptr;
+}
+
+fun test_simple_expr() >> i32 {
+    i32 x = 8;
+    return x + 1;
+}
+
+fun test_multiple_operations() >> i32 {
+    i32 x = 32;
+    i32 y = x + 2;
+    return y - 1;
+}
+
+fun test_nested_and_expr(val: i32) >> ptr<ptr<i32>> {
+    i32 x = val + 1;
+    ptr<i32> xptr = &x;
+    return &xptr;
+}
+
+fun test_complex_expr() >> i32 {
+    i32 a = 16;
+    i32 b = 4;
+    return (a + 1) + (b + 2);
+}
+
+fun test_mixed_operations() >> i32 {
+    i32 x = 100;
+    x = x + 2;
+    x = x + 5;
+    return x;
+}
+
+fun test_nested_in_param(p: ptr<ptr<i32>>) >> i32 {
+    return 0;
+}
+
+fun test_deeply_nested_param(p: ptr<ptr<ptr<ptr<i32>>>>) >> ptr<ptr<i32>> {
+    ptr<ptr<i32>> result = null;
+    return result;
+}
+
 fun main() >> i32 {
     @printf("=== Comprehensive Pointer Test ===\n\n");
 
@@ -81,5 +150,24 @@ fun main() >> i32 {
     testPointerParameter(px);
 
     @printf("\n=== Test Complete ===\n");
+    
+    test_simple_return();
+    test_ptr_simple();
+    test_double_nested();
+    test_triple_nested();
+    test_quadruple_nested();
+    i32 expr_result = test_simple_expr();
+    i32 multi_ops = test_multiple_operations();
+    ptr<ptr<i32>> mixed_result = test_nested_and_expr(64);
+    i32 complex_result = test_complex_expr();
+    i32 mixed_ops = test_mixed_operations();
+    test_nested_in_param(null);
+    ptr<ptr<i32>> deep_result = test_deeply_nested_param(null);
+    ptr<ptr<i32>> double_ptr = null;
+    ptr<ptr<ptr<i32>>> triple_ptr = null;
+    ptr<ptr<ptr<ptr<i32>>>> quad_ptr = null;
+    i32 base = 128;
+    i32 modified = base + 3;
+    i32 double_modified = modified - 1;
     return 0;
 }
