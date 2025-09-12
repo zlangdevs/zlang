@@ -7,6 +7,6 @@ clear
 ./run_tests.sh
 ./zig-out/bin/zlang examples/brainfuck.zl -optimize
 cat thirdparties/mandelbrot.bf | ./output
-echo "++++++[>++++++++<-]>." | ./output 
+echo "++++++[>++++++++<-]>.[-]++++++++++.." | ./output 
 cd examples/multi_file_c
 ./build.sh
