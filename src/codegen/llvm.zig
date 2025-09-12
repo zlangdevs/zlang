@@ -263,10 +263,7 @@ pub const CodeGenerator = struct {
                         try self.generateEnumDeclaration(func.data.enum_decl);
                     } else if (func.data == .struct_decl) {
                         try self.generateStructType(func.data.struct_decl);
-                    }
-                }
-                for (prog.functions.items) |func| {
-                    if (func.data == .c_function_decl) {
+                    } else if (func.data == .c_function_decl) {
                         try self.generateCFunctionDeclaration(func.data.c_function_decl);
                     } else if (func.data == .function) {
                         try self.declareFunction(func.data.function);
