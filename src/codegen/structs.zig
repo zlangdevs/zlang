@@ -230,18 +230,6 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
 pub fn generateStructFieldAccess(cg: *llvm.CodeGenerator, struct_var_info: VariableInfo, field_path: []const u8) errors.CodegenError!c.LLVMValueRef {
     return try generateRecursiveFieldAccess(cg, struct_var_info.value, struct_var_info.type_ref, struct_var_info.type_name, field_path);
 }
-pub fn collectStructDeclarations(cg: *llvm.CodeGenerator, node: *ast.Node) errors.CodegenError!void {
-    switch (node.data) {
-        .program => |prog| {
-            for (prog.functions.items) |func| {
-                if (func.data == .struct_decl) {
-                    try generateStructType(cg, func.data.struct_decl);
-                }
-            }
-        },
-        else => {},
-    }
-}
 
 pub fn generateStructType(cg: *llvm.CodeGenerator, struct_decl: ast.StructDecl) errors.CodegenError!void {
     var field_types = std.ArrayList(c.LLVMTypeRef).init(cg.allocator);

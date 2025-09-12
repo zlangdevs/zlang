@@ -66,101 +66,86 @@ fn createGenericLibcFunction(cg: *llvm.CodeGenerator, func_name: []const u8) !c.
     return llvm_func;
 }
 
-pub fn declareFunction(cg: *llvm.CodeGenerator, func_node: *ast.Node) errors.CodegenError!void {
-    switch (func_node.data) {
-        .function => |func| {
-            var param_types = std.ArrayList(c.LLVMTypeRef).init(cg.allocator);
-            defer param_types.deinit();
-            for (func.parameters.items) |param| {
-                try param_types.append(cg.getLLVMType(param.type_name));
+pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.CodegenError!void {
+    var param_types = std.ArrayList(c.LLVMTypeRef).init(cg.allocator);
+    defer param_types.deinit();
+    for (func.parameters.items) |param| {
+        try param_types.append(cg.getLLVMType(param.type_name));
+    }
+    const return_type = cg.getLLVMType(func.return_type);
+    const function_type = if (param_types.items.len > 0)
+        c.LLVMFunctionType(return_type, param_types.items.ptr, @intCast(param_types.items.len), 0)
+    else
+        c.LLVMFunctionType(return_type, null, 0, 0);
+
+    const func_name_z = cg.allocator.dupeZ(u8, func.name) catch return errors.CodegenError.OutOfMemory;
+    defer cg.allocator.free(func_name_z);
+
+    const llvm_func = c.LLVMAddFunction(cg.module, func_name_z.ptr, function_type);
+    try cg.functions.put(func.name, llvm_func);
+}
+
+pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.CodegenError!void {
+    const llvm_func = cg.functions.get(func.name) orelse return errors.CodegenError.UndefinedFunction;
+    cg.current_function = llvm_func;
+    cg.current_function_return_type = func.return_type;
+    const entry_block = c.LLVMAppendBasicBlockInContext(cg.context, llvm_func, "entry");
+    c.LLVMPositionBuilderAtEnd(cg.builder, entry_block);
+    // Reset scopes for new function (keep global scope)
+    variables.clearCurrentFunctionScopes(cg);
+    // Create a new function-level scope for this function
+    try variables.pushScope(cg);
+    // Add parameters to the function-level scope
+    for (func.parameters.items, 0..) |param, i| {
+        const param_value = c.LLVMGetParam(llvm_func, @intCast(i));
+        const param_type = cg.getLLVMType(param.type_name);
+        const alloca = c.LLVMBuildAlloca(cg.builder, param_type, param.name.ptr);
+        _ = c.LLVMBuildStore(cg.builder, param_value, alloca);
+        try variables.putVariable(cg, param.name, structs.VariableInfo{
+            .value = alloca,
+            .type_ref = param_type,
+            .type_name = param.type_name,
+        });
+    }
+
+    const valid_control_flow = try hasValidControlFlow(cg, func);
+
+    for (func.body.items) |stmt| {
+        try cg.generateStatement(stmt);
+    }
+    if (!valid_control_flow and !std.mem.eql(u8, func.return_type, "void")) {
+        if (func.body.items.len == 0 or !utils.isReturnStatement(func.body.items[func.body.items.len - 1])) {
+            return errors.CodegenError.TypeMismatch;
+        }
+    }
+    if (valid_control_flow) {
+        const last_is_return = if (func.body.items.len > 0)
+            utils.isReturnStatement(func.body.items[func.body.items.len - 1])
+        else
+            false;
+        if (std.mem.eql(u8, func.return_type, "void")) {
+            if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(cg.builder)) == null) {
+                _ = c.LLVMBuildRetVoid(cg.builder);
             }
-            const return_type = cg.getLLVMType(func.return_type);
-            const function_type = if (param_types.items.len > 0)
-                c.LLVMFunctionType(return_type, param_types.items.ptr, @intCast(param_types.items.len), 0)
-            else
-                c.LLVMFunctionType(return_type, null, 0, 0);
-
-            const func_name_z = cg.allocator.dupeZ(u8, func.name) catch return errors.CodegenError.OutOfMemory;
-            defer cg.allocator.free(func_name_z);
-
-            const llvm_func = c.LLVMAddFunction(cg.module, func_name_z.ptr, function_type);
-            try cg.functions.put(func.name, llvm_func);
-        },
-        else => return errors.CodegenError.TypeMismatch,
+        } else {
+            if (!last_is_return) {
+                const default_value = utils.getDefaultValueForType(cg, func.return_type);
+                _ = c.LLVMBuildRet(cg.builder, default_value);
+            } else {
+                if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(cg.builder)) == null) {
+                    const default_value = utils.getDefaultValueForType(cg, func.return_type);
+                    _ = c.LLVMBuildRet(cg.builder, default_value);
+                }
+            }
+        }
     }
 }
 
-pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func_node: *ast.Node) errors.CodegenError!void {
-    switch (func_node.data) {
-        .function => |func| {
-            const llvm_func = cg.functions.get(func.name) orelse return errors.CodegenError.UndefinedFunction;
-            cg.current_function = llvm_func;
-            cg.current_function_return_type = func.return_type;
-            const entry_block = c.LLVMAppendBasicBlockInContext(cg.context, llvm_func, "entry");
-            c.LLVMPositionBuilderAtEnd(cg.builder, entry_block);
-            // Reset scopes for new function (keep global scope)
-            variables.clearCurrentFunctionScopes(cg);
-            // Create a new function-level scope for this function
-            try variables.pushScope(cg);
-            // Add parameters to the function-level scope
-            for (func.parameters.items, 0..) |param, i| {
-                const param_value = c.LLVMGetParam(llvm_func, @intCast(i));
-                const param_type = cg.getLLVMType(param.type_name);
-                const alloca = c.LLVMBuildAlloca(cg.builder, param_type, param.name.ptr);
-                _ = c.LLVMBuildStore(cg.builder, param_value, alloca);
-                try variables.putVariable(cg, param.name, structs.VariableInfo{
-                    .value = alloca,
-                    .type_ref = param_type,
-                    .type_name = param.type_name,
-                });
-            }
-
-            const valid_control_flow = try hasValidControlFlow(cg, func_node);
-
-            for (func.body.items) |stmt| {
-                try cg.generateStatement(stmt);
-            }
-            if (!valid_control_flow and !std.mem.eql(u8, func.return_type, "void")) {
-                if (func.body.items.len == 0 or !utils.isReturnStatement(func.body.items[func.body.items.len - 1])) {
-                    return errors.CodegenError.TypeMismatch;
-                }
-            }
-            if (valid_control_flow) {
-                const last_is_return = if (func.body.items.len > 0)
-                    utils.isReturnStatement(func.body.items[func.body.items.len - 1])
-                else
-                    false;
-                if (std.mem.eql(u8, func.return_type, "void")) {
-                    if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(cg.builder)) == null) {
-                        _ = c.LLVMBuildRetVoid(cg.builder);
-                    }
-                } else {
-                    if (!last_is_return) {
-                        const default_value = utils.getDefaultValueForType(cg, func.return_type);
-                        _ = c.LLVMBuildRet(cg.builder, default_value);
-                    } else {
-                        if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(cg.builder)) == null) {
-                            const default_value = utils.getDefaultValueForType(cg, func.return_type);
-                            _ = c.LLVMBuildRet(cg.builder, default_value);
-                        }
-                    }
-                }
-            }
-        },
-        else => return errors.CodegenError.TypeMismatch,
+fn hasValidControlFlow(cg: *llvm.CodeGenerator, func: ast.Function) errors.CodegenError!bool {
+    if (std.mem.eql(u8, func.return_type, "void")) {
+        return true;
     }
-}
-
-fn hasValidControlFlow(cg: *llvm.CodeGenerator, func_node: *ast.Node) errors.CodegenError!bool {
-    switch (func_node.data) {
-        .function => |func| {
-            if (std.mem.eql(u8, func.return_type, "void")) {
-                return true;
-            }
-            return cg.control_flow_analyzer.analyzeStatementListEnhanced(func.body.items);
-        },
-        else => return errors.CodegenError.TypeMismatch,
-    }
+    return cg.control_flow_analyzer.analyzeStatementListEnhanced(func.body.items);
 }
 
 pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFunctionDecl) errors.CodegenError!void {
