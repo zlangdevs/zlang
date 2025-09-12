@@ -179,15 +179,15 @@ pub const CodeGenerator = struct {
     pub const putVariable = variables.putVariable;
 
     pub const variableExistsInCurrentScope = variables.variableExistsInCurrentScope;
-    
+
     pub const declareLibcFunction = functions.declareLibcFunction;
-    
+
     pub const declareFunction = functions.declareFunction;
-    
+
     pub const generateFunctionBody = functions.generateFunctionBody;
-    
+
     pub const generateCFunctionDeclaration = functions.generateCFunctionDeclaration;
-    
+
     pub const generateFunctionCall = functions.generateFunctionCall;
 
     pub const libcTypeToLLVM = functions.libcTypeToLLVM;
@@ -248,8 +248,6 @@ pub const CodeGenerator = struct {
 
     pub const getTypeNameFromLLVMType = utils.getTypeNameFromLLVMType;
 
-    pub const collectStructDeclarations = structs.collectStructDeclarations;
-
     pub const generateStructType = structs.generateStructType;
 
     pub const generateStructInitializer = structs.generateStructInitializer;
@@ -259,38 +257,25 @@ pub const CodeGenerator = struct {
     pub fn generateCode(self: *CodeGenerator, program: *ast.Node) errors.CodegenError!void {
         switch (program.data) {
             .program => |prog| {
-                try self.collectStructDeclarations(program);
-
-                for (prog.functions.items) |func| {
-                    if (func.data == .enum_decl) {
-                        try self.generateEnumDeclaration(func.data.enum_decl);
-                    } else if (func.data == .struct_decl) {
-                        // Struct declarations are handled at declaration time, no additional processing needed
-                        // The struct type information is stored in the AST but doesn't need LLVM IR generation
-                        // since structs are compiled to LLVM types when used in variables/functions
-                    }
-                }
                 for (prog.globals.items) |glob| {
                     try self.generateGlobalDeclaration(glob);
                 }
                 for (prog.functions.items) |func| {
-                    if (func.data == .c_function_decl) {
-                        try CodeGenerator.generateCFunctionDeclaration(self, func.data.c_function_decl);
+                    if (func.data == .enum_decl) {
+                        try self.generateEnumDeclaration(func.data.enum_decl);
+                    } else if (func.data == .struct_decl) {
+                        try self.generateStructType(func.data.struct_decl);
+                    } else if (func.data == .c_function_decl) {
+                        try self.generateCFunctionDeclaration(func.data.c_function_decl);
                     } else if (func.data == .function) {
-                        try CodeGenerator.declareFunction(self, func);
-                    }
-                }
-                self.external_c_functions = std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(self.allocator);
-                for (prog.functions.items) |func| {
-                    if (func.data == .function) {
-                        try CodeGenerator.generateFunctionBody(self, func);
+                        try self.declareFunction(func.data.function); // Merge function declaration & function body declaration later
+                        try self.generateFunctionBody(func.data.function);
                     }
                 }
             },
             else => return errors.CodegenError.TypeMismatch,
         }
     }
-
 
     fn hasValidControlFlow(self: *CodeGenerator, func_node: *ast.Node) errors.CodegenError!bool {
         switch (func_node.data) {
