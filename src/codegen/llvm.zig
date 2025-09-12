@@ -257,20 +257,24 @@ pub const CodeGenerator = struct {
     pub fn generateCode(self: *CodeGenerator, program: *ast.Node) errors.CodegenError!void {
         switch (program.data) {
             .program => |prog| {
-                for (prog.globals.items) |glob| {
-                    try self.generateGlobalDeclaration(glob);
-                }
+                for (prog.globals.items) |glob| try self.generateGlobalDeclaration(glob);
                 for (prog.functions.items) |func| {
                     if (func.data == .enum_decl) {
                         try self.generateEnumDeclaration(func.data.enum_decl);
                     } else if (func.data == .struct_decl) {
                         try self.generateStructType(func.data.struct_decl);
-                    } else if (func.data == .c_function_decl) {
+                    }
+                }
+                for (prog.functions.items) |func| {
+                    if (func.data == .c_function_decl) {
                         try self.generateCFunctionDeclaration(func.data.c_function_decl);
                     } else if (func.data == .function) {
-                        try self.declareFunction(func.data.function); // Merge function declaration & function body declaration later
-                        try self.generateFunctionBody(func.data.function);
+                        try self.declareFunction(func.data.function);
                     }
+                }
+                self.external_c_functions = std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(self.allocator);
+                for (prog.functions.items) |func| {
+                    if (func.data == .function) try self.generateFunctionBody(func.data.function);
                 }
             },
             else => return errors.CodegenError.TypeMismatch,
