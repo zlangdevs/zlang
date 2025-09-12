@@ -1,8 +1,0 @@
-fun main() >> i32 {
-    sosal();
-    return 0;
-}
-
-fun sosal() >> void {
-    @printf("sosal?\n");
-}
