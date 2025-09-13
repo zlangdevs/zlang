@@ -1,0 +1,58 @@
+??extern fn array_new() *i32;
+??extern fn array_push(arr: **i32, value: i32) void;
+??extern fn array_length(arr: *i32) i32;
+??extern fn array_get(arr: *i32, index: i32) i32;
+??extern fn array_free(arr: *i32) void;
+
+??extern fn map_new() *void;
+??extern fn map_put(map: **void, key: *u8, value: i32) void;
+??extern fn map_get(map: *void, key: *u8) i32;
+??extern fn map_length(map: *void) i32;
+??extern fn map_free(map: *void) void;
+
+??extern fn test_stb_ds() void;
+
+?? TODO: Add decorator for C-declarations to automatically create ZLang wrapper-function.
+
+fun @array_new() >> ptr<i32>;
+fun @array_push(arr: ptr<ptr<i32>>, value: i32) >> void;
+fun @array_length(arr: ptr<i32>) >> i32;
+fun @array_get(arr: ptr<i32>, index: i32) >> i32;
+fun @array_free(arr: ptr<i32>) >> void;
+
+fun @map_new() >> ptr<void>;
+fun @map_put(map: ptr<ptr<void>>, key: ptr<u8>, value: i32) >> void;
+fun @map_get(map: ptr<void>, key: ptr<u8>) >> i32;
+fun @map_length(map: ptr<void>) >> i32;
+fun @map_free(map: ptr<void>) >> void;
+
+fun @test_stb_ds() >> void;
+
+fun array_new() >> ptr<i32> {
+    ptr<i32> res = @array_new();
+    return res;
+}
+
+fun array_push(arr: ptr<ptr<i32>>, value: i32) >> void {
+    @array_push(arr, value);
+}
+
+fun array_length(arr: ptr<i32>) >> i32 {
+    return @array_length(arr);
+}
+
+fun array_get(arr: ptr<i32>, index: i32) >> i32 {
+    return @array_get(arr, index);
+}
+
+fun array_free(arr: ptr<i32>) >> void {
+    @array_free(arr);
+}
+
+fun map_new() >> ptr<void> {return @map_new();}
+fun map_put(map: ptr<ptr<void>>, key: ptr<u8>, value: i32) >> void {@map_put(map, key, value);}
+fun map_get(map: ptr<void>, key: ptr<u8>) >> i32 {return @map_get(map, key);}
+fun map_length(map: ptr<void>) >> i32 {return @map_length(map);}
+fun map_free(map: ptr<void>) >> void {@map_free(map);}
+
+fun test_stb_ds() >> void {@test_stb_ds();}

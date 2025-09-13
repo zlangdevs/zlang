@@ -1,0 +1,28 @@
+use wrapper
+
+fun main() >> i32 {
+    ptr<i32> my_vec = array_new();
+    @printf("Vector created. Len is now %d\n", array_length(my_vec));
+    i32 first = 123;
+    array_push(&my_vec, first);
+    @printf("Pushed %d to vector. Len is now %d\n", first, array_length(my_vec));
+    @printf("Getting first element: %d\n", array_get(my_vec, 0));
+    array_free(my_vec);
+    @printf("Vector is freed now\n");
+    
+    ptr<void> my_map = map_new();
+    @printf("Map is created. Length is now %d\n", map_length(my_map));
+    arr<u8, 3> my_str;
+    my_str[0] = 'h';
+    my_str[1] = 'i';
+    my_str[2] = 0;
+    map_put(&my_map, "hi", 1);
+    map_put(&my_map, "bye", 2);
+    @printf("Value of key 'bye': %d\n", map_get(my_map, "bye"));
+    @printf("Value of key 'hi': %d\n", map_get(my_map, "hi"));
+    @printf("Length of map: %d\n", map_length(my_map));
+    map_free(my_map);
+    @printf("Map is freed!\n\nCalling a test from C-side:\n\n");
+    test_stb_ds();
+    return 0;
+}
