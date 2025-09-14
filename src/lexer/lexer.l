@@ -54,13 +54,14 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
         fprintf(stderr, "Error: Empty character literal\n");
         free(content);
         return 0;
-    } else if (len > 1) {
-        fprintf(stderr, "Error: Character literal too long: '%s'\n", content);
-        free(content);
-        return 0;
     }
     char actual_char;
     if (content[0] == '\\') {
+        if (len != 2) {
+            fprintf(stderr, "Error: Invalid escape sequence: '%s'\n", content);
+            free(content);
+            return 0;
+        }
         switch (content[1]) {
             case 'n': actual_char = '\n'; break;
             case 't': actual_char = '\t'; break;
@@ -68,12 +69,18 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
             case '\\': actual_char = '\\'; break;
             case '\'': actual_char = '\''; break;
             case '"': actual_char = '"'; break;
+            case '0': actual_char = '\0'; break;
             default:
                 fprintf(stderr, "Error: Unknown escape sequence: \\%c\n", content[1]);
                 free(content);
                 return 0;
         }
     } else {
+        if (len != 1) {
+            fprintf(stderr, "Error: Character literal too long: '%s'\n", content);
+            free(content);
+            return 0;
+        }
         actual_char = content[0];
     }
     free(content);
