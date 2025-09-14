@@ -10,3 +10,5 @@ cat thirdparties/mandelbrot.bf | ./output
 echo "++++++[>++++++++<-]>.[-]++++++++++.." | ./output 
 cd examples/multi_file_c
 ./build.sh
+cd ../stbds
+./build.sh
