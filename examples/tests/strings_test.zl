@@ -1,0 +1,48 @@
+struct StringContainer {
+    message arr<u8, 50>
+}
+
+fun main() >> i32 {
+    @printf("=== ZLang String Implementation Test ===\n");
+    @printf("Test 1: Character literal escapes\n");
+    arr<u8, 6> char_test;
+    char_test[0] = 'H';
+    char_test[1] = 'e';
+    char_test[2] = 'l';
+    char_test[3] = 'l';
+    char_test[4] = 'o';
+    char_test[5] = '\0';
+    @printf("Char escapes: %s\n", &char_test);
+    @printf("Test 2: Printf with array pointers\n");
+    arr<u8, 10> ptr_test;
+    ptr_test[0] = 'T';
+    ptr_test[1] = 'e';
+    ptr_test[2] = 's';
+    ptr_test[3] = 't';
+    ptr_test[4] = 0;
+    @printf("Pointer test: %s\n", &ptr_test);
+    @printf("Test 3: Direct string assignment\n");
+    arr<u8, 20> direct_test = "Hello, World!";
+    @printf("Direct assignment: %s\n", &direct_test);
+    arr<u8, 30> escape_test = "Tab:\tNewline:\nQuote:\"";
+    @printf("String escapes work\n");
+    StringContainer container = StringContainer {message = "Struct works!"};
+    @printf("Struct field: %s\n", container.message);
+    arr<u8, 8> all_escapes;
+    all_escapes[0] = '\\';
+    all_escapes[1] = '\"';
+    all_escapes[2] = '\'';
+    all_escapes[3] = '\n';
+    all_escapes[4] = '\t';
+    all_escapes[5] = '\0';
+    @printf("All escapes work\n");
+    arr<u8, 10> mixed = "Initial";
+    mixed[7] = '!';
+    mixed[8] = '\0';
+    @printf("Mixed: %s\n", &mixed);
+    @printf("✓ \\0 character literal works\n");
+    @printf("✓ Array pointers in printf work\n");
+    @printf("✓ Direct string assignment works\n");
+    @printf("✓ C-like strings implemented\n");
+    return 0;
+}

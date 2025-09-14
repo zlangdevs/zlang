@@ -788,6 +788,21 @@ pub const CodeGenerator = struct {
                             _ = c.LLVMBuildStore(self.builder, casted_value, element_ptr);
                         }
                     },
+                    .string_literal => |str_lit| {
+                        const element_type_kind = c.LLVMGetTypeKind(element_type);
+                        if (element_type_kind != c.LLVMIntegerTypeKind or c.LLVMGetIntTypeWidth(element_type) != 8) {
+                            return errors.CodegenError.TypeMismatch;
+                        }
+                        const parsed_str = try self.parse_escape(str_lit.value);
+                        defer self.allocator.free(parsed_str);
+                        for (parsed_str, 0..) |byte, idx| {
+                            if (idx >= array_size) break;
+                            var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(idx)), 0) };
+                            const element_ptr = c.LLVMBuildGEP2(self.builder, array_type, alloca, &indices[0], 2, "array_element_ptr");
+                            const byte_value = c.LLVMConstInt(c.LLVMInt8TypeInContext(self.context), @as(c_ulonglong, @intCast(byte)), 0);
+                            _ = c.LLVMBuildStore(self.builder, byte_value, element_ptr);
+                        }
+                    },
                     else => {
                         return errors.CodegenError.TypeMismatch;
                     },
@@ -984,6 +999,8 @@ pub const CodeGenerator = struct {
                         'r' => transformed_string.append('\r') catch return errors.CodegenError.OutOfMemory,
                         '\'' => transformed_string.append('\'') catch return errors.CodegenError.OutOfMemory,
                         '"' => transformed_string.append('"') catch return errors.CodegenError.OutOfMemory,
+                        '0' => transformed_string.append(0) catch return errors.CodegenError.OutOfMemory,
+                        '\\' => transformed_string.append('\\') catch return errors.CodegenError.OutOfMemory,
                         else => {
                             transformed_string.append('\\') catch return errors.CodegenError.OutOfMemory;
                             transformed_string.append(str[i]) catch return errors.CodegenError.OutOfMemory;
