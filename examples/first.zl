@@ -10,11 +10,13 @@ fun main() >> i32 {
 ?? Types (Coming soon (when GTA VI will come out))
 
 
-?? TODO: @puts() -- call from libc
-?? TODO: @("libname")some_func() -- call from libname
-?? TODO(?): @("lang")some_func() -- ffi
-?? TODO(?): @asm -- asm inline
-?? TODO(?): @asm("langname") -- asm inline of specific lang
+...
+TODO: @puts() -- call from libc
+TODO: @("libname")some_func() -- call from libname
+TODO(?): @("lang")some_func() -- ffi
+TODO(?): @asm -- asm inline
+TODO(?): @asm("langname") -- asm inline of specific lang
+...
 
 ?? short function
 ?? TODO: add also this syntax:   fun main() >> i32 = *code*;
