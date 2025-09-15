@@ -1228,6 +1228,30 @@ pub const CodeGenerator = struct {
                     c.LLVMSetAlignment(load_instr, alignment);
                     return load_instr;
                 } else if (type_kind == c.LLVMPointerTypeKind) {
+                    if (qual_id.base.data == .identifier) {
+                        const base_name = qual_id.base.data.identifier.name;
+                        if (CodeGenerator.getVariable(self, base_name)) |base_var| {
+                            const base_type_name = base_var.type_name;
+                            if (std.mem.startsWith(u8, base_type_name, "ptr<") and std.mem.endsWith(u8, base_type_name, ">")) {
+                                const inner_type_name = base_type_name[4 .. base_type_name.len - 1];
+                                const struct_type = self.struct_types.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
+                                const field_map = self.struct_fields.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
+                                const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
+                                const field_ptr = try self.getStructFieldPointer(struct_type, result_value, field_index);
+                                const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+                                const field_type_kind = c.LLVMGetTypeKind(field_type);
+                                if (field_type_kind == c.LLVMArrayTypeKind) {
+                                    return field_ptr;
+                                }
+                                const load_instr = c.LLVMBuildLoad2(self.builder, field_type, field_ptr, "struct_field");
+                                const alignment = self.getAlignmentForType(field_type);
+                                c.LLVMSetAlignment(load_instr, alignment);
+                                return load_instr;
+                            }
+                        }
+                    }
+
+                    // Fallback to old method
                     const pointee_type = c.LLVMGetElementType(result_type);
                     const pointee_type_kind = c.LLVMGetTypeKind(pointee_type);
                     if (pointee_type_kind == c.LLVMStructTypeKind) {
@@ -1594,6 +1618,39 @@ pub const CodeGenerator = struct {
         const rhs_type = c.LLVMTypeOf(rhs_value);
         const lhs_kind = c.LLVMGetTypeKind(lhs_type);
         const rhs_kind = c.LLVMGetTypeKind(rhs_type);
+        const is_lhs_pointer = lhs_kind == c.LLVMPointerTypeKind;
+        const is_rhs_pointer = rhs_kind == c.LLVMPointerTypeKind;
+        if (is_lhs_pointer and is_rhs_pointer) {
+            if (comparison.op != '=' and comparison.op != '!') {
+                return errors.CodegenError.TypeMismatch;
+            }
+            return switch (comparison.op) {
+                '=' => c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, lhs_value, rhs_value, "ptr_cmp_eq"),
+                '!' => c.LLVMBuildICmp(self.builder, c.LLVMIntNE, lhs_value, rhs_value, "ptr_cmp_ne"),
+                else => return errors.CodegenError.UnsupportedOperation,
+            };
+        }
+        if (is_lhs_pointer or is_rhs_pointer) {
+            if (comparison.op != '=' and comparison.op != '!') {
+                return errors.CodegenError.TypeMismatch;
+            }
+            var casted_lhs = lhs_value;
+            var casted_rhs = rhs_value;
+            if (is_lhs_pointer and !is_rhs_pointer) {
+                casted_rhs = c.LLVMBuildPointerCast(self.builder, rhs_value, lhs_type, "cast_to_ptr");
+            } else if (!is_lhs_pointer and is_rhs_pointer) {
+                casted_lhs = c.LLVMBuildPointerCast(self.builder, lhs_value, rhs_type, "cast_to_ptr");
+            }
+            return switch (comparison.op) {
+                '=' => c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, casted_lhs, casted_rhs, "ptr_null_cmp_eq"),
+                '!' => c.LLVMBuildICmp(self.builder, c.LLVMIntNE, casted_lhs, casted_rhs, "ptr_null_cmp_ne"),
+                else => return errors.CodegenError.UnsupportedOperation,
+            };
+        }
+        const is_lhs_struct = lhs_kind == c.LLVMStructTypeKind;
+        const is_rhs_struct = rhs_kind == c.LLVMStructTypeKind;
+        if (is_lhs_struct or is_rhs_struct) return errors.CodegenError.TypeMismatch;
+
         const is_lhs_bool = lhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(lhs_type) == 1;
         const is_rhs_bool = rhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(rhs_type) == 1;
         const is_lhs_float = lhs_kind == c.LLVMFloatTypeKind or

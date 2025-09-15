@@ -1,3 +1,9 @@
+struct Node {
+    left ptr<Node>,
+    right ptr<Node>,
+    val i32
+}
+
 fun main() >> i32 {
     ?? Test 1: Valid null assignments to pointer types
     ptr<i32> p1 = null;
@@ -23,6 +29,34 @@ fun main() >> i32 {
     ?? Test 4: Invalid null assignment to non-pointer (this should cause an error)
     ?? The line below is commented out because it would cause compilation to fail
     ?? i32 value = null;
+
+    @printf("Testing nested structure pointer comparisons...\n");
+
+    Node node1;
+    node1.left = null;
+    node1.right = null;
+    node1.val = 1;
+
+    Node node2;
+    node2.left = null;
+    node2.right = null;
+    node2.val = 1;
+    Node t;
+    t.left = null;
+    t.right = null;
+    t.val = 0;
+    if t.right == t.left {
+        @printf("Test 1 passed: null pointers are equal\n");
+    } else {
+        @printf("Test 1 failed: null pointers should be equal\n");
+    }
+    if t.right == null && t.left == null {
+        @printf("Test 2 passed: both pointers are null\n");
+    }
+    if t.right == null {@printf("Test 3a: t.right is null\n");}
+    if t.left == null {@printf("Test 3b: t.left is null\n");}
+
+    @printf("Tests completed - pointer comparisons working correctly\n");
 
     return 0;
 }
