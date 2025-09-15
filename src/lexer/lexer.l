@@ -13,6 +13,7 @@ static int last_was_identifier = 0;
 %option prefix="zlang_"
 
 %x BRAINFUCK
+%x COMMENT
 
 DIGIT    [0-9]
 LETTER   [a-zA-Z_]
@@ -119,10 +120,15 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
     last_was_identifier = 0;
     return TOKEN_GREATER;
 }
-"!"         { return TOKEN_NOT; }
-"&"         { return TOKEN_AMPERSAND; }
-"."         { return TOKEN_DOT; }
-"="         { return TOKEN_ASSIGN; }
+"..."                         { BEGIN(COMMENT); }
+<COMMENT>[^.\n]+              { /* consume runs without dot/newline */ }
+<COMMENT>\n                   { /* consume newline; */ }
+<COMMENT>\.{1,2}              { /* consume 1–2 dots */ }
+<COMMENT>"..."                { BEGIN(INITIAL); }
+"!"    { return TOKEN_NOT; }
+"&"    { return TOKEN_AMPERSAND; }
+"."    { return TOKEN_DOT; }
+"="    { return TOKEN_ASSIGN; }
 ">>"        {
     if (template_depth > 0) {
         template_depth--;
