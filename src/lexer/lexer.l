@@ -92,11 +92,11 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "||"        { return TOKEN_OR; }
 "++"        { return TOKEN_INCREMENT; }
 "--"        { return TOKEN_DECREMENT; }
-"+="        { return TOKEN_PLUS_ASSIGN; }
-"-="        { return TOKEN_MINUS_ASSIGN; }
-"*="        { return TOKEN_MULTIPLY_ASSIGN; }
-"/="        { return TOKEN_DIVIDE_ASSIGN; }
-"%="        { return TOKEN_MODULUS_ASSIGN; }
+"+="        { yylval.number = '+'; return TOKEN_REASSIGN; }
+"-="        { yylval.number = '-'; return TOKEN_REASSIGN; }
+"*="        { yylval.number = '*'; return TOKEN_REASSIGN; }
+"/="        { yylval.number = '/'; return TOKEN_REASSIGN; }
+"%="        { yylval.number = '%'; return TOKEN_REASSIGN; }
 "+"         { last_was_identifier = 0; return TOKEN_PLUS; }
 "-"         { last_was_identifier = 0; return TOKEN_MINUS; }
 "*"         { last_was_identifier = 0; return TOKEN_MULTIPLY; }

@@ -32,6 +32,7 @@ fun main() >> i32 {
     u32 sum = 0;
     arr<arr<arr<arr<i32, 5>, 5>, 5>, 5> field;
     field[0][0][0][0] = 1;
+    field[0][0][0][0] += 5;
     
     ?? filling 4D array lmao
     for i8 a = 0; a < 5; a++ {

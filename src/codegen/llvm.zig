@@ -514,6 +514,71 @@ pub const CodeGenerator = struct {
             .array_assignment => |arr_ass| {
                 try self.generateArrayAssignment(arr_ass);
             },
+            .array_compound_assignment => |arr_cass| {
+                var collected_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+                defer collected_indices.deinit();
+                const base_node = try self.collectArrayIndices(arr_cass.array, &collected_indices);
+                const index_value = try self.generateExpression(arr_cass.index);
+                try collected_indices.append(index_value);
+                const array_name = try self.getBaseIdentifierName(base_node);
+                defer self.allocator.free(array_name);
+                const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
+                var final_type = var_info.type_ref;
+                for (0..collected_indices.items.len) |_| final_type = c.LLVMGetElementType(final_type);
+                var all_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+                defer all_indices.deinit();
+                try all_indices.append(c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
+                var i = collected_indices.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    try all_indices.append(collected_indices.items[i]);
+                }
+                const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
+                const current_val = c.LLVMBuildLoad2(self.builder, final_type, element_ptr, "load_elem");
+                const rhs_raw = try self.generateExpression(arr_cass.value);
+                const rhs_val = self.castToType(rhs_raw, final_type);
+                const final_kind = c.LLVMGetTypeKind(final_type);
+                const op = arr_cass.op;
+                var new_val: c.LLVMValueRef = undefined;
+                if (final_kind == c.LLVMFloatTypeKind or final_kind == c.LLVMDoubleTypeKind or final_kind == c.LLVMHalfTypeKind) {
+                    new_val = switch (op) {
+                        '+' => c.LLVMBuildFAdd(self.builder, current_val, rhs_val, "fadd"),
+                        '-' => c.LLVMBuildFSub(self.builder, current_val, rhs_val, "fsub"),
+                        '*' => c.LLVMBuildFMul(self.builder, current_val, rhs_val, "fmul"),
+                        '/' => c.LLVMBuildFDiv(self.builder, current_val, rhs_val, "fdiv"),
+                        '%' => blk: {
+                            self.uses_float_modulo = true;
+                            break :blk c.LLVMBuildFRem(self.builder, current_val, rhs_val, "frem");
+                        },
+                        else => return errors.CodegenError.UnsupportedOperation,
+                    };
+                } else if (final_kind == c.LLVMIntegerTypeKind) {
+                    new_val = switch (op) {
+                        '+' => c.LLVMBuildAdd(self.builder, current_val, rhs_val, "add"),
+                        '-' => c.LLVMBuildSub(self.builder, current_val, rhs_val, "sub"),
+                        '*' => c.LLVMBuildMul(self.builder, current_val, rhs_val, "mul"),
+                        '/' => blk: {
+                            const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(final_type));
+                            break :blk if (is_unsigned)
+                                c.LLVMBuildUDiv(self.builder, current_val, rhs_val, "udiv")
+                            else
+                                c.LLVMBuildSDiv(self.builder, current_val, rhs_val, "sdiv");
+                        },
+                        '%' => blk: {
+                            const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(final_type));
+                            break :blk if (is_unsigned)
+                                c.LLVMBuildURem(self.builder, current_val, rhs_val, "urem")
+                            else
+                                c.LLVMBuildSRem(self.builder, current_val, rhs_val, "srem");
+                        },
+                        else => return errors.CodegenError.UnsupportedOperation,
+                    };
+                } else {
+                    return errors.CodegenError.UnsupportedOperation;
+                }
+
+                _ = c.LLVMBuildStore(self.builder, new_val, element_ptr);
+            },
             .c_function_decl => |c_func| {
                 try CodeGenerator.generateCFunctionDeclaration(self, c_func);
             },
