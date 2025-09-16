@@ -761,6 +761,25 @@ export fn zig_create_array_assignment(array_ptr: ?*anyopaque, index_ptr: ?*anyop
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_array_compound_assignment(array_ptr: ?*anyopaque, index_ptr: ?*anyopaque, value_ptr: ?*anyopaque, op: c_int) ?*anyopaque {
+    if (array_ptr == null or index_ptr == null or value_ptr == null) return null;
+    const array = @as(*ast.Node, @ptrFromInt(@intFromPtr(array_ptr.?)));
+    const index = @as(*ast.Node, @ptrFromInt(@intFromPtr(index_ptr.?)));
+    const value = @as(*ast.Node, @ptrFromInt(@intFromPtr(value_ptr.?)));
+
+    const array_compound_assignment_data = ast.NodeData{
+        .array_compound_assignment = ast.ArrayCompoundAssignment{
+            .array = array,
+            .index = index,
+            .value = value,
+            .op = @as(u8, @intCast(op)),
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, array_compound_assignment_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_create_method_call(object_ptr: ?*anyopaque, method_name_ptr: [*c]const u8, args_ptr: ?*anyopaque) ?*anyopaque {
     if (object_ptr == null or method_name_ptr == null) return null;
 

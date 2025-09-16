@@ -27,6 +27,7 @@ pub const NodeType = enum {
     array_initializer,
     array_index,
     array_assignment,
+    array_compound_assignment,
     c_function_decl,
     use_stmt,
     enum_decl,
@@ -167,6 +168,13 @@ pub const ArrayAssignment = struct {
     value: *Node,
 };
 
+pub const ArrayCompoundAssignment = struct {
+    array: *Node,
+    index: *Node,
+    value: *Node,
+    op: u8,
+};
+
 pub const CFunctionDecl = struct {
     name: []const u8,
     return_type: []const u8,
@@ -240,6 +248,7 @@ pub const NodeData = union(NodeType) {
     array_initializer: ArrayInitializer,
     array_index: ArrayIndex,
     array_assignment: ArrayAssignment,
+    array_compound_assignment: ArrayCompoundAssignment,
     c_function_decl: CFunctionDecl,
     use_stmt: UseStmt,
     enum_decl: EnumDecl,
@@ -362,6 +371,11 @@ pub const Node = struct {
                 arr_ass.array.destroy();
                 arr_ass.index.destroy();
                 arr_ass.value.destroy();
+            },
+            .array_compound_assignment => |arr_cass| {
+                arr_cass.array.destroy();
+                arr_cass.index.destroy();
+                arr_cass.value.destroy();
             },
             .use_stmt => |use_stmt| {
                 self.allocator.free(use_stmt.module_path);
@@ -649,6 +663,16 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             printIndent(indent + 1, true, false);
             std.debug.print("] = \n", .{});
             printAST(arr_ass.value, indent + 2, true, false);
+        },
+        .array_compound_assignment => |arr_cass| {
+            std.debug.print("🔄 Array Compound Assignment: \x1b[35m{c}= \x1b[0m\n", .{arr_cass.op});
+            printAST(arr_cass.array, indent + 1, false, false);
+            printIndent(indent + 1, false, false);
+            std.debug.print("[\n", .{});
+            printAST(arr_cass.index, indent + 2, false, false);
+            printIndent(indent + 1, true, false);
+            std.debug.print("] and \n", .{});
+            printAST(arr_cass.value, indent + 2, true, false);
         },
         .c_function_decl => |c_func| {
             if (c_func.parameters.items.len > 0) {
