@@ -38,6 +38,7 @@ extern void* zig_create_continue_stmt(void);
 extern void* zig_create_array_initializer(void* elements);
 extern void* zig_create_array_index(void* array, void* index);
 extern void* zig_create_array_assignment(void* array, void* index, void* value);
+extern void* zig_create_array_compound_assignment(void* array, void* index, void* value, int op);
 extern void* zig_create_c_function_decl(const char* name, const char* return_type, void* params);
 extern void* zig_create_use_stmt(const char* module_path);
 extern void* zig_create_enum_decl(const char* name, void* values);
@@ -79,10 +80,10 @@ void* ast_root = NULL;
 
 %token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING TOKEN_BRAINFUCK
 %token <number> TOKEN_CHAR
+%token <number> TOKEN_REASSIGN
 
 %token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_USE TOKEN_ENUM TOKEN_STRUCT TOKEN_DOT TOKEN_NULL
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
-%token TOKEN_PLUS_ASSIGN TOKEN_MINUS_ASSIGN TOKEN_MULTIPLY_ASSIGN TOKEN_DIVIDE_ASSIGN TOKEN_MODULUS_ASSIGN
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT TOKEN_DECREMENT TOKEN_INCREMENT
 %token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_MODULUS TOKEN_AND TOKEN_OR TOKEN_NOT TOKEN_AMPERSAND
@@ -98,7 +99,7 @@ void* ast_root = NULL;
 %left TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %left TOKEN_PLUS TOKEN_MINUS
 %left TOKEN_MULTIPLY TOKEN_DIVIDE
-%right TOKEN_ASSIGN
+%right TOKEN_ASSIGN TOKEN_REASSIGN
 %left TOKEN_INCREMENT TOKEN_DECREMENT
 %left TOKEN_LBRACKET TOKEN_LPAREN TOKEN_DOT
 %left TOKEN_AT
@@ -341,31 +342,19 @@ assignment:
     | qualified_identifier TOKEN_ASSIGN initializer_expression {
         $$ = zig_create_assignment($1, $3);
     }
-    | TOKEN_IDENTIFIER TOKEN_PLUS_ASSIGN expression {
+    | TOKEN_IDENTIFIER TOKEN_REASSIGN expression {
         void* target = zig_create_identifier($1);
-        $$ = zig_create_assignment(target, zig_create_binary_op('+', zig_create_identifier($1), $3));
-    }
-    | TOKEN_IDENTIFIER TOKEN_MINUS_ASSIGN expression {
-        void* target = zig_create_identifier($1);
-        $$ = zig_create_assignment(target, zig_create_binary_op('-', zig_create_identifier($1), $3));
-    }
-    | TOKEN_IDENTIFIER TOKEN_MULTIPLY_ASSIGN expression {
-        void* target = zig_create_identifier($1);
-        $$ = zig_create_assignment(target, zig_create_binary_op('*', zig_create_identifier($1), $3));
-    }
-    | TOKEN_IDENTIFIER TOKEN_DIVIDE_ASSIGN expression {
-        void* target = zig_create_identifier($1);
-        $$ = zig_create_assignment(target, zig_create_binary_op('/', zig_create_identifier($1), $3));
-    }
-    | TOKEN_IDENTIFIER TOKEN_MODULUS_ASSIGN expression {
-        void* target = zig_create_identifier($1);
-        $$ = zig_create_assignment(target, zig_create_binary_op('%', zig_create_identifier($1), $3));
+        void* read_id = zig_create_identifier($1);
+        $$ = zig_create_assignment(target, zig_create_binary_op((char)$2, read_id, $3));
     }
 ;
 
 array_assignment:
     postfix_expression TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_ASSIGN expression {
         $$ = zig_create_array_assignment($1, $3, $6);
+    }
+  | postfix_expression TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_REASSIGN expression {
+        $$ = zig_create_array_compound_assignment($1, $3, $6, $5);
     }
 ;
 
