@@ -147,6 +147,141 @@ pub const CodeGenerator = struct {
         }
     }
 
+    fn getQualifiedPointerAndType(self: *CodeGenerator, qual_node: *ast.Node) errors.CodegenError!struct { ptr: c.LLVMValueRef, ty: c.LLVMTypeRef } {
+        if (qual_node.data != .qualified_identifier) return errors.CodegenError.TypeMismatch;
+        const qual_id = qual_node.data.qualified_identifier;
+        var base_ptr: c.LLVMValueRef = undefined;
+        var base_ty: c.LLVMTypeRef = undefined;
+
+        switch (qual_id.base.data) {
+            .identifier => {
+                const base_name = qual_id.base.data.identifier.name;
+                const var_info = CodeGenerator.getVariable(self, base_name) orelse return errors.CodegenError.UndefinedVariable;
+                base_ptr = var_info.value;
+                base_ty = var_info.type_ref;
+            },
+            .array_index => {
+                const arr_idx = qual_id.base.data.array_index;
+                const array_name = try self.getBaseIdentifierName(qual_id.base);
+                defer self.allocator.free(array_name);
+                const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
+                var collected_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+                defer collected_indices.deinit();
+                const base_node = try self.collectArrayIndices(arr_idx.array, &collected_indices);
+                _ = base_node;
+                const index_value = try self.generateExpression(arr_idx.index);
+                try collected_indices.append(index_value);
+
+                var all_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
+                defer all_indices.deinit();
+                try all_indices.append(c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
+
+                var i: usize = collected_indices.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    try all_indices.append(collected_indices.items[i]);
+                }
+
+                base_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
+                base_ty = var_info.type_ref;
+                for (0..collected_indices.items.len) |_| {
+                    base_ty = c.LLVMGetElementType(base_ty);
+                }
+            },
+            .qualified_identifier => {
+                const inner = try self.getQualifiedPointerAndType(qual_id.base);
+                base_ptr = inner.ptr;
+                base_ty = inner.ty;
+            },
+            else => return errors.CodegenError.TypeMismatch,
+        }
+
+        var struct_ty = base_ty;
+        if (c.LLVMGetTypeKind(struct_ty) == c.LLVMPointerTypeKind) {
+            struct_ty = c.LLVMGetElementType(struct_ty);
+        }
+
+        if (c.LLVMGetTypeKind(struct_ty) != c.LLVMStructTypeKind) {
+            return errors.CodegenError.TypeMismatch;
+        }
+
+        const struct_name = try self.getStructTypeName(struct_ty);
+        defer self.allocator.free(struct_name);
+        const field_map = self.struct_fields.get(struct_name) orelse return errors.CodegenError.TypeMismatch;
+        const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
+        const struct_ptr = base_ptr;
+        if (c.LLVMGetTypeKind(c.LLVMTypeOf(struct_ptr)) != c.LLVMPointerTypeKind or c.LLVMGetTypeKind(c.LLVMGetElementType(c.LLVMTypeOf(struct_ptr))) != c.LLVMStructTypeKind) {
+            return errors.CodegenError.TypeMismatch;
+        }
+
+        const field_ptr = try self.getStructFieldPointer(struct_ty, struct_ptr, field_index);
+        const field_ty = c.LLVMStructGetTypeAtIndex(struct_ty, field_index);
+
+        return .{ .ptr = field_ptr, .ty = field_ty };
+    }
+    
+    fn getQualifiedFieldPtrAndType(self: *CodeGenerator, qual_node: *ast.Node) errors.CodegenError!struct { ptr: c.LLVMValueRef, ty: c.LLVMTypeRef } {
+        if (qual_node.data != .qualified_identifier) {
+            return errors.CodegenError.TypeMismatch;
+        }
+        const qual_id = qual_node.data.qualified_identifier;
+        var base_val: c.LLVMValueRef = undefined;
+        var base_ty: c.LLVMTypeRef = undefined;
+
+        switch (qual_id.base.data) {
+            .identifier => {
+                const base_name = qual_id.base.data.identifier.name;
+                const var_info = CodeGenerator.getVariable(self, base_name) orelse return errors.CodegenError.UndefinedVariable;
+                base_val = var_info.value;
+                base_ty = var_info.type_ref;
+            },
+            .array_index => {
+                const arr_idx = qual_id.base.data.array_index;
+                const array_name = try self.getBaseIdentifierName(qual_id.base);
+                defer self.allocator.free(array_name);
+                const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
+                const index_value = try self.generateExpression(arr_idx.index);
+                var indices = [_]c.LLVMValueRef{
+                    c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0),
+                    index_value,
+                };
+                base_val = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
+                base_ty = c.LLVMGetElementType(var_info.type_ref);
+            },
+            .qualified_identifier => {
+                const inner = try self.getQualifiedFieldPtrAndType(qual_id.base);
+                base_val = inner.ptr;
+                base_ty = inner.ty;
+            },
+            else => return errors.CodegenError.TypeMismatch,
+        }
+        var struct_ptr = base_val;
+        var struct_ty = base_ty;
+        switch (c.LLVMGetTypeKind(struct_ty)) {
+            c.LLVMPointerTypeKind => {
+                const pointee = c.LLVMGetElementType(struct_ty);
+                if (c.LLVMGetTypeKind(pointee) != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
+                struct_ty = pointee;
+            },
+            c.LLVMStructTypeKind => {
+                if (c.LLVMGetTypeKind(c.LLVMTypeOf(struct_ptr)) != c.LLVMPointerTypeKind) {
+                    const tmp = c.LLVMBuildAlloca(self.builder, struct_ty, "tmp_struct");
+                    _ = c.LLVMBuildStore(self.builder, struct_ptr, tmp);
+                    struct_ptr = tmp;
+                }
+            },
+            else => return errors.CodegenError.TypeMismatch,
+        }
+
+        const struct_name = try self.getStructTypeName(struct_ty);
+        defer self.allocator.free(struct_name);
+        const field_map = self.struct_fields.get(struct_name) orelse return errors.CodegenError.TypeMismatch;
+        const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
+        const field_ptr = try self.getStructFieldPointer(struct_ty, struct_ptr, field_index);
+        const field_ty = c.LLVMStructGetTypeAtIndex(struct_ty, field_index);
+        return .{ .ptr = field_ptr, .ty = field_ty };
+    }
+
     fn generateArrayElementFieldAssignment(self: *CodeGenerator, array_index: ast.ArrayIndex, field_path: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
         const array_name = try self.getBaseIdentifierName(array_index.array);
         defer self.allocator.free(array_name);
@@ -1519,6 +1654,37 @@ pub const CodeGenerator = struct {
                             } else {
                                 return errors.CodegenError.UndefinedVariable;
                             }
+                        } else if (un.operand.data == .qualified_identifier) {
+                            const pair = try self.getQualifiedFieldPtrAndType(un.operand);
+                            const field_ptr = pair.ptr;
+                            const field_ty = pair.ty;
+
+                            const field_kind = c.LLVMGetTypeKind(field_ty);
+                            const allowed_types = [_][]const u8{ "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64" };
+                            const field_type_name = self.getTypeNameFromLLVMType(field_ty);
+                            var is_allowed = false;
+                            for (allowed_types) |allowed| {
+                                if (std.mem.eql(u8, field_type_name, allowed)) {
+                                    is_allowed = true;
+                                    break;
+                                }
+                            }
+                            if (!is_allowed) return errors.CodegenError.UnsupportedOperation;
+
+                            const current_val = c.LLVMBuildLoad2(self.builder, field_ty, field_ptr, "load_struct_field_dec");
+                            const new_val = switch (field_kind) {
+                                c.LLVMIntegerTypeKind => blk: {
+                                    const one = c.LLVMConstInt(field_ty, 1, 0);
+                                    break :blk c.LLVMBuildSub(self.builder, current_val, one, "dec");
+                                },
+                                c.LLVMFloatTypeKind, c.LLVMDoubleTypeKind, c.LLVMHalfTypeKind => blk: {
+                                    const one = c.LLVMConstReal(field_ty, 1.0);
+                                    break :blk c.LLVMBuildFSub(self.builder, current_val, one, "fdec");
+                                },
+                                else => return errors.CodegenError.UnsupportedOperation,
+                            };
+                            _ = c.LLVMBuildStore(self.builder, new_val, field_ptr);
+                            return new_val;
                         } else {
                             return errors.CodegenError.TypeMismatch;
                         }
@@ -1605,6 +1771,36 @@ pub const CodeGenerator = struct {
                             } else {
                                 return errors.CodegenError.UndefinedVariable;
                             }
+                        } else if (un.operand.data == .qualified_identifier) {
+                            const pair = try self.getQualifiedFieldPtrAndType(un.operand);
+                            const field_ptr = pair.ptr;
+                            const field_ty = pair.ty;
+
+                            const field_kind = c.LLVMGetTypeKind(field_ty);
+                            const allowed_types = [_][]const u8{ "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64" };
+                            const field_type_name = self.getTypeNameFromLLVMType(field_ty);
+                            var is_allowed = false;
+                            for (allowed_types) |allowed| {
+                                if (std.mem.eql(u8, field_type_name, allowed)) {
+                                    is_allowed = true;
+                                    break;
+                                }
+                            }
+                            if (!is_allowed) return errors.CodegenError.UnsupportedOperation;
+                            const current_val = c.LLVMBuildLoad2(self.builder, field_ty, field_ptr, "load_struct_field_inc");
+                            const new_val = switch (field_kind) {
+                                c.LLVMIntegerTypeKind => blk: {
+                                    const one = c.LLVMConstInt(field_ty, 1, 0);
+                                    break :blk c.LLVMBuildAdd(self.builder, current_val, one, "inc");
+                                },
+                                c.LLVMFloatTypeKind, c.LLVMDoubleTypeKind, c.LLVMHalfTypeKind => blk: {
+                                    const one = c.LLVMConstReal(field_ty, 1.0);
+                                    break :blk c.LLVMBuildFAdd(self.builder, current_val, one, "finc");
+                                },
+                                else => return errors.CodegenError.UnsupportedOperation,
+                            };
+                            _ = c.LLVMBuildStore(self.builder, new_val, field_ptr);
+                            return new_val;
                         } else {
                             return errors.CodegenError.TypeMismatch;
                         }

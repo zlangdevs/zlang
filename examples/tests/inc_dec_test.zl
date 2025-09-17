@@ -1,3 +1,5 @@
+struct Vec2 { x i32, y i32 }
+
 fun main() >> i32 {
     i32 a = 0;
     a++;
@@ -19,5 +21,20 @@ fun main() >> i32 {
     @printf("(expected 11.0):%.1f\n", casted_fs);
     @printf("(expected 11.2):%.1f\n", fb);
     @printf("(expected 11.3):%.1f\n", fl);
+    
+    arr<i32, 3> t;
+    t[0] = 1;
+    t[0]++;
+    t[0]--;
+    Vec2 p;
+    p.x = 5;
+    p.x++;
+    p.x--;
+    arr<Vec2, 2> as;
+    as[0].x = 10;
+    as[0].x++;
+    as[0].x--;
+    @printf("(expected 1):%d\n(expected 5):%d\n(expected 10):%d\n", t[0], p.x, as[0].x);
+    
     return 0;
 }
