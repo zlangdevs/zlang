@@ -28,24 +28,26 @@ const ModuleInfo = struct {
 
 pub const Context = struct {
     input_files: std.ArrayList([]const u8),
+    link_objects: std.ArrayList([]const u8),
+    extra_args: std.ArrayList([]const u8), // Extra flags passed to clang (for now to clang)
     output: []const u8,
     arch: []const u8,
     keepll: bool,
     show_ast: bool,
     optimize: bool,
     verbose: bool,
-    link_objects: std.ArrayList([]const u8),
 
     pub fn init(alloc: std.mem.Allocator) Context {
         return Context{
             .input_files = std.ArrayList([]const u8).init(alloc),
+            .link_objects = std.ArrayList([]const u8).init(alloc),
+            .extra_args = std.ArrayList([]const u8).init(alloc),
             .output = consts.DEFAULT_OUTPUT_NAME,
             .arch = "",
             .keepll = false,
             .show_ast = false,
             .optimize = false,
             .verbose = false,
-            .link_objects = std.ArrayList([]const u8).init(alloc),
         };
     }
 
@@ -265,6 +267,9 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.InvalidArgument;
                     try context.link_objects.append(args[i]);
+                } else if (std.mem.eql(u8, flag, "-c")) {
+                    try context.extra_args.append(flag);
+                    context.output = "output.o";
                 } else if (std.mem.eql(u8, flag, "-help")) {
                     return errors.CLIError.NoHelp;
                 } else {
@@ -383,7 +388,7 @@ pub fn main() !u8 {
         return 1;
     };
 
-    code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize) catch |err| {
+    code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items) catch |err| {
         std.debug.print("Error compiling to executable: {}\n", .{err});
         return 1;
     };

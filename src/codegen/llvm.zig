@@ -2201,7 +2201,7 @@ pub const CodeGenerator = struct {
         }
     }
 
-    pub fn compileToExecutable(self: *CodeGenerator, output: []const u8, arch: []const u8, link_objects: []const []const u8, keep_ll: bool, optimize: bool) !void {
+    pub fn compileToExecutable(self: *CodeGenerator, output: []const u8, arch: []const u8, link_objects: []const []const u8, keep_ll: bool, optimize: bool, extra_flags: []const []const u8) !void {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
@@ -2248,6 +2248,11 @@ pub const CodeGenerator = struct {
             }
 
             try clang_args_list.append("-O3"); // Append additional flag to clang (+100% fps)
+        }
+
+        // Append additional arguments
+        for (extra_flags) |ef| {
+            try clang_args_list.append(ef);
         }
 
         var child = std.process.Child.init(clang_args_list.items, arena_alloc);
