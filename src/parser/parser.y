@@ -40,6 +40,7 @@ extern void* zig_create_array_index(void* array, void* index);
 extern void* zig_create_array_assignment(void* array, void* index, void* value);
 extern void* zig_create_array_compound_assignment(void* array, void* index, void* value, int op);
 extern void* zig_create_c_function_decl(const char* name, const char* return_type, void* params);
+extern void* zig_create_wrapper_function(const char* name, const char* return_type, void* params);
 extern void* zig_create_use_stmt(const char* module_path);
 extern void* zig_create_enum_decl(const char* name, void* values);
 extern void* zig_create_struct_decl(const char* name, void* fields);
@@ -82,7 +83,7 @@ void* ast_root = NULL;
 %token <number> TOKEN_CHAR
 %token <number> TOKEN_REASSIGN
 
-%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_USE TOKEN_ENUM TOKEN_STRUCT TOKEN_DOT TOKEN_NULL
+%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_DOT TOKEN_NULL
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT TOKEN_DECREMENT TOKEN_INCREMENT
@@ -110,7 +111,7 @@ void* ast_root = NULL;
 %type <node> var_declaration global_variable_declaration function_call return_statement assignment brainfuck_statement
 %type <node> expression logical_or_expression logical_and_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression postfix_expression argument_list arguments
 %type <node> comparison_expression simple_term c_for_statement for_increment
-%type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration
+%type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration wrap_statement
 %type <node> enum_values enum_value_list struct_fields struct_field_list qualified_identifier
 %type <node> struct_initializer struct_field_values struct_field_value_list initializer_expression
 %type <string> type_name function_name string_literal complex_type_name module_path
@@ -184,6 +185,15 @@ function_list:
    | function_list struct_declaration {
        zig_add_to_program(ast_root, $2);
    }
+   | wrap_statement {
+        if (ast_root == NULL) {
+            ast_root = zig_create_program();
+        }
+        zig_add_to_program(ast_root, $1);
+   }
+   | function_list wrap_statement {
+        zig_add_to_program(ast_root, $2);
+   }
 ;
 
 c_function_decl:
@@ -196,6 +206,14 @@ c_function_decl:
 
 c_function_decl_statement:
     c_function_decl TOKEN_SEMICOLON { $$ = $1; }
+;
+
+wrap_statement:
+    TOKEN_WRAP TOKEN_AT function_name TOKEN_LPAREN parameter_list TOKEN_RPAREN TOKEN_RSHIFT type_name TOKEN_SEMICOLON {
+        $$ = zig_create_wrapper_function($3, $8, $5);
+        free($3);
+        free($8);
+    }
 ;
 
 function:
