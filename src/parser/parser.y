@@ -62,6 +62,8 @@ void yyerror(const char* s);
 int zlang_lex(void* scanner);
 int yylex(void);
 
+extern int zlang_get_lineno(void* scanner);
+
 extern void* current_scanner;
 void* ast_root = NULL;
 %}
@@ -688,5 +690,6 @@ int yylex(void) {
 }
 
 void yyerror(const char* s) {
-    fprintf(stderr, "Parse error: %s\n", s);
+    int line = zlang_get_lineno(current_scanner);
+    fprintf(stderr, "Parse error at line %d: %s\n", line, s);
 }

@@ -3,6 +3,9 @@ const ast = @import("ast.zig");
 const errors = @import("../errors.zig");
 
 var global_allocator: std.mem.Allocator = undefined;
+// Track last parse error location for diagnostics
+var last_error_line: usize = 0;
+var last_error_col: usize = 0;
 
 // External functions from generated parser
 extern fn yyparse() c_int;
@@ -11,6 +14,7 @@ extern fn zlang_lex_destroy(scanner: ?*anyopaque) c_int;
 extern fn zlang_set_in(file: ?*anyopaque, scanner: ?*anyopaque) void;
 extern fn fmemopen(buffer: [*c]const u8, size: usize, mode: [*c]const u8) ?*anyopaque;
 extern fn fclose(file: ?*anyopaque) c_int;
+extern fn zlang_get_lineno(scanner: ?*anyopaque) c_int;
 
 // Global variables used by Bison parser
 export var current_scanner: ?*anyopaque = null;
@@ -904,6 +908,8 @@ export fn zig_create_use_stmt(module_path_ptr: [*c]const u8) ?*anyopaque {
 pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!?*ast.Node {
     global_allocator = allocator;
     ast_root = null;
+    last_error_line = 0;
+    last_error_col = 0;
 
     // Initialize scanner
     if (zlang_lex_init(&current_scanner) != 0) {
@@ -928,6 +934,8 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!
     // Parse
     const result = yyparse();
     if (result != 0) {
+        last_error_line = @intCast(@as(usize, @intCast(zlang_get_lineno(current_scanner))));
+        last_error_col = 0;
         return errors.ParseError.ParseFailed;
     }
 
@@ -935,4 +943,9 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!
         return @as(*ast.Node, @ptrFromInt(@intFromPtr(root_ptr)));
     }
     return null;
+}
+
+pub fn lastParseErrorLocation() ?struct { line: usize, column: usize } {
+    if (last_error_line == 0) return null;
+    return .{ .line = last_error_line, .column = last_error_col };
 }
