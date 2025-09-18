@@ -12,6 +12,7 @@ static int last_was_rparen = 0;
 %option noyywrap
 %option reentrant
 %option prefix="zlang_"
+%option yylineno
 
 %x BRAINFUCK
 %x COMMENT
@@ -54,14 +55,14 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
     char *content = strndup(yytext+1, yyleng-2);
     int len = strlen(content);
     if (len == 0) {
-        fprintf(stderr, "Error: Empty character literal\n");
+        fprintf(stderr, "Lex error at line %d: Empty character literal\n", yylineno);
         free(content);
         return 0;
     }
     char actual_char;
     if (content[0] == '\\') {
         if (len != 2) {
-            fprintf(stderr, "Error: Invalid escape sequence: '%s'\n", content);
+            fprintf(stderr, "Lex error at line %d: Invalid escape sequence: '%s'\n", yylineno, content);
             free(content);
             return 0;
         }
@@ -74,13 +75,13 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
             case '"': actual_char = '"'; break;
             case '0': actual_char = '\0'; break;
             default:
-                fprintf(stderr, "Error: Unknown escape sequence: \\%c\n", content[1]);
+                fprintf(stderr, "Lex error at line %d: Unknown escape sequence: \\%c\n", yylineno, content[1]);
                 free(content);
                 return 0;
         }
     } else {
         if (len != 1) {
-            fprintf(stderr, "Error: Character literal too long: '%s'\n", content);
+            fprintf(stderr, "Lex error at line %d: Character literal too long: '%s'\n", yylineno, content);
             free(content);
             return 0;
         }
@@ -163,5 +164,9 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 <BRAINFUCK>"}"    {
     BEGIN(INITIAL);
     return TOKEN_BRAINFUCK;
+}
+.           {
+    fprintf(stderr, "Lex error at line %d: unexpected character '%s'\n", yylineno, yytext);
+    return 0;
 }
 %%

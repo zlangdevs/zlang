@@ -170,7 +170,12 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
             return err;
         };
         const ast_root = parser.parse(alloc, input) catch |err| {
-            std.debug.print("Error parsing file {s}: {}\n", .{ input_file, err });
+            const loc = parser.lastParseErrorLocation();
+            if (loc) |l| {
+                std.debug.print("Parse error at {s}:{d}:{d}: {}\n", .{ input_file, l.line, l.column, err });
+            } else {
+                std.debug.print("Error parsing file {s}: {}\n", .{ input_file, err });
+            }
             return err;
         };
         if (ast_root) |root| {
@@ -334,7 +339,13 @@ pub fn main() !u8 {
     defer ctx.deinit();
 
     const ast_root = parseMultiFile(&ctx, allocator) catch |err| {
-        std.debug.print("Error parsing files: {}\n", .{err});
+        const loc = parser.lastParseErrorLocation();
+        if (loc) |l| {
+            const file_hint = if (ctx.input_files.items.len > 0) ctx.input_files.items[0] else "<unknown>";
+            std.debug.print("Parse error at {s}:{d}:{d}: {}\n", .{ file_hint, l.line, l.column, err });
+        } else {
+            std.debug.print("Error parsing files: {}\n", .{err});
+        }
         return 1;
     };
 
