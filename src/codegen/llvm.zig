@@ -219,7 +219,7 @@ pub const CodeGenerator = struct {
 
         return .{ .ptr = field_ptr, .ty = field_ty };
     }
-    
+
     fn getQualifiedFieldPtrAndType(self: *CodeGenerator, qual_node: *ast.Node) errors.CodegenError!struct { ptr: c.LLVMValueRef, ty: c.LLVMTypeRef } {
         if (qual_node.data != .qualified_identifier) {
             return errors.CodegenError.TypeMismatch;

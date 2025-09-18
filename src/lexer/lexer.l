@@ -6,6 +6,7 @@ extern YYSTYPE yylval;
 
 static int template_depth = 0;
 static int last_was_identifier = 0;
+static int last_was_rparen = 0;
 %}
 
 %option noyywrap
@@ -41,13 +42,13 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "struct"    { return TOKEN_STRUCT; }
 "null"      { return TOKEN_NULL; }
 "brainfuck"[ \t\n]*"{" { BEGIN(BRAINFUCK); yylval.string = strdup(""); }
-{IDENT}     { yylval.string = strdup(yytext); last_was_identifier = 1; return TOKEN_IDENTIFIER; }
-{FLOAT_EXP_DOT}  { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
-{FLOAT_EXP_INT}  { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
-{FLOAT_DOT}      { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
-{FLOAT_BASIC}    { yylval.string = strdup(yytext); return TOKEN_FLOAT; }
-{INTEGER}        { yylval.string = strdup(yytext); return TOKEN_NUMBER; }
-{STRING}    { yylval.string = strndup(yytext+1, yyleng-2); return TOKEN_STRING; }
+{IDENT}     { yylval.string = strdup(yytext); last_was_identifier = 1; last_was_rparen = 0; return TOKEN_IDENTIFIER; }
+{FLOAT_EXP_DOT}  { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_FLOAT; }
+{FLOAT_EXP_INT}  { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_FLOAT; }
+{FLOAT_DOT}      { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_FLOAT; }
+{FLOAT_BASIC}    { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_FLOAT; }
+{INTEGER}        { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_NUMBER; }
+{STRING}    { yylval.string = strndup(yytext+1, yyleng-2); last_was_rparen = 0; return TOKEN_STRING; }
 {CHAR}      {
     char *content = strndup(yytext+1, yyleng-2);
     int len = strlen(content);
@@ -86,38 +87,35 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
     }
     free(content);
     yylval.number = (int)actual_char;
+    last_was_rparen = 0;
     return TOKEN_CHAR;
 }
-"&&"        { return TOKEN_AND; }
-"||"        { return TOKEN_OR; }
-"++"        { return TOKEN_INCREMENT; }
-"--"        { return TOKEN_DECREMENT; }
-"+="        { yylval.number = '+'; return TOKEN_REASSIGN; }
-"-="        { yylval.number = '-'; return TOKEN_REASSIGN; }
-"*="        { yylval.number = '*'; return TOKEN_REASSIGN; }
-"/="        { yylval.number = '/'; return TOKEN_REASSIGN; }
-"%="        { yylval.number = '%'; return TOKEN_REASSIGN; }
-"+"         { last_was_identifier = 0; return TOKEN_PLUS; }
-"-"         { last_was_identifier = 0; return TOKEN_MINUS; }
-"*"         { last_was_identifier = 0; return TOKEN_MULTIPLY; }
-"/"         { last_was_identifier = 0; return TOKEN_DIVIDE; }
-"%"         { return TOKEN_MODULUS; }
-"<="        { return TOKEN_EQ_LESS; }
-">="        { return TOKEN_EQ_GREATER; }
-"!="        { return TOKEN_NON_EQUAL; }
-"=="        { return TOKEN_EQUAL; }
+"&&"        { last_was_rparen = 0; return TOKEN_AND; }
+"||"        { last_was_rparen = 0; return TOKEN_OR; }
+"++"        { last_was_rparen = 0; return TOKEN_INCREMENT; }
+"--"        { last_was_rparen = 0; return TOKEN_DECREMENT; }
+"+="        { yylval.number = '+'; last_was_rparen = 0; return TOKEN_REASSIGN; }
+"-="        { yylval.number = '-'; last_was_rparen = 0; return TOKEN_REASSIGN; }
+"*="        { yylval.number = '*'; last_was_rparen = 0; return TOKEN_REASSIGN; }
+"/="        { yylval.number = '/'; last_was_rparen = 0; return TOKEN_REASSIGN; }
+"%="        { yylval.number = '%'; last_was_rparen = 0; return TOKEN_REASSIGN; }
+"+"         { last_was_identifier = 0; last_was_rparen = 0; return TOKEN_PLUS; }
+"-"         { last_was_identifier = 0; last_was_rparen = 0; return TOKEN_MINUS; }
+"*"         { last_was_identifier = 0; last_was_rparen = 0; return TOKEN_MULTIPLY; }
+"/"         { last_was_identifier = 0; last_was_rparen = 0; return TOKEN_DIVIDE; }
+"%"         { last_was_rparen = 0; return TOKEN_MODULUS; }
+"<="        { last_was_rparen = 0; return TOKEN_EQ_LESS; }
+">="        { last_was_rparen = 0; return TOKEN_EQ_GREATER; }
+"!="        { last_was_rparen = 0; return TOKEN_NON_EQUAL; }
+"=="        { last_was_rparen = 0; return TOKEN_EQUAL; }
 "<"         {
-    if (last_was_identifier) {
-        template_depth++;
-    }
     last_was_identifier = 0;
+    last_was_rparen = 0;
     return TOKEN_LESS;
 }
 ">"         {
-    if (template_depth > 0) {
-        template_depth--;
-    }
     last_was_identifier = 0;
+    last_was_rparen = 0;
     return TOKEN_GREATER;
 }
 "..."                         { BEGIN(COMMENT); }
@@ -125,30 +123,32 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 <COMMENT>\n                   { /* consume newline; */ }
 <COMMENT>\.{1,2}              { /* consume 1–2 dots */ }
 <COMMENT>"..."                { BEGIN(INITIAL); }
-"!"    { return TOKEN_NOT; }
-"&"    { return TOKEN_AMPERSAND; }
-"."    { return TOKEN_DOT; }
-"="    { return TOKEN_ASSIGN; }
+"!"    { last_was_rparen = 0; return TOKEN_NOT; }
+"&"    { last_was_rparen = 0; return TOKEN_AMPERSAND; }
+"."    { last_was_rparen = 0; return TOKEN_DOT; }
+"="    { last_was_rparen = 0; return TOKEN_ASSIGN; }
 ">>"        {
-    if (template_depth > 0) {
-        template_depth--;
-        yyless(1);
+    if (last_was_rparen) {
+        last_was_rparen = 0;
         last_was_identifier = 0;
-        return TOKEN_GREATER;
+        return TOKEN_RSHIFT;
     }
+    /* Split >> into > and > for nested generics */
+    last_was_rparen = 0;
     last_was_identifier = 0;
-    return TOKEN_RSHIFT;
+    yyless(1);
+    return TOKEN_GREATER;
 }
-"{"         { last_was_identifier = 0; return TOKEN_LBRACE; }
-"}"         { return TOKEN_RBRACE; }
-"("         { return TOKEN_LPAREN; }
-")"         { return TOKEN_RPAREN; }
-"["         { return TOKEN_LBRACKET; }
-"]"         { return TOKEN_RBRACKET; }
-"@"         { return TOKEN_AT; }
-","         { last_was_identifier = 0; return TOKEN_COMMA; }
-":"         { return TOKEN_COLON; }
-";"         { return TOKEN_SEMICOLON; }
+"{"         { last_was_identifier = 0; last_was_rparen = 0; return TOKEN_LBRACE; }
+"}"         { last_was_rparen = 0; return TOKEN_RBRACE; }
+"("         { last_was_rparen = 0; return TOKEN_LPAREN; }
+")"         { last_was_rparen = 1; return TOKEN_RPAREN; }
+"["         { last_was_rparen = 0; return TOKEN_LBRACKET; }
+"]"         { last_was_rparen = 0; return TOKEN_RBRACKET; }
+"@"         { last_was_rparen = 0; return TOKEN_AT; }
+","         { last_was_identifier = 0; last_was_rparen = 0; return TOKEN_COMMA; }
+":"         { last_was_rparen = 0; return TOKEN_COLON; }
+";"         { last_was_rparen = 0; return TOKEN_SEMICOLON; }
 [ \t\n]+    { /* skip spaces */ }
 "??".*      { /* skip single-line comments */ }
 <BRAINFUCK>[^{}]+ {
