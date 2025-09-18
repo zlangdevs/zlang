@@ -38,6 +38,7 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "break"     { return TOKEN_BREAK; }
 "continue"  { return TOKEN_CONTINUE; }
 "use"       { return TOKEN_USE; }
+"wrap"      { return TOKEN_WRAP; }
 "enum"      { return TOKEN_ENUM; }
 "struct"    { return TOKEN_STRUCT; }
 "null"      { return TOKEN_NULL; }
