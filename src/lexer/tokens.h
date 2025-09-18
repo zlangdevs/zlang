@@ -41,6 +41,7 @@ typedef enum {
     TOKEN_INCREMENT,
     TOKEN_DECREMENT,
     TOKEN_USE,
+    TOKEN_WRAP,
     TOKEN_ENUM,
     TOKEN_STRUCT,
     TOKEN_DOT,

@@ -830,6 +830,60 @@ export fn zig_create_c_function_decl(name_ptr: [*c]const u8, return_type_ptr: [*
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_wrapper_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const u8, params_ptr: ?*anyopaque) ?*anyopaque {
+    const name = std.mem.span(name_ptr);
+    const return_type = std.mem.span(return_type_ptr);
+
+    const func_name_copy = global_allocator.dupe(u8, name) catch return null;
+    const return_type_copy = global_allocator.dupe(u8, return_type) catch return null;
+
+    var parameters = std.ArrayList(ast.Parameter).init(global_allocator);
+    if (params_ptr) |ptr| {
+        const param_list = @as(*ParameterList, @ptrFromInt(@intFromPtr(ptr)));
+        parameters = param_list.items;
+    }
+
+    var args = std.ArrayList(*ast.Node).init(global_allocator);
+    {
+        var i: usize = 0;
+        while (i < parameters.items.len) : (i += 1) {
+            const param = parameters.items[i];
+            const ident_name_copy = global_allocator.dupe(u8, param.name) catch return null;
+            const ident_node = ast.Node.create(global_allocator, .{ .identifier = .{ .name = ident_name_copy } }) catch return null;
+            args.append(ident_node) catch return null;
+        }
+    }
+
+    const call_name_copy = global_allocator.dupe(u8, name) catch return null;
+    const call_node_data = ast.NodeData{
+        .function_call = ast.FunctionCall{
+            .name = call_name_copy,
+            .is_libc = true,
+            .args = args,
+        },
+    };
+    const call_node = ast.Node.create(global_allocator, call_node_data) catch return null;
+
+    var body = std.ArrayList(*ast.Node).init(global_allocator);
+    if (std.mem.eql(u8, return_type, "void")) {
+        body.append(call_node) catch return null;
+    } else {
+        const ret_node = ast.Node.create(global_allocator, .{ .return_stmt = .{ .expression = call_node } }) catch return null;
+        body.append(ret_node) catch return null;
+    }
+
+    const function_data = ast.NodeData{
+        .function = ast.Function{
+            .name = func_name_copy,
+            .return_type = return_type_copy,
+            .parameters = parameters,
+            .body = body,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, function_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
 export fn zig_create_use_stmt(module_path_ptr: [*c]const u8) ?*anyopaque {
     const module_path = std.mem.span(module_path_ptr);
     const module_path_copy = global_allocator.dupe(u8, module_path) catch return null;
