@@ -30,11 +30,11 @@ fun main() >> i32 {
     p.x = 5;
     p.x++;
     p.x--;
-    arr<Vec2, 2> as;
-    as[0].x = 10;
-    as[0].x++;
-    as[0].x--;
-    @printf("(expected 1):%d\n(expected 5):%d\n(expected 10):%d\n", t[0], p.x, as[0].x);
+    arr<Vec2, 2> vecs;
+    vecs[0].x = 10;
+    vecs[0].x++;
+    vecs[0].x--;
+    @printf("(expected 1):%d\n(expected 5):%d\n(expected 10):%d\n", t[0], p.x, vecs[0].x);
     
     return 0;
 }

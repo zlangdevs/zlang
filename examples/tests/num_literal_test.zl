@@ -1,8 +1,8 @@
 fun main() >> i32 {
     i32 simple  = 2;
-    i32 neg     = -2;
-    i32 pos     = +2;
-    i32 exp_pos = 2e2;
+    i32 neg     = -2 as _;
+    i32 pos     = +2 as _;
+    i32 exp_pos = 2e2 as _;
     f32 exp_neg = 2e-2;
     f32 exp_zer = 2e0;
     f32 neg_exp = -2e-2;
