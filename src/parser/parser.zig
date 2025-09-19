@@ -20,6 +20,13 @@ extern fn zlang_get_lineno(scanner: ?*anyopaque) c_int;
 export var current_scanner: ?*anyopaque = null;
 extern var ast_root: ?*anyopaque;
 
+fn set_node_line(node: *ast.Node) void {
+    if (current_scanner != null) {
+        node.line = @intCast(@as(usize, @intCast(zlang_get_lineno(current_scanner))));
+    } else {
+        node.line = 0;
+    }
+}
 const ParameterList = struct {
     items: std.ArrayList(ast.Parameter),
 
@@ -51,6 +58,7 @@ export fn zig_create_program() ?*anyopaque {
     };
 
     const node = ast.Node.create(global_allocator, program_data) catch return null;
+    set_node_line(node);
     const node_ptr = @as(*anyopaque, @ptrCast(node));
     ast_root = node_ptr;
     return node_ptr;
@@ -116,6 +124,7 @@ export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const
     };
 
     const node = ast.Node.create(global_allocator, function_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -132,6 +141,7 @@ export fn zig_create_comparison(op: u8, lhs_ptr: *anyopaque, rhs_ptr: *anyopaque
     };
 
     const node = ast.Node.create(global_allocator, comp_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -148,6 +158,7 @@ export fn zig_create_binary_op(op: u8, lhs_ptr: *anyopaque, rhs_ptr: *anyopaque)
     };
 
     const node = ast.Node.create(global_allocator, binary_op_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -171,6 +182,7 @@ export fn zig_create_assignment(target_ptr: ?*anyopaque, value_ptr: ?*anyopaque)
         },
     };
     const node = ast.Node.create(global_allocator, assignment_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -195,6 +207,7 @@ export fn zig_create_var_decl(type_name_ptr: [*c]const u8, name_ptr: [*c]const u
     };
 
     const node = ast.Node.create(global_allocator, var_decl_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -217,6 +230,7 @@ export fn zig_create_function_call(name_ptr: [*c]const u8, is_libc: c_int, args_
     };
 
     const node = ast.Node.create(global_allocator, function_call_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -233,6 +247,7 @@ export fn zig_create_return_stmt(expression_ptr: ?*anyopaque) ?*anyopaque {
     };
 
     const node = ast.Node.create(global_allocator, return_stmt_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -247,6 +262,7 @@ export fn zig_create_identifier(name_ptr: [*c]const u8) ?*anyopaque {
     };
 
     const node = ast.Node.create(global_allocator, identifier_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -271,6 +287,7 @@ export fn zig_create_qualified_identifier(base_ptr: ?*anyopaque, field_ptr: [*c]
         global_allocator.free(field_copy);
         return null;
     };
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -287,6 +304,7 @@ export fn zig_create_unary_op(op: u8, operand_ptr: ?*anyopaque) ?*anyopaque {
     };
 
     const node = ast.Node.create(global_allocator, unary_op_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -301,6 +319,7 @@ export fn zig_create_float_literal(value_ptr: [*c]const u8) ?*anyopaque {
     };
 
     const node = ast.Node.create(global_allocator, float_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -315,6 +334,7 @@ export fn zig_create_number_literal(value_ptr: [*c]const u8) ?*anyopaque {
     };
 
     const node = ast.Node.create(global_allocator, number_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -326,6 +346,7 @@ export fn zig_create_char_literal(value: c_int) ?*anyopaque {
     };
 
     const node = ast.Node.create(global_allocator, char_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -340,6 +361,7 @@ export fn zig_create_string_literal(value_ptr: [*c]const u8) ?*anyopaque {
     };
 
     const node = ast.Node.create(global_allocator, string_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -504,6 +526,7 @@ export fn zig_create_struct_initializer(struct_name_ptr: [*c]const u8, field_val
         global_allocator.free(struct_name_copy);
         return null;
     };
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -744,6 +767,7 @@ export fn zig_create_array_index(array_ptr: ?*anyopaque, index_ptr: ?*anyopaque)
     };
 
     const node = ast.Node.create(global_allocator, array_index_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -762,6 +786,7 @@ export fn zig_create_array_assignment(array_ptr: ?*anyopaque, index_ptr: ?*anyop
     };
 
     const node = ast.Node.create(global_allocator, array_assignment_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -781,6 +806,7 @@ export fn zig_create_array_compound_assignment(array_ptr: ?*anyopaque, index_ptr
     };
 
     const node = ast.Node.create(global_allocator, array_compound_assignment_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -806,6 +832,7 @@ export fn zig_create_method_call(object_ptr: ?*anyopaque, method_name_ptr: [*c]c
     };
 
     const node = ast.Node.create(global_allocator, method_call_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -831,6 +858,7 @@ export fn zig_create_c_function_decl(name_ptr: [*c]const u8, return_type_ptr: [*
     };
 
     const node = ast.Node.create(global_allocator, c_function_decl_data) catch return null;
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
@@ -902,6 +930,32 @@ export fn zig_create_use_stmt(module_path_ptr: [*c]const u8) ?*anyopaque {
         global_allocator.free(module_path_copy);
         return null;
     };
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_cast(expr_ptr: ?*anyopaque, type_name_ptr: [*c]const u8, auto_flag: c_int) ?*anyopaque {
+    if (expr_ptr == null) return null;
+    const expr = @as(*ast.Node, @ptrFromInt(@intFromPtr(expr_ptr.?)));
+    const auto_cast = auto_flag != 0;
+    var type_copy: ?[]const u8 = null;
+    if (!auto_cast) {
+        const tn = std.mem.span(type_name_ptr);
+        if (tn.len > 0) {
+            type_copy = global_allocator.dupe(u8, tn) catch return null;
+        }
+    }
+    const cast_data = ast.NodeData{
+        .cast = ast.Cast{
+            .expr = expr,
+            .type_name = type_copy,
+            .auto = auto_cast,
+        },
+    };
+    const node = ast.Node.create(global_allocator, cast_data) catch {
+        if (type_copy) |tc| global_allocator.free(tc);
+        return null;
+    };
+    set_node_line(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 

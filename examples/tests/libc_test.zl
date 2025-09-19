@@ -3,7 +3,7 @@ fun main() >> i32 {
 
     @puts("Testing puts function");
 
-    i32 len = @strlen("test");
+    i32 len = (@strlen("test") as _);
     @printf("strlen('test') = %d\n", len);
 
     i32 num = @atoi("123");

@@ -42,7 +42,7 @@ fun distance_from_origin(self: Point) >> f64 {
     i32 x_squared = self.x * self.x;
     i32 y_squared = self.y * self.y;
     ?? we do not have sqrt function :(
-    return x_squared + y_squared;
+    return (x_squared + y_squared) as _;
 }
 
 fun set_coords(self: Point, new_x: i32, new_y: i32) >> Point {

@@ -121,11 +121,9 @@ pub fn assignToField(cg: *llvm.CodeGenerator, field_ptr: c.LLVMValueRef, field_t
         try assignStringLiteralToArrayField(cg, field_ptr, field_type, value_expr.data.string_literal);
         return;
     }
-    const value = try cg.generateExpression(value_expr);
-
-    const casted_value = cg.castToType(value, field_type);
-
-    const store_instr = c.LLVMBuildStore(cg.builder, casted_value, field_ptr);
+    const value_raw = try cg.generateExpression(value_expr);
+    const final_val = try cg.castWithRules(value_raw, field_type, value_expr);
+    const store_instr = c.LLVMBuildStore(cg.builder, final_val, field_ptr);
     const alignment = utils.getAlignmentForType(cg, field_type);
     c.LLVMSetAlignment(store_instr, alignment);
 }
@@ -263,7 +261,7 @@ pub fn generateStructInitializer(cg: *llvm.CodeGenerator, struct_init: ast.Struc
                 try assignStringLiteralToArrayField(cg, field_ptr, field_type, default_val.data.string_literal);
             } else {
                 const value = try cg.generateExpression(default_val);
-                const casted_value = cg.castToType(value, field_type);
+                const casted_value = try cg.castWithRules(value, field_type, default_val);
                 _ = c.LLVMBuildStore(cg.builder, casted_value, field_ptr);
             }
         }
@@ -278,7 +276,7 @@ pub fn generateStructInitializer(cg: *llvm.CodeGenerator, struct_init: ast.Struc
             try assignStringLiteralToArrayField(cg, field_ptr, field_type, field_val.value.data.string_literal);
         } else {
             const value = try cg.generateExpression(field_val.value);
-            const casted_value = cg.castToType(value, field_type);
+            const casted_value = try cg.castWithRules(value, field_type, field_val.value);
             _ = c.LLVMBuildStore(cg.builder, casted_value, field_ptr);
         }
     }

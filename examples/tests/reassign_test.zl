@@ -4,7 +4,7 @@ fun main()>>i32 {
     var = 5;
     @printf("var = (expected 5):%d\n", var);
     f32 float_val = 14.88;
-    var = float_val;
+    var = float_val as i32;
     @printf("var = (expected 14):%d\n", var);
     return 0;
 }
