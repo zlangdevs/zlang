@@ -68,7 +68,7 @@ extern void* current_scanner;
 void* ast_root = NULL;
 %}
 
-%expect 7
+%expect 3
 %expect-rr 0
 
 %define parse.error verbose
@@ -114,8 +114,8 @@ void* ast_root = NULL;
 %type <node> expression logical_or_expression logical_and_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression postfix_expression argument_list arguments
 %type <node> comparison_expression simple_term c_for_statement for_increment
 %type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration wrap_statement
-%type <node> enum_values enum_value_list struct_fields struct_field_list qualified_identifier
-%type <node> struct_initializer struct_field_values struct_field_value_list initializer_expression
+%type <node> enum_values enum_value_list struct_fields struct_field_list
+%type <node> struct_initializer struct_field_values struct_field_value_list initializer_expression ref_expression ref_base
 %type <string> type_name function_name string_literal complex_type_name module_path
 
 %start program
@@ -354,15 +354,27 @@ brainfuck_statement:
     }
 ;
 
-assignment:
-    TOKEN_IDENTIFIER TOKEN_ASSIGN initializer_expression {
-        void* target = zig_create_identifier($1);
-        $$ = zig_create_assignment(target, $3);
+ref_base:
+    TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
+;
+
+ref_expression:
+    ref_base { $$ = $1; }
+  | ref_expression TOKEN_LBRACKET expression TOKEN_RBRACKET {
+        $$ = zig_create_array_index($1, $3);
     }
-    | qualified_identifier TOKEN_ASSIGN initializer_expression {
+  | ref_expression TOKEN_DOT TOKEN_IDENTIFIER {
+        const char* field_copy = strdup($3);
+        $$ = zig_create_qualified_identifier($1, field_copy);
+        free($3);
+    }
+;
+
+assignment:
+    ref_expression TOKEN_ASSIGN initializer_expression {
         $$ = zig_create_assignment($1, $3);
     }
-    | TOKEN_IDENTIFIER TOKEN_REASSIGN expression {
+  | TOKEN_IDENTIFIER TOKEN_REASSIGN expression {
         void* target = zig_create_identifier($1);
         void* read_id = zig_create_identifier($1);
         $$ = zig_create_assignment(target, zig_create_binary_op((char)$2, read_id, $3));
@@ -370,10 +382,7 @@ assignment:
 ;
 
 array_assignment:
-    postfix_expression TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_ASSIGN expression {
-        $$ = zig_create_array_assignment($1, $3, $6);
-    }
-  | postfix_expression TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_REASSIGN expression {
+    ref_expression TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_REASSIGN expression {
         $$ = zig_create_array_compound_assignment($1, $3, $6, $5);
     }
 ;
@@ -501,16 +510,9 @@ unary_expression:
 ;
 
 postfix_expression:
-    primary_expression { $$ = $1; }
-  | postfix_expression TOKEN_LBRACKET expression TOKEN_RBRACKET {
-       $$ = zig_create_array_index($1, $3);
-   }
-  | postfix_expression TOKEN_DOT TOKEN_IDENTIFIER {
-       const char* field_copy = strdup($3);
-       $$ = zig_create_qualified_identifier($1, field_copy);
-       free($3);
-   }
-  | postfix_expression TOKEN_DOT TOKEN_IDENTIFIER TOKEN_LPAREN argument_list TOKEN_RPAREN {
+    ref_expression { $$ = $1; }
+  | primary_expression { $$ = $1; }
+  | ref_expression TOKEN_DOT TOKEN_IDENTIFIER TOKEN_LPAREN argument_list TOKEN_RPAREN {
        const char* method_name_copy = strdup($3);
        $$ = zig_create_method_call($1, method_name_copy, $5);
        free($3);
@@ -520,8 +522,7 @@ postfix_expression:
 ;
 
 primary_expression:
-     TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
-    | array_initializer { $$ = $1; }
+     array_initializer { $$ = $1; }
     | TOKEN_FLOAT { $$ = zig_create_float_literal($1); }
     | TOKEN_NUMBER { $$ = zig_create_number_literal($1); }
     | TOKEN_CHAR { $$ = zig_create_char_literal($1); }
@@ -531,26 +532,6 @@ primary_expression:
     | TOKEN_NULL { $$ = zig_create_null_literal(); }
 ;
 
-qualified_identifier:
-    TOKEN_IDENTIFIER TOKEN_DOT TOKEN_IDENTIFIER %prec TOKEN_ASSIGN {
-        void* base_node = zig_create_identifier($1);
-        const char* field_copy = strdup($3);
-        $$ = zig_create_qualified_identifier(base_node, field_copy);
-        free($1); free($3);
-    }
-    | TOKEN_IDENTIFIER TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_DOT TOKEN_IDENTIFIER %prec TOKEN_ASSIGN {
-        void* arr = zig_create_identifier($1);
-        void* array_index = zig_create_array_index(arr, $3);
-        const char* field_copy = strdup($6);
-        $$ = zig_create_qualified_identifier(array_index, field_copy);
-        free($6);
-    }
-    | qualified_identifier TOKEN_DOT TOKEN_IDENTIFIER %prec TOKEN_ASSIGN {
-        const char* field_copy = strdup($3);
-        $$ = zig_create_qualified_identifier($1, field_copy);
-        free($3);
-    }
-;
 
 string_literal:
     TOKEN_STRING { $$ = strdup($1); }
