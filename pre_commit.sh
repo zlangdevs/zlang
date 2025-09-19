@@ -8,6 +8,7 @@ clear
 ./zig-out/bin/zlang examples/brainfuck.zl -optimize
 cat thirdparties/mandelbrot.bf | ./output
 echo "++++++[>++++++++<-]>.[-]++++++++++.." | ./output 
+./examples/tests/wrap_tests/run_wrap_tests.sh
 cd examples/multi_file_c
 ./build.sh
 cd ../stbds

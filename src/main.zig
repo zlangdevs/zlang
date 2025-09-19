@@ -316,12 +316,333 @@ fn collectZlFilesFromDir(alloc: std.mem.Allocator, dir_path: []const u8, files_l
     }
 }
 
+// ===== C header wrapper generator =====
+
+fn isSpace(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r';
+}
+
+fn isIdentChar(c: u8) bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_';
+}
+
+fn trimSpaces(s: []const u8) []const u8 {
+    return std.mem.trim(u8, s, " \t\r\n");
+}
+
+fn asciiLower(a: []const u8, alloc: std.mem.Allocator) ![]u8 {
+    var out = try alloc.alloc(u8, a.len);
+    for (a, 0..) |ch, i| {
+        out[i] = std.ascii.toLower(ch);
+    }
+    return out;
+}
+
+fn stripCommentsAndPreproc(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
+    var out = std.ArrayList(u8).init(alloc);
+    var i: usize = 0;
+    while (i < input.len) : (i += 1) {
+        if (i + 1 < input.len and input[i] == '/' and input[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < input.len and !(input[i] == '*' and input[i + 1] == '/')) : (i += 1) {}
+            if (i + 1 < input.len) i += 1;
+            continue;
+        }
+        if (i + 1 < input.len and input[i] == '/' and input[i + 1] == '/') {
+            while (i < input.len and input[i] != '\n') : (i += 1) {}
+            continue;
+        }
+        if (input[i] == '#') {
+            if (i == 0 or input[i - 1] == '\n') {
+                while (i < input.len and input[i] != '\n') : (i += 1) {}
+                continue;
+            }
+        }
+        if (input[i] != '\r') {
+            try out.append(input[i]);
+        }
+    }
+    return out.toOwnedSlice();
+}
+
+fn collectStatements(alloc: std.mem.Allocator, content: []const u8) !std.ArrayList([]const u8) {
+    var list = std.ArrayList([]const u8).init(alloc);
+    var buf = std.ArrayList(u8).init(alloc);
+    var depth: usize = 0;
+    for (content) |ch| {
+        if (ch == '(') depth += 1;
+        if (ch == ')') {
+            if (depth > 0) depth -= 1;
+        }
+        if (ch == ';' and depth == 0) {
+            const stmt = try alloc.dupe(u8, trimSpaces(buf.items));
+            try list.append(stmt);
+            buf.clearRetainingCapacity();
+        } else {
+            if (ch == '\n') {
+                if (buf.items.len == 0 or buf.items[buf.items.len - 1] != ' ') {
+                    try buf.append(' ');
+                }
+            } else {
+                try buf.append(ch);
+            }
+        }
+    }
+    return list;
+}
+
+fn containsAny(s: []const u8, subs: []const []const u8) bool {
+    for (subs) |sub| {
+        if (std.mem.indexOf(u8, s, sub) != null) return true;
+    }
+    return false;
+}
+
+fn stripArraySuffix(param: []const u8) []const u8 {
+    if (std.mem.indexOfScalar(u8, param, '[')) |pos| {
+        return trimSpaces(param[0..pos]);
+    }
+    return trimSpaces(param);
+}
+
+fn stripTrailingParamName(param_token: []const u8) []const u8 {
+    var token = stripArraySuffix(param_token);
+    token = trimSpaces(token);
+    if (token.len == 0) return token;
+    var idx: isize = @as(isize, @intCast(token.len)) - 1;
+    while (idx >= 0 and isSpace(token[@as(usize, @intCast(idx))])) : (idx -= 1) {}
+    if (idx < 0) return token;
+    var end_id: isize = idx;
+    while (end_id >= 0 and isIdentChar(token[@as(usize, @intCast(end_id))])) : (end_id -= 1) {}
+    const id_start: isize = end_id + 1;
+    if (id_start < 0 or id_start > idx) return token;
+    const word = token[@as(usize, @intCast(id_start))..@as(usize, @intCast(idx + 1))];
+    const lower = std.ascii.eqlIgnoreCase;
+    const known_types = [_][]const u8{
+        "const",    "volatile", "restrict",
+        "unsigned", "signed",   "short",
+        "long",     "int",      "char",
+        "float",    "double",   "void",
+        "size_t",   "struct",   "union",
+        "enum",
+    };
+    for (known_types) |kw| {
+        if (lower(word, kw)) return token;
+    }
+    var p: isize = id_start - 1;
+    while (p >= 0 and isSpace(token[@as(usize, @intCast(p))])) : (p -= 1) {}
+    if (p >= 0 and token[@as(usize, @intCast(p))] == '*') {
+        return trimSpaces(token[0..@as(usize, @intCast(id_start))]);
+    }
+    return trimSpaces(token[0..@as(usize, @intCast(id_start))]);
+}
+
+fn countSubstring(hay: []const u8, needle: []const u8) usize {
+    var cnt: usize = 0;
+    var start: usize = 0;
+    while (std.mem.indexOfPos(u8, hay, start, needle)) |pos| {
+        cnt += 1;
+        start = pos + needle.len;
+        if (start >= hay.len) break;
+    }
+    return cnt;
+}
+
+fn buildPtrType(alloc: std.mem.Allocator, base: []const u8, depth: usize) ![]u8 {
+    var t = try alloc.dupe(u8, base);
+    var d: usize = 0;
+    while (d < depth) : (d += 1) {
+        const wrapped = try std.fmt.allocPrint(alloc, "ptr<{s}>", .{t});
+        t = wrapped;
+    }
+    return t;
+}
+
+fn mapCTypeToZType(alloc: std.mem.Allocator, raw0: []const u8) !?[]u8 {
+    var raw = trimSpaces(raw0);
+    if (raw.len == 0) return null;
+    var ptr_depth: usize = 0;
+    {
+        var tmp = std.ArrayList(u8).init(alloc);
+        defer tmp.deinit();
+        for (raw) |ch| {
+            if (ch == '*') {
+                ptr_depth += 1;
+            } else {
+                try tmp.append(ch);
+            }
+        }
+        raw = try alloc.dupe(u8, trimSpaces(tmp.items));
+    }
+
+    var lower = try asciiLower(raw, alloc);
+    {
+        var tmp = std.ArrayList(u8).init(alloc);
+        defer tmp.deinit();
+        var seen_space = false;
+        for (lower) |ch| {
+            if (isSpace(ch)) {
+                if (!seen_space) {
+                    try tmp.append(' ');
+                    seen_space = true;
+                }
+            } else {
+                seen_space = false;
+                try tmp.append(ch);
+            }
+        }
+        lower = try alloc.dupe(u8, trimSpaces(tmp.items));
+    }
+
+    const has_unsigned = std.mem.indexOf(u8, lower, "unsigned") != null;
+    const has_signed = std.mem.indexOf(u8, lower, "signed") != null;
+    const has_short = std.mem.indexOf(u8, lower, "short") != null;
+    const long_count = countSubstring(lower, "long");
+    const has_int = std.mem.indexOf(u8, lower, "int") != null;
+    const has_char = std.mem.indexOf(u8, lower, "char") != null;
+    const has_float = std.mem.indexOf(u8, lower, "float") != null;
+    const has_double = std.mem.indexOf(u8, lower, "double") != null;
+    const has_size_t = std.mem.indexOf(u8, lower, "size_t") != null;
+    const has_void = std.mem.indexOf(u8, lower, "void") != null;
+    const is_agg = containsAny(lower, &[_][]const u8{ "struct ", "union ", "enum " });
+
+    var base: []const u8 = "";
+    if (has_size_t) {
+        base = "u64";
+    } else if (has_float and !has_double) {
+        base = "f32";
+    } else if (has_double) {
+        base = "f64";
+    } else if (has_char) {
+        base = if (ptr_depth > 0 or has_unsigned) "u8" else "i8";
+    } else if (has_short) {
+        base = if (has_unsigned) "u16" else "i16";
+    } else if (long_count >= 2) {
+        base = if (has_unsigned) "u64" else "i64";
+    } else if (long_count == 1 and !has_double) {
+        base = if (has_unsigned) "u64" else "i64";
+    } else if (has_int or has_signed or has_unsigned) {
+        base = if (has_unsigned) "u32" else "i32";
+    } else if (has_void) {
+        base = "void";
+    } else if (is_agg) {
+        base = "void";
+    } else {
+        if (ptr_depth == 0) return null;
+        base = "void";
+    }
+
+    if (std.mem.eql(u8, base, "void") and ptr_depth == 0) {
+        return try alloc.dupe(u8, base);
+    }
+
+    return try buildPtrType(alloc, base, ptr_depth);
+}
+
+fn parseAndWriteWrapper(alloc: std.mem.Allocator, writer: anytype, stmt_in: []const u8) !void {
+    var stmt = trimSpaces(stmt_in);
+    if (stmt.len == 0) return;
+    if (containsAny(stmt, &[_][]const u8{ "typedef", "=" })) return;
+    if (containsAny(stmt, &[_][]const u8{ "{", "}" })) return;
+
+    const open = std.mem.indexOfScalar(u8, stmt, '(') orelse return;
+    const close = std.mem.lastIndexOfScalar(u8, stmt, ')') orelse return;
+    if (close <= open) return;
+
+    // disallow complex nested parentheses in params for now
+    const inner = stmt[open + 1 .. close];
+    if (std.mem.indexOfScalar(u8, inner, '(') != null or std.mem.indexOfScalar(u8, inner, ')') != null) return;
+    var k: isize = @as(isize, @intCast(open)) - 1;
+    while (k >= 0 and isSpace(stmt[@as(usize, @intCast(k))])) : (k -= 1) {}
+    if (k < 0) return;
+    if (stmt[@as(usize, @intCast(k))] == '*' or stmt[@as(usize, @intCast(k))] == ')') return;
+    var end_ident: isize = k;
+    while (end_ident >= 0 and isIdentChar(stmt[@as(usize, @intCast(end_ident))])) : (end_ident -= 1) {}
+    const name_start: usize = @as(usize, @intCast(end_ident + 1));
+    const name_end: usize = @as(usize, @intCast(k + 1));
+    if (name_end <= name_start) return;
+    const name = trimSpaces(stmt[name_start..name_end]);
+    if (name.len == 0) return;
+    const ret_raw = trimSpaces(stmt[0..name_start]);
+    const ret_z = try mapCTypeToZType(alloc, ret_raw) orelse return;
+    var params_buf = std.ArrayList([]const u8).init(alloc);
+    defer params_buf.deinit();
+    const inner_trim = trimSpaces(inner);
+    if (!(inner_trim.len == 0 or std.mem.eql(u8, inner_trim, "void"))) {
+        if (std.mem.indexOf(u8, inner_trim, "...") != null) return; // skip variadic, not supported by zlang yet:(
+        var it = std.mem.splitScalar(u8, inner_trim, ',');
+        while (it.next()) |raw_param| {
+            const p = stripTrailingParamName(raw_param);
+            const zt_maybe = try mapCTypeToZType(alloc, p);
+            if (zt_maybe == null) return; // give up on this function
+            try params_buf.append(zt_maybe.?);
+        }
+    }
+    try writer.print("wrap @{s}(", .{name});
+    var i: usize = 0;
+    while (i < params_buf.items.len) : (i += 1) {
+        if (i > 0) try writer.print(", ", .{});
+        try writer.print("p{d}: {s}", .{ i, params_buf.items[i] });
+    }
+    try writer.print(") >> {s};\n", .{ret_z});
+}
+
+fn generateWrapperFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out_path: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const header_src = try read_file(header_path);
+    const cleaned = try stripCommentsAndPreproc(a, header_src);
+    var stmts = try collectStatements(a, cleaned);
+    defer stmts.deinit();
+    var file = try std.fs.cwd().createFile(out_path, .{ .truncate = true });
+    defer file.close();
+    var w = file.writer();
+    try w.print("// Auto-generated by zlang wrap from: {s}\n", .{header_path});
+    for (stmts.items) |stmt| {
+        parseAndWriteWrapper(a, w, stmt) catch |e| {
+            switch (e) {
+                error.OutOfMemory => return e,
+                else => {},
+            }
+        };
+    }
+}
 pub fn main() !u8 {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
     if (args.len < 2) {
         std.debug.print("Usage: zlang <path to file or directory>", .{});
         return 1;
+    }
+    if (std.mem.eql(u8, args[1], "wrap")) {
+        if (args.len < 5) {
+            std.debug.print("Usage: zlang wrap <file.h> -o <file.zl>\n", .{});
+            return 1;
+        }
+        const header_path = args[2];
+        var out_path: ?[]const u8 = null;
+        var i: usize = 3;
+        while (i < args.len) : (i += 1) {
+            if (std.mem.eql(u8, args[i], "-o")) {
+                if (i + 1 >= args.len) {
+                    std.debug.print("Error: missing output after -o\n", .{});
+                    return 1;
+                }
+                out_path = args[i + 1];
+                break;
+            }
+        }
+        if (out_path == null) {
+            std.debug.print("Usage: zlang wrap <file.h> -o <file.zl>\n", .{});
+            return 1;
+        }
+        generateWrapperFromHeader(allocator, header_path, out_path.?) catch |err| {
+            std.debug.print("Error generating wrapper for {s}: {}\n", .{ header_path, err });
+            return 1;
+        };
+        std.debug.print("Generated wrapper: {s}\n", .{out_path.?});
+        return 0;
     }
 
     var ctx = parseArgs(args) catch |err| {
