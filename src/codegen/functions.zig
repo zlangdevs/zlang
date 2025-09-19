@@ -240,7 +240,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                             try param_types.resize(@as(usize, @intCast(param_count)));
                             c.LLVMGetParamTypes(func_type, param_types.items.ptr);
                             const expected_type = param_types.items[i];
-                            arg_value = cg.castToType(arg_value, expected_type);
+                            arg_value = try cg.castWithRules(arg_value, expected_type, arg);
                         }
                         break;
                     }

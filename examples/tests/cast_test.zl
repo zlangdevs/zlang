@@ -1,0 +1,124 @@
+struct Point {
+    x i32,
+    y i32
+}
+
+struct Person {
+    age i32,
+    height f32
+}
+
+fun main() >> i32 {
+    @printf("=== Cast Test Suite ===\n\n");
+    @printf("1. Integer to Integer Casts:\n");
+    i64 big_num = 123456789;
+    i32 small_num = big_num as i32;
+    @printf("i64 to i32: %lld -> (expected 123456789):%d\n", big_num, small_num);
+
+    u32 unsigned_num = 4294967295;
+    i32 signed_num = unsigned_num as i32;
+    @printf("u32 to i32: %u -> (expected -1):%d\n", unsigned_num, signed_num);
+
+    i8 tiny_num = -100;
+    i32 normal_num = tiny_num;
+    @printf("i8 to i32: %d -> (expected -100):%d\n", tiny_num, normal_num);
+
+    @printf("\n2. Integer to Float Casts:\n");
+    i32 int_val = 42;
+    f32 float_val = int_val as _;
+    @printf("i32 to f32: %d -> (expected 42.0):%.1f\n", int_val, float_val);
+
+    i64 big_int = -987654321;
+    f64 double_val = big_int as f64;
+    @printf("i64 to f64: %lld -> (expected -987654321.0):%.1f\n", big_int, double_val);
+
+    @printf("\n3. Float to Integer Casts:\n");
+    f32 pi_float = 3.14159;
+    i32 pi_int = pi_float as i32;
+    @printf("f32 to i32: %.5f -> (expected 3):%d\n", pi_float, pi_int);
+
+    f64 large_double = 123456.789;
+    i64 large_int = large_double as i64;
+    @printf("f64 to i64: %.3f -> (expected 123456):%lld\n", large_double, large_int);
+
+    @printf("\n4. Float to Float Casts:\n");
+    f64 precise_val = 2.718281828459045;
+    f32 less_precise = precise_val as f32;
+    @printf("f64 to f32: %.15f -> (expected 2.7182817):%.7f\n", precise_val, less_precise);
+
+    @printf("\n5. Bool Casts:\n");
+    bool true_val = true;
+    i32 bool_to_int = true_val as i32;
+    @printf("bool to i32: true -> (expected 1):%d\n", bool_to_int);
+
+    i32 zero = 0;
+    bool int_to_bool = zero as bool;
+    @printf("i32 to bool: 0 -> ");
+    if int_to_bool {@printf("true\n");} else {@printf("false\n");}
+
+    i32 non_zero = 5;
+    bool non_zero_bool = non_zero as bool;
+    @printf("i32 to bool: 5 -> ");
+    if non_zero_bool {@printf("true\n");} else {@printf("false\n");}
+
+    @printf("\n6. Pointer Casts:\n");
+    i32 num = 100;
+    ptr<i32> int_ptr = &num;
+    ptr<void> void_ptr = int_ptr as ptr<void>;
+    @printf("ptr<i32> to ptr<void>: %p -> %p\n", int_ptr, void_ptr);
+
+    ptr<void> another_void = void_ptr;
+    ptr<i32> back_to_int = another_void as ptr<i32>;
+    @printf("ptr<void> to ptr<i32>: %p -> %p\n", another_void, back_to_int);
+
+    @printf("\n7. Reinterpret Casts (Pointer to Struct):\n");
+
+    Point p;
+    p.x = 123;
+    p.y = 456;
+    ptr<Point> point_ptr = &p;
+
+    ptr<i32> raw_int_ptr = point_ptr as ptr<i32>;
+    @printf("Point pointer: %p\n", point_ptr);
+    @printf("Reinterpreted as i32 pointer: %p\n", raw_int_ptr);
+
+    @printf("\n8. Struct Field Casts:\n");
+    Person person;
+    person.age = 25;
+    person.height = 175.5;
+
+    f32 height_float = person.height;
+    i32 height_int = height_float as i32;
+    @printf("Person.height f32 to i32: %.1f -> %d\n", height_float, height_int);
+
+    i32 age_int = person.age;
+    f64 age_double = age_int as f64;
+    @printf("Person.age i32 to f64: %d -> %.1f\n", age_int, age_double);
+
+    @printf("\n9. Array Element Casts:\n");
+    arr<i32, 3> int_array = {10, 20, 30};
+    f32 first_elem_float = int_array[0] as f32;
+    @printf("Array[0] i32 to f32: %d -> %.1f\n", int_array[0], first_elem_float);
+
+    arr<f64, 2> double_array = {1.5, 2.5};
+    i32 second_elem_int = double_array[1] as i32;
+    @printf("Array[1] f64 to i32: %.1f -> %d\n", double_array[1], second_elem_int);
+
+    @printf("\n10. Complex Expression Casts:\n");
+    i32 a = 7;
+    i32 b = 3;
+    f32 result = (a + b * 2) as f32 / 2.0;
+    @printf("Complex expr to f32: ((7 + 3 * 2) as f32) / 2.0 = %.2f\n", result);
+
+    @printf("\n11. Cast in Function Return:\n");
+    f64 precise_result = calculate_precise_value();
+    i32 rounded_result = precise_result as i32;
+    @printf("Function result f64 to i32: %.6f -> %d\n", precise_result, rounded_result);
+
+    @printf("\n=== Cast Test Complete ===\n");
+    return 0;
+}
+
+fun calculate_precise_value() >> f64 {
+    return 3.141592653589793;
+}

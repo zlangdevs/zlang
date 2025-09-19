@@ -57,6 +57,7 @@ extern void zig_add_to_program(void* program, void* function);
 extern void zig_add_global_to_program(void* program, void* global);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
+extern void* zig_create_cast(void* expr, const char* type_name, int auto_flag);
 
 void yyerror(const char* s);
 int zlang_lex(void* scanner);
@@ -68,7 +69,7 @@ extern void* current_scanner;
 void* ast_root = NULL;
 %}
 
-%expect 3
+%expect 4
 %expect-rr 0
 
 %define parse.error verbose
@@ -86,6 +87,7 @@ void* ast_root = NULL;
 %token <number> TOKEN_REASSIGN
 
 %token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_DOT TOKEN_NULL
+%token TOKEN_AS TOKEN_UNDERSCORE
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT TOKEN_DECREMENT TOKEN_INCREMENT
@@ -106,12 +108,14 @@ void* ast_root = NULL;
 %left TOKEN_INCREMENT TOKEN_DECREMENT
 %left TOKEN_LBRACKET TOKEN_LPAREN TOKEN_DOT
 %left TOKEN_AT
+%right TOKEN_AS
 %right NOT UMINUS UPLUS UAMPERSAND UDEREF
 
 %type <node> parameter_list parameters parameter
 %type <node> program function_list function statement_list statement
 %type <node> var_declaration global_variable_declaration function_call return_statement assignment brainfuck_statement
 %type <node> expression logical_or_expression logical_and_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression postfix_expression argument_list arguments
+%type <node> cast_expression
 %type <node> comparison_expression simple_term c_for_statement for_increment
 %type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration wrap_statement
 %type <node> enum_values enum_value_list struct_fields struct_field_list
@@ -501,7 +505,7 @@ multiplicative_expression:
 ;
 
 unary_expression:
-    postfix_expression { $$ = $1; }
+    cast_expression { $$ = $1; }
   | TOKEN_NOT unary_expression %prec NOT { $$ = zig_create_unary_op('!', $2); }
   | TOKEN_MINUS unary_expression %prec UMINUS { $$ = zig_create_unary_op('-', $2); }
   | TOKEN_PLUS unary_expression %prec UPLUS { $$ = zig_create_unary_op('+', $2); }
@@ -519,6 +523,17 @@ postfix_expression:
    }
   | postfix_expression TOKEN_INCREMENT { $$ = zig_create_unary_op('I', $1); }
   | postfix_expression TOKEN_DECREMENT { $$ = zig_create_unary_op('D', $1); }
+;
+
+cast_expression:
+    postfix_expression { $$ = $1; }
+  | cast_expression TOKEN_AS type_name {
+        $$ = zig_create_cast($1, $3, 0);
+        free($3);
+    }
+  | cast_expression TOKEN_AS TOKEN_UNDERSCORE {
+        $$ = zig_create_cast($1, "", 1);
+    }
 ;
 
 primary_expression:

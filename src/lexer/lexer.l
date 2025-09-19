@@ -43,6 +43,8 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "enum"      { return TOKEN_ENUM; }
 "struct"    { return TOKEN_STRUCT; }
 "null"      { return TOKEN_NULL; }
+"as"        { return TOKEN_AS; }
+"_"         { return TOKEN_UNDERSCORE; }
 "brainfuck"[ \t\n]*"{" { BEGIN(BRAINFUCK); yylval.string = strdup(""); }
 {IDENT}     { yylval.string = strdup(yytext); last_was_identifier = 1; last_was_rparen = 0; return TOKEN_IDENTIFIER; }
 {FLOAT_EXP_DOT}  { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_FLOAT; }

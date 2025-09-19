@@ -34,6 +34,7 @@ pub const NodeType = enum {
     struct_decl,
     struct_initializer,
     qualified_identifier,
+    cast,
 };
 
 pub const BinaryOp = struct {
@@ -221,6 +222,12 @@ pub const QualifiedIdentifier = struct {
     field: []const u8,
 };
 
+pub const Cast = struct {
+    expr: *Node,
+    type_name: ?[]const u8,
+    auto: bool,
+};
+
 pub const NodeData = union(NodeType) {
     program: Program,
     function: Function,
@@ -255,17 +262,20 @@ pub const NodeData = union(NodeType) {
     struct_decl: StructDecl,
     struct_initializer: StructInitializer,
     qualified_identifier: QualifiedIdentifier,
+    cast: Cast,
 };
 
 pub const Node = struct {
     data: NodeData,
     allocator: std.mem.Allocator,
+    line: usize,
 
     pub fn create(allocator: std.mem.Allocator, data: NodeData) !*Node {
         const node = try allocator.create(Node);
         node.* = Node{
             .data = data,
             .allocator = allocator,
+            .line = 0,
         };
         return node;
     }
@@ -412,6 +422,10 @@ pub const Node = struct {
             .qualified_identifier => |qual_id| {
                 qual_id.base.destroy();
                 self.allocator.free(qual_id.field);
+            },
+            .cast => |c| {
+                c.expr.destroy();
+                if (c.type_name) |tn| self.allocator.free(tn);
             },
             else => {},
         }
@@ -725,6 +739,16 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
                 std.debug.print("Field: \x1b[36m{s}\x1b[0m = \n", .{field_val.field_name});
                 printAST(field_val.value, indent + 2, true, false);
             }
+        },
+        .cast => |c| {
+            if (c.auto) {
+                std.debug.print("🎯 Cast: auto\n", .{});
+            } else if (c.type_name) |tn| {
+                std.debug.print("🎯 Cast: \x1b[33m{s}\x1b[0m\n", .{tn});
+            } else {
+                std.debug.print("🎯 Cast\n", .{});
+            }
+            printAST(c.expr, indent + 1, true, false);
         },
     }
 }

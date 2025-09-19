@@ -45,6 +45,8 @@ typedef enum {
     TOKEN_ENUM,
     TOKEN_STRUCT,
     TOKEN_DOT,
+    TOKEN_AS,
+    TOKEN_UNDERSCORE,
     TOKEN_EOF = 0
 } TokenType;
 
