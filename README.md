@@ -1,4 +1,4 @@
 # Zlang
 Empire starts here 😈
 
-Link to the standart liobrary: https://github.com/zlangdevs/stdlib
+Link to the standart library: https://github.com/zlangdevs/stdlib
