@@ -90,8 +90,8 @@ void* ast_root = NULL;
 %token TOKEN_AS TOKEN_UNDERSCORE
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
-%token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT TOKEN_DECREMENT TOKEN_INCREMENT
-%token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_MODULUS TOKEN_AND TOKEN_OR TOKEN_NOT TOKEN_AMPERSAND
+%token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT TOKEN_LSHIFT TOKEN_DECREMENT TOKEN_INCREMENT
+%token TOKEN_COLON TOKEN_SEMICOLON TOKEN_AT TOKEN_COMMA TOKEN_PLUS TOKEN_MINUS TOKEN_MULTIPLY TOKEN_DIVIDE TOKEN_MODULUS TOKEN_AND TOKEN_OR TOKEN_NOT TOKEN_AMPERSAND TOKEN_BIT_OR TOKEN_XOR TOKEN_BIT_NOT
 
 %type <node> if_statement
 %type <node> for_statement
@@ -100,8 +100,12 @@ void* ast_root = NULL;
 
 %left TOKEN_OR
 %left TOKEN_AND
+%left TOKEN_BIT_OR
+%left TOKEN_XOR
+%left TOKEN_AMPERSAND
 %left TOKEN_EQUAL TOKEN_NON_EQUAL
 %left TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
+%left TOKEN_LSHIFT TOKEN_RSHIFT
 %left TOKEN_PLUS TOKEN_MINUS
 %left TOKEN_MULTIPLY TOKEN_DIVIDE
 %right TOKEN_ASSIGN TOKEN_REASSIGN
@@ -109,12 +113,12 @@ void* ast_root = NULL;
 %left TOKEN_LBRACKET TOKEN_LPAREN TOKEN_DOT
 %left TOKEN_AT
 %right TOKEN_AS
-%right NOT UMINUS UPLUS UAMPERSAND UDEREF
+%right NOT UMINUS UPLUS UAMPERSAND UDEREF UBIT_NOT
 
 %type <node> parameter_list parameters parameter
 %type <node> program function_list function statement_list statement
 %type <node> var_declaration global_variable_declaration function_call return_statement assignment brainfuck_statement
-%type <node> expression logical_or_expression logical_and_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression postfix_expression argument_list arguments
+%type <node> expression logical_or_expression logical_and_expression bitwise_or_expression bitwise_xor_expression bitwise_and_expression shift_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression postfix_expression argument_list arguments
 %type <node> cast_expression
 %type <node> comparison_expression simple_term c_for_statement for_increment
 %type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration wrap_statement
@@ -473,8 +477,29 @@ logical_or_expression:
 ;
 
 logical_and_expression:
+    bitwise_or_expression { $$ = $1; }
+  | logical_and_expression TOKEN_AND bitwise_or_expression { $$ = zig_create_binary_op('&', $1, $3); }
+;
+
+bitwise_or_expression:
+    bitwise_xor_expression { $$ = $1; }
+  | bitwise_or_expression TOKEN_BIT_OR bitwise_xor_expression { $$ = zig_create_binary_op('$', $1, $3); }
+;
+
+bitwise_xor_expression:
+    bitwise_and_expression { $$ = $1; }
+  | bitwise_xor_expression TOKEN_XOR bitwise_and_expression { $$ = zig_create_binary_op('^', $1, $3); }
+;
+
+bitwise_and_expression:
+    shift_expression { $$ = $1; }
+  | bitwise_and_expression TOKEN_AMPERSAND shift_expression { $$ = zig_create_binary_op('A', $1, $3); }
+;
+
+shift_expression:
     equality_expression { $$ = $1; }
-  | logical_and_expression TOKEN_AND equality_expression { $$ = zig_create_binary_op('&', $1, $3); }
+  | shift_expression TOKEN_LSHIFT equality_expression { $$ = zig_create_binary_op('<', $1, $3); }
+  | shift_expression TOKEN_RSHIFT equality_expression { $$ = zig_create_binary_op('>', $1, $3); }
 ;
 
 equality_expression:
@@ -507,6 +532,7 @@ multiplicative_expression:
 unary_expression:
     cast_expression { $$ = $1; }
   | TOKEN_NOT unary_expression %prec NOT { $$ = zig_create_unary_op('!', $2); }
+  | TOKEN_BIT_NOT unary_expression %prec UBIT_NOT { $$ = zig_create_unary_op('~', $2); }
   | TOKEN_MINUS unary_expression %prec UMINUS { $$ = zig_create_unary_op('-', $2); }
   | TOKEN_PLUS unary_expression %prec UPLUS { $$ = zig_create_unary_op('+', $2); }
   | TOKEN_AMPERSAND unary_expression %prec UAMPERSAND { $$ = zig_create_unary_op('&', $2); }

@@ -115,11 +115,13 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "<"         {
     last_was_identifier = 0;
     last_was_rparen = 0;
+    template_depth++;
     return TOKEN_LESS;
 }
 ">"         {
     last_was_identifier = 0;
     last_was_rparen = 0;
+    if (template_depth > 0) template_depth--;
     return TOKEN_GREATER;
 }
 "..."                         { BEGIN(COMMENT); }
@@ -132,17 +134,29 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "."    { last_was_rparen = 0; return TOKEN_DOT; }
 "="    { last_was_rparen = 0; return TOKEN_ASSIGN; }
 ">>"        {
-    if (last_was_rparen) {
+    if (template_depth > 0) {
+        /* Split >> into > and > for nested generics */
+        template_depth--;
+        last_was_rparen = 0;
+        last_was_identifier = 0;
+        yyless(1);
+        return TOKEN_GREATER;
+    }
+    if (last_was_rparen || last_was_identifier) {
         last_was_rparen = 0;
         last_was_identifier = 0;
         return TOKEN_RSHIFT;
     }
-    /* Split >> into > and > for nested generics */
+    /* Default: split into two > tokens */
     last_was_rparen = 0;
     last_was_identifier = 0;
     yyless(1);
     return TOKEN_GREATER;
 }
+"<<"        { last_was_rparen = 0; return TOKEN_LSHIFT; }
+"|"         { last_was_rparen = 0; return TOKEN_BIT_OR; }
+"^"         { last_was_rparen = 0; return TOKEN_XOR; }
+"~"         { last_was_rparen = 0; return TOKEN_BIT_NOT; }
 "{"         { last_was_identifier = 0; last_was_rparen = 0; return TOKEN_LBRACE; }
 "}"         { last_was_rparen = 0; return TOKEN_RBRACE; }
 "("         { last_was_rparen = 0; return TOKEN_LPAREN; }
