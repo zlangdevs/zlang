@@ -1502,7 +1502,7 @@ pub const CodeGenerator = struct {
                                 self.uses_float_modulo = true;
                                 break :blk c.LLVMBuildFRem(self.builder, lhs_val, rhs_val, "frem");
                             },
-                            '&', '|' => try self.generateBinaryOp(b),
+                            '&', '|', 'A', '$', '^', '<', '>' => try self.generateBinaryOp(b),
                             else => errors.CodegenError.UnsupportedOperation,
                         };
                     } else if (kind == c.LLVMIntegerTypeKind) {
@@ -1524,7 +1524,7 @@ pub const CodeGenerator = struct {
                                 else
                                     c.LLVMBuildSRem(self.builder, lhs_val, rhs_val, "srem");
                             },
-                            '&', '|' => try self.generateBinaryOp(b),
+                            '&', '|', 'A', '$', '^', '<', '>' => try self.generateBinaryOp(b),
                             else => errors.CodegenError.UnsupportedOperation,
                         };
                     } else {
@@ -1547,6 +1547,16 @@ pub const CodeGenerator = struct {
                     },
                     '+' => {
                         return try self.generateExpressionWithContext(un.operand, expected_type);
+                    },
+                    '~' => {
+                        const operand_val = try self.generateExpressionWithContext(un.operand, expected_type);
+                        const operand_type = c.LLVMTypeOf(operand_val);
+                        const type_kind = c.LLVMGetTypeKind(operand_type);
+                        if (type_kind == c.LLVMIntegerTypeKind) {
+                            return c.LLVMBuildNot(self.builder, operand_val, "bitnot");
+                        } else {
+                            return errors.CodegenError.UnsupportedOperation;
+                        }
                     },
                     else => return self.generateExpression(expr),
                 }
@@ -1766,6 +1776,16 @@ pub const CodeGenerator = struct {
                         const bool_val = self.convertToBool(operand_val);
                         const true_val = c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 1, 0);
                         return c.LLVMBuildXor(self.builder, bool_val, true_val, "not");
+                    },
+                    '~' => {
+                        const operand_val = try self.generateExpression(un.operand);
+                        const operand_type = c.LLVMTypeOf(operand_val);
+                        const type_kind = c.LLVMGetTypeKind(operand_type);
+                        if (type_kind == c.LLVMIntegerTypeKind) {
+                            return c.LLVMBuildNot(self.builder, operand_val, "bitnot");
+                        } else {
+                            return errors.CodegenError.UnsupportedOperation;
+                        }
                     },
                     '&' => {
                         if (un.operand.data == .identifier) {
@@ -2264,8 +2284,9 @@ pub const CodeGenerator = struct {
 
     fn generateBinaryOp(self: *CodeGenerator, bin_op: ast.BinaryOp) errors.CodegenError!c.LLVMValueRef {
         const lhs_value = try self.generateExpression(bin_op.lhs);
-        const rhs_value = try self.generateExpression(bin_op.rhs);
         const lhs_type = c.LLVMTypeOf(lhs_value);
+        const lhs_type_name = self.getTypeNameFromLLVMType(lhs_type);
+        const rhs_value = try self.generateExpressionWithContext(bin_op.rhs, lhs_type_name);
         const rhs_type = c.LLVMTypeOf(rhs_value);
 
         const lhs_kind = c.LLVMGetTypeKind(lhs_type);
@@ -2363,6 +2384,29 @@ pub const CodeGenerator = struct {
             },
             '&' => self.generateLogicalAnd(bin_op.lhs, bin_op.rhs),
             '|' => self.generateLogicalOr(bin_op.lhs, bin_op.rhs),
+            'A' => {
+                if (is_float_op) return errors.CodegenError.UnsupportedOperation;
+                return c.LLVMBuildAnd(self.builder, casted_lhs, casted_rhs, "and");
+            },
+            '$' => {
+                if (is_float_op) return errors.CodegenError.UnsupportedOperation;
+                return c.LLVMBuildOr(self.builder, casted_lhs, casted_rhs, "or");
+            },
+            '^' => {
+                if (is_float_op) return errors.CodegenError.UnsupportedOperation;
+                return c.LLVMBuildXor(self.builder, casted_lhs, casted_rhs, "xor");
+            },
+            '<' => {
+                if (is_float_op) return errors.CodegenError.UnsupportedOperation;
+                return c.LLVMBuildShl(self.builder, casted_lhs, casted_rhs, "shl");
+            },
+            '>' => {
+                if (is_float_op) return errors.CodegenError.UnsupportedOperation;
+                if (isUnsignedType(self.getTypeNameFromLLVMType(result_type)))
+                    return c.LLVMBuildLShr(self.builder, casted_lhs, casted_rhs, "lshr")
+                else
+                    return c.LLVMBuildAShr(self.builder, casted_lhs, casted_rhs, "ashr");
+            },
             else => {
                 return errors.CodegenError.UnsupportedOperation;
             },
