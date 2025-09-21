@@ -1,0 +1,48 @@
+fun main() >> i32 {
+    ?? Bitwise AND tests
+    i32 a = 12;    ?? 1100 in binary
+    i32 b = 10;    ?? 1010 in binary
+    i32 and_result = a & b;  ?? Should be 8 (1000 in binary)
+    @printf("12 & 10 = (expected 8):%d\n", and_result);
+
+    i32 or_result = a | b;   ?? Should be 14 (1110 in binary)
+    @printf("12 | 10 = (expected 14):%d\n", or_result);
+
+    i32 xor_result = a ^ b;  ?? Should be 6 (0110 in binary)
+    @printf("12 ^ 10 = (expected 6):%d\n", xor_result);
+
+    i32 left_shift = a << 2;  ?? 12 << 2 = 48
+    @printf("12 << 2 = (expected 48):%d\n", left_shift);
+
+    i32 right_shift = a >> 2; ?? 12 >> 2 = 3
+    @printf("12 >> 2 = (expected 3):%d\n", right_shift);
+
+    i32 not_result = ~a;     ?? ~12 should be -13
+    @printf("~12 = (expected -13):%d\n", not_result);
+
+    i32 c = 255;   ?? 11111111 in binary
+    i32 d = 85;    ?? 01010101 in binary
+
+    i32 and_test2 = c & d;
+    i32 or_test2 = c | d;
+    i32 xor_test2 = c ^ d;
+
+    @printf("255 & 85 = (expected 85):%d\n", and_test2);
+    @printf("255 | 85 = (expected 255):%d\n", or_test2);
+    @printf("255 ^ 85 = (expected 170):%d\n", xor_test2);
+
+    i32 big_val = 1000;
+    i32 left_big = big_val << 3;   ?? 1000 << 3 = 8000
+    i32 right_big = big_val >> 3;  ?? 1000 >> 3 = 125
+
+    @printf("1000 << 3 = (expected 8000):%d\n", left_big);
+    @printf("1000 >> 3 = (expected 125):%d\n", right_big);
+
+    i32 not_zero = ~0;       ?? Should be -1
+    i32 not_neg = ~(-1);     ?? Should be 0
+
+    @printf("~0 = (expected -1): %d\n", not_zero);
+    @printf("~(-1) = (expected 0): %d\n", not_neg);
+
+    return 0;
+}
