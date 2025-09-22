@@ -1222,6 +1222,34 @@ pub const CodeGenerator = struct {
         return false;
     }
 
+    fn typesAreEqual(self: *CodeGenerator, type1: c.LLVMTypeRef, type2: c.LLVMTypeRef) bool {
+        _ = self;
+        if (type1 == type2) return true;
+
+        const kind1 = c.LLVMGetTypeKind(type1);
+        const kind2 = c.LLVMGetTypeKind(type2);
+
+        if (kind1 != kind2) return false;
+
+        switch (kind1) {
+            c.LLVMIntegerTypeKind => {
+                return c.LLVMGetIntTypeWidth(type1) == c.LLVMGetIntTypeWidth(type2);
+            },
+            c.LLVMFloatTypeKind, c.LLVMDoubleTypeKind, c.LLVMHalfTypeKind => {
+                return true; // Same kind means same float type
+            },
+            c.LLVMPointerTypeKind => {
+                return true; // For now, consider all pointers equal for casting purposes
+            },
+            c.LLVMVoidTypeKind => {
+                return true;
+            },
+            else => {
+                return false;
+            },
+        }
+    }
+
     pub fn castWithRules(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef, value_node: ?*ast.Node) errors.CodegenError!c.LLVMValueRef {
         var val = value;
         var from_ty = c.LLVMTypeOf(val);
@@ -1237,7 +1265,7 @@ pub const CodeGenerator = struct {
                 }
             }
         }
-        if (from_ty == target_type) return val;
+        if (self.typesAreEqual(from_ty, target_type)) return val;
 
         const fk = c.LLVMGetTypeKind(from_ty);
         const tk = c.LLVMGetTypeKind(target_type);
@@ -1264,6 +1292,11 @@ pub const CodeGenerator = struct {
         if (value_node) |vn2| {
             switch (vn2.data) {
                 .number_literal => {
+                    if (to_kind == c.LLVMIntegerTypeKind) {
+                        return self.castToType(val, target_type);
+                    }
+                },
+                .char_literal => {
                     if (to_kind == c.LLVMIntegerTypeKind) {
                         return self.castToType(val, target_type);
                     }
@@ -1296,6 +1329,7 @@ pub const CodeGenerator = struct {
         }
         const from_name = self.getTypeNameFromLLVMType(from_ty);
         const to_name = self.getTypeNameFromLLVMType(target_type);
+
         if (value_node) |vn3| {
             std.debug.print("Type mismatch at line {d}: cannot convert {s} to {s}\n", .{ vn3.line, from_name, to_name });
         } else {

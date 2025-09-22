@@ -217,10 +217,11 @@ pub fn getAlignmentForType(self: *codegen.CodeGenerator, llvm_type: c.LLVMTypeRe
 pub fn getTypeNameFromLLVMType(self: *codegen.CodeGenerator, llvm_type: c.LLVMTypeRef) []const u8 {
     _ = self;
     const type_kind = c.LLVMGetTypeKind(llvm_type);
-    const width = c.LLVMGetIntTypeWidth(llvm_type);
 
     return switch (type_kind) {
+        c.LLVMVoidTypeKind => "void",
         c.LLVMIntegerTypeKind => {
+            const width = c.LLVMGetIntTypeWidth(llvm_type);
             if (width == 1) {
                 return "bool";
             } else {
@@ -236,6 +237,9 @@ pub fn getTypeNameFromLLVMType(self: *codegen.CodeGenerator, llvm_type: c.LLVMTy
         c.LLVMFloatTypeKind => "f32",
         c.LLVMDoubleTypeKind => "f64",
         c.LLVMHalfTypeKind => "f16",
-        else => "i32",
+        c.LLVMPointerTypeKind => "ptr",
+        c.LLVMArrayTypeKind => "array",
+        c.LLVMStructTypeKind => "struct",
+        else => "unknown",
     };
 }
