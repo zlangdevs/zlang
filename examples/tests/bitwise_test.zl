@@ -44,5 +44,35 @@ fun main() >> i32 {
     @printf("~0 = (expected -1): %d\n", not_zero);
     @printf("~(-1) = (expected 0): %d\n", not_neg);
 
+    ?? Test bitwise reassignment operators
+    i32 test_and = 15;     ?? 1111 in binary
+    test_and &= 7;         ?? 1111 & 0111 = 0111 = 7
+    @printf("15 &= 7 = (expected 7): %d\n", test_and);
+
+    i32 test_or = 12;      ?? 1100 in binary
+    test_or |= 3;          ?? 1100 | 0011 = 1111 = 15
+    @printf("12 |= 3 = (expected 15): %d\n", test_or);
+
+    i32 test_xor = 12;     ?? 1100 in binary
+    test_xor ^= 10;        ?? 1100 ^ 1010 = 0110 = 6
+    @printf("12 ^= 10 = (expected 6): %d\n", test_xor);
+
+    i32 test_lshift = 5;   ?? 5 in binary is 101
+    test_lshift <<= 2;     ?? 101 << 2 = 10100 = 20
+    @printf("5 <<= 2 = (expected 20): %d\n", test_lshift);
+
+    i32 test_rshift = 80;  ?? 80 in binary
+    test_rshift >>= 3;     ?? 80 >> 3 = 10
+    @printf("80 >>= 3 = (expected 10): %d\n", test_rshift);
+
+    ?? Test multiple operations on same variable
+    i32 multi_test = 24;   ?? 11000 in binary
+    multi_test &= 30;      ?? 11000 & 11110 = 11000 = 24
+    @printf("24 &= 30 = (expected 24): %d\n", multi_test);
+    multi_test |= 7;       ?? 11000 | 00111 = 11111 = 31
+    @printf("24 |= 7 = (expected 31): %d\n", multi_test);
+    multi_test ^= 15;      ?? 11111 ^ 01111 = 10000 = 16
+    @printf("31 ^= 15 = (expected 16): %d\n", multi_test);
+
     return 0;
 }
