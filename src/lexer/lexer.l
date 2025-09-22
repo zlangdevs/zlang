@@ -103,6 +103,11 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 "*="        { yylval.number = '*'; last_was_rparen = 0; return TOKEN_REASSIGN; }
 "/="        { yylval.number = '/'; last_was_rparen = 0; return TOKEN_REASSIGN; }
 "%="        { yylval.number = '%'; last_was_rparen = 0; return TOKEN_REASSIGN; }
+">>="       { yylval.number = '>'; last_was_rparen = 0; return TOKEN_REASSIGN; }
+"<<="       { yylval.number = '<'; last_was_rparen = 0; return TOKEN_REASSIGN; }
+"&="        { yylval.number = 'A'; last_was_rparen = 0; return TOKEN_REASSIGN; }
+"|="        { yylval.number = '$'; last_was_rparen = 0; return TOKEN_REASSIGN; }
+"^="        { yylval.number = '^'; last_was_rparen = 0; return TOKEN_REASSIGN; }
 "+"         { last_was_identifier = 0; last_was_rparen = 0; return TOKEN_PLUS; }
 "-"         { last_was_identifier = 0; last_was_rparen = 0; return TOKEN_MINUS; }
 "*"         { last_was_identifier = 0; last_was_rparen = 0; return TOKEN_MULTIPLY; }
