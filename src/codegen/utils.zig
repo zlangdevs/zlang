@@ -3,14 +3,8 @@ const std = @import("std");
 const ast = @import("../parser/ast.zig");
 const errors = @import("../errors.zig");
 
-const c = @cImport({
-    @cInclude("llvm-c/Core.h");
-    @cInclude("llvm-c/IRReader.h");
-    @cInclude("llvm-c/Target.h");
-    @cInclude("llvm-c/TargetMachine.h");
-    @cInclude("llvm-c/Analysis.h");
-    @cInclude("llvm-c/ExecutionEngine.h");
-});
+const c_bindings = @import("c_bindings.zig");
+const c = c_bindings.c;
 
 pub const LibcType = enum {
     void_type,
@@ -60,13 +54,13 @@ pub const LIBC_FUNCTIONS = std.StaticStringMap(LibcFunctionSignature).initCompti
 
 pub fn libcTypeToLLVM(cg: *codegen.CodeGenerator, libc_type: LibcType) c.LLVMTypeRef {
     return switch (libc_type) {
-        .void_type => c.LLVMVoidTypeInContext(cg.context),
-        .int_type => c.LLVMInt32TypeInContext(cg.context),
-        .char_ptr_type => c.LLVMPointerType(c.LLVMInt8TypeInContext(cg.context), 0),
-        .size_t_type => c.LLVMInt64TypeInContext(cg.context),
-        .file_ptr_type => c.LLVMPointerType(c.LLVMInt8TypeInContext(cg.context), 0),
-        .long_type => c.LLVMInt64TypeInContext(cg.context),
-        .double_type => c.LLVMDoubleTypeInContext(cg.context),
+        .void_type => c.LLVMVoidTypeInContext(@ptrCast(cg.context)),
+        .int_type => c.LLVMInt32TypeInContext(@ptrCast(cg.context)),
+        .char_ptr_type => c.LLVMPointerType(c.LLVMInt8TypeInContext(@ptrCast(cg.context)), 0),
+        .size_t_type => c.LLVMInt64TypeInContext(@ptrCast(cg.context)),
+        .file_ptr_type => c.LLVMPointerType(c.LLVMInt8TypeInContext(@ptrCast(cg.context)), 0),
+        .long_type => c.LLVMInt64TypeInContext(@ptrCast(cg.context)),
+        .double_type => c.LLVMDoubleTypeInContext(@ptrCast(cg.context)),
     };
 }
 
@@ -100,31 +94,31 @@ pub fn convertToBool(cg: *codegen.CodeGenerator, value: c.LLVMValueRef) c.LLVMVa
 
 pub fn getDefaultValueForType(cg: *codegen.CodeGenerator, type_name: []const u8) c.LLVMValueRef {
     if (std.mem.eql(u8, type_name, "i8")) {
-        return c.LLVMConstInt(c.LLVMInt8TypeInContext(cg.context), 0, 0);
+        return c.LLVMConstInt(c.LLVMInt8TypeInContext(@ptrCast(cg.context)), 0, 0);
     } else if (std.mem.eql(u8, type_name, "i16")) {
-        return c.LLVMConstInt(c.LLVMInt16TypeInContext(cg.context), 0, 0);
+        return c.LLVMConstInt(c.LLVMInt16TypeInContext(@ptrCast(cg.context)), 0, 0);
     } else if (std.mem.eql(u8, type_name, "i32")) {
-        return c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0);
+        return c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0);
     } else if (std.mem.eql(u8, type_name, "i64")) {
-        return c.LLVMConstInt(c.LLVMInt64TypeInContext(cg.context), 0, 0);
+        return c.LLVMConstInt(c.LLVMInt64TypeInContext(@ptrCast(cg.context)), 0, 0);
     } else if (std.mem.eql(u8, type_name, "u8")) {
-        return c.LLVMConstInt(c.LLVMInt8TypeInContext(cg.context), 0, 0);
+        return c.LLVMConstInt(c.LLVMInt8TypeInContext(@ptrCast(cg.context)), 0, 0);
     } else if (std.mem.eql(u8, type_name, "u16")) {
-        return c.LLVMConstInt(c.LLVMInt16TypeInContext(cg.context), 0, 0);
+        return c.LLVMConstInt(c.LLVMInt16TypeInContext(@ptrCast(cg.context)), 0, 0);
     } else if (std.mem.eql(u8, type_name, "u32")) {
-        return c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0);
+        return c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0);
     } else if (std.mem.eql(u8, type_name, "u64")) {
-        return c.LLVMConstInt(c.LLVMInt64TypeInContext(cg.context), 0, 0);
+        return c.LLVMConstInt(c.LLVMInt64TypeInContext(@ptrCast(cg.context)), 0, 0);
     } else if (std.mem.eql(u8, type_name, "f16")) {
-        return c.LLVMConstReal(c.LLVMHalfTypeInContext(cg.context), 0.0);
+        return c.LLVMConstReal(c.LLVMHalfTypeInContext(@ptrCast(cg.context)), 0.0);
     } else if (std.mem.eql(u8, type_name, "f32")) {
-        return c.LLVMConstReal(c.LLVMFloatTypeInContext(cg.context), 0.0);
+        return c.LLVMConstReal(c.LLVMFloatTypeInContext(@ptrCast(cg.context)), 0.0);
     } else if (std.mem.eql(u8, type_name, "f64")) {
-        return c.LLVMConstReal(c.LLVMDoubleTypeInContext(cg.context), 0.0);
+        return c.LLVMConstReal(c.LLVMDoubleTypeInContext(@ptrCast(cg.context)), 0.0);
     } else if (std.mem.eql(u8, type_name, "bool")) {
-        return c.LLVMConstInt(c.LLVMInt1TypeInContext(cg.context), 0, 0);
+        return c.LLVMConstInt(c.LLVMInt1TypeInContext(@ptrCast(cg.context)), 0, 0);
     }
-    return c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0);
+    return c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0);
 }
 
 pub fn getLLVMType(self: *codegen.CodeGenerator, type_name: []const u8) c.LLVMTypeRef {
@@ -154,39 +148,39 @@ pub fn getLLVMType(self: *codegen.CodeGenerator, type_name: []const u8) c.LLVMTy
                 return c.LLVMArrayType(element_type, array_size);
             } else |_| {}
         } else {}
-        return c.LLVMInt32TypeInContext(self.context);
+        return c.LLVMInt32TypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "i8")) {
-        return c.LLVMInt8TypeInContext(self.context);
+        return c.LLVMInt8TypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "i16")) {
-        return c.LLVMInt16TypeInContext(self.context);
+        return c.LLVMInt16TypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "i32")) {
-        return c.LLVMInt32TypeInContext(self.context);
+        return c.LLVMInt32TypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "i64")) {
-        return c.LLVMInt64TypeInContext(self.context);
+        return c.LLVMInt64TypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "u8")) {
-        return c.LLVMInt8TypeInContext(self.context);
+        return c.LLVMInt8TypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "u16")) {
-        return c.LLVMInt16TypeInContext(self.context);
+        return c.LLVMInt16TypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "u32")) {
-        return c.LLVMInt32TypeInContext(self.context);
+        return c.LLVMInt32TypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "u64")) {
-        return c.LLVMInt64TypeInContext(self.context);
+        return c.LLVMInt64TypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "f16")) {
-        return c.LLVMHalfTypeInContext(self.context);
+        return c.LLVMHalfTypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "f32")) {
-        return c.LLVMFloatTypeInContext(self.context);
+        return c.LLVMFloatTypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "f64")) {
-        return c.LLVMDoubleTypeInContext(self.context);
+        return c.LLVMDoubleTypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "void")) {
-        return c.LLVMVoidTypeInContext(self.context);
+        return c.LLVMVoidTypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "bool")) {
-        return c.LLVMInt1TypeInContext(self.context);
+        return c.LLVMInt1TypeInContext(@ptrCast(self.context));
     } else {
         if (self.struct_types.get(type_name)) |struct_type| {
-            return struct_type;
+            return @ptrCast(struct_type);
         }
     }
-    return c.LLVMInt32TypeInContext(self.context);
+    return c.LLVMInt32TypeInContext(@ptrCast(self.context));
 }
 
 pub fn isUnsignedType(type_name: []const u8) bool {
