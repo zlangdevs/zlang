@@ -4,14 +4,8 @@ const codegen = @import("llvm.zig").CodeGenerator;
 const ast = @import("../parser/ast.zig");
 const errors = @import("../errors.zig");
 
-const c = @cImport({
-    @cInclude("llvm-c/Core.h");
-    @cInclude("llvm-c/IRReader.h");
-    @cInclude("llvm-c/Target.h");
-    @cInclude("llvm-c/TargetMachine.h");
-    @cInclude("llvm-c/Analysis.h");
-    @cInclude("llvm-c/ExecutionEngine.h");
-});
+const c_bindings = @import("c_bindings.zig");
+const c = c_bindings.c;
 
 const BfLoadRequest = struct {
     var_name: []const u8,
@@ -53,7 +47,7 @@ const BrainfuckContext = struct {
 
 fn ParseBfContext(allocator: std.mem.Allocator, input: []const u8) BrainfuckContext {
     var ctx = BrainfuckContext{
-        .requests = std.ArrayList(BfLoadRequest).init(allocator),
+        .requests = std.ArrayList(BfLoadRequest){},
         .code = "",
     };
     var search_pos: usize = 0;
@@ -109,7 +103,7 @@ fn ParseBfContext(allocator: std.mem.Allocator, input: []const u8) BrainfuckCont
                     continue;
                 };
                 if (std.fmt.parseInt(i32, std.mem.trim(u8, load_idx_str, " \t"), 10)) |load_idx| {
-                    ctx.requests.append(.{
+                    ctx.requests.append(allocator, .{
                         .var_name = var_name,
                         .load_idx = load_idx,
                     }) catch {};
@@ -123,7 +117,7 @@ fn ParseBfContext(allocator: std.mem.Allocator, input: []const u8) BrainfuckCont
 
 pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
     var ctx = ParseBfContext(cg.allocator, bf.code);
-    defer ctx.requests.deinit();
+    defer ctx.requests.deinit(cg.allocator);
 
     const current_function = cg.current_function orelse return errors.CodegenError.TypeMismatch;
 
@@ -214,8 +208,8 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
     const putchar_func = try cg.declareLibcFunction("putchar");
     const getchar_func = try cg.declareLibcFunction("getchar");
 
-    var loop_stack = std.ArrayList(struct { cond: c.LLVMBasicBlockRef, exit: c.LLVMBasicBlockRef }).init(cg.allocator);
-    defer loop_stack.deinit();
+    var loop_stack = std.ArrayList(struct { cond: c.LLVMBasicBlockRef, exit: c.LLVMBasicBlockRef }){};
+    defer loop_stack.deinit(cg.allocator);
 
     // Create constants for cell operations
     const cell_one = c.LLVMConstInt(cell_type, 1, 0);
@@ -308,7 +302,7 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
                 _ = c.LLVMBuildCondBr(cg.builder, cond, loop_body_bb, loop_exit_bb);
 
                 c.LLVMPositionBuilderAtEnd(cg.builder, loop_body_bb);
-                try loop_stack.append(.{ .cond = loop_cond_bb, .exit = loop_exit_bb });
+                try loop_stack.append(cg.allocator, .{ .cond = loop_cond_bb, .exit = loop_exit_bb });
             },
             ']' => {
                 if (loop_stack.items.len == 0) {

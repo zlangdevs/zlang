@@ -282,35 +282,35 @@ pub const Node = struct {
 
     pub fn destroy(self: *Node) void {
         switch (self.data) {
-            .program => |prog| {
+            .program => |*prog| {
                 for (prog.functions.items) |func| {
                     func.destroy();
                 }
-                prog.functions.deinit();
+                prog.functions.deinit(self.allocator);
                 for (prog.globals.items) |glob| {
                     glob.destroy();
                 }
-                prog.globals.deinit();
+                prog.globals.deinit(self.allocator);
             },
-            .function => |func| {
+            .function => |*func| {
                 for (func.body.items) |stmt| {
                     stmt.destroy();
                 }
-                func.body.deinit();
+                func.body.deinit(self.allocator);
             },
-            .function_call => |call| {
+            .function_call => |*call| {
                 for (call.args.items) |arg| {
                     arg.destroy();
                 }
-                call.args.deinit();
+                call.args.deinit(self.allocator);
                 self.allocator.free(call.name);
             },
-            .method_call => |method| {
+            .method_call => |*method| {
                 method.object.destroy();
                 for (method.args.items) |arg| {
                     arg.destroy();
                 }
-                method.args.deinit();
+                method.args.deinit(self.allocator);
                 self.allocator.free(method.method_name);
             },
             .comparison => |comp| {
@@ -338,40 +338,40 @@ pub const Node = struct {
                     expr.destroy();
                 }
             },
-            .if_stmt => |if_stmt| {
+            .if_stmt => |*if_stmt| {
                 if_stmt.condition.destroy();
                 for (if_stmt.then_body.items) |stmt| {
                     stmt.destroy();
                 }
-                if_stmt.then_body.deinit();
-                if (if_stmt.else_body) |else_body| {
-                    for (else_body.items) |stmt| {
+                if_stmt.then_body.deinit(self.allocator);
+                if (if_stmt.else_body != null) {
+                    for (if_stmt.else_body.?.items) |stmt| {
                         stmt.destroy();
                     }
-                    else_body.deinit();
+                    if_stmt.else_body.?.deinit(self.allocator);
                 }
             },
-            .for_stmt => |for_stmt| {
+            .for_stmt => |*for_stmt| {
                 if (for_stmt.condition) |cond| {
                     cond.destroy();
                 }
                 for (for_stmt.body.items) |stmt| {
                     stmt.destroy();
                 }
-                for_stmt.body.deinit();
+                for_stmt.body.deinit(self.allocator);
             },
-            .c_for_stmt => |c_for| {
+            .c_for_stmt => |*c_for| {
                 if (c_for.init) |init| init.destroy();
                 if (c_for.condition) |cond| cond.destroy();
                 if (c_for.increment) |inc| inc.destroy();
                 for (c_for.body.items) |stmt| stmt.destroy();
-                c_for.body.deinit();
+                c_for.body.deinit(self.allocator);
             },
-            .array_initializer => |arr_init| {
+            .array_initializer => |*arr_init| {
                 for (arr_init.elements.items) |element| {
                     element.destroy();
                 }
-                arr_init.elements.deinit();
+                arr_init.elements.deinit(self.allocator);
             },
             .array_index => |arr_idx| {
                 arr_idx.array.destroy();
@@ -390,7 +390,7 @@ pub const Node = struct {
             .use_stmt => |use_stmt| {
                 self.allocator.free(use_stmt.module_path);
             },
-            .enum_decl => |enum_decl| {
+            .enum_decl => |*enum_decl| {
                 self.allocator.free(enum_decl.name);
                 for (enum_decl.values.items) |*value| {
                     self.allocator.free(value.name);
@@ -398,9 +398,9 @@ pub const Node = struct {
                         val.destroy();
                     }
                 }
-                enum_decl.values.deinit();
+                enum_decl.values.deinit(self.allocator);
             },
-            .struct_decl => |struct_decl| {
+            .struct_decl => |*struct_decl| {
                 self.allocator.free(struct_decl.name);
                 for (struct_decl.fields.items) |*field| {
                     self.allocator.free(field.name);
@@ -409,15 +409,15 @@ pub const Node = struct {
                         default_val.destroy();
                     }
                 }
-                struct_decl.fields.deinit();
+                struct_decl.fields.deinit(self.allocator);
             },
-            .struct_initializer => |struct_init| {
+            .struct_initializer => |*struct_init| {
                 self.allocator.free(struct_init.struct_name);
                 for (struct_init.field_values.items) |*field_val| {
                     self.allocator.free(field_val.field_name);
                     field_val.value.destroy();
                 }
-                struct_init.field_values.deinit();
+                struct_init.field_values.deinit(self.allocator);
             },
             .qualified_identifier => |qual_id| {
                 qual_id.base.destroy();
@@ -538,12 +538,12 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         .brainfuck => |bf| {
             std.debug.print("🧠 Brainfuck:\n", .{});
             var lines = std.mem.splitScalar(u8, bf.code, '\n');
-            var line_list = std.ArrayList([]const u8).init(std.heap.page_allocator);
-            defer line_list.deinit();
+            var line_list = std.ArrayList([]const u8){};
+            defer line_list.deinit(std.heap.page_allocator);
             while (lines.next()) |line| {
                 const trimmed = std.mem.trim(u8, line, " \t\r");
                 if (trimmed.len > 0) {
-                    line_list.append(trimmed) catch continue;
+                    line_list.append(std.heap.page_allocator, trimmed) catch continue;
                 }
             }
             for (line_list.items, 0..) |line, i| {

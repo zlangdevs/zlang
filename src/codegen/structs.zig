@@ -5,14 +5,8 @@ const utils = @import("utils.zig");
 const llvm = @import("llvm.zig");
 const variables = @import("variables.zig");
 
-const c = @cImport({
-    @cInclude("llvm-c/Core.h");
-    @cInclude("llvm-c/IRReader.h");
-    @cInclude("llvm-c/Target.h");
-    @cInclude("llvm-c/TargetMachine.h");
-    @cInclude("llvm-c/Analysis.h");
-    @cInclude("llvm-c/ExecutionEngine.h");
-});
+const c_bindings = @import("c_bindings.zig");
+const c = c_bindings.c;
 
 pub const VariableInfo = struct {
     value: c.LLVMValueRef,
@@ -32,8 +26,8 @@ pub fn getStructTypeName(cg: *llvm.CodeGenerator, struct_type: c.LLVMTypeRef) ![
     }
     var it = cg.struct_types.iterator();
     while (it.next()) |entry| {
-        if (entry.value_ptr.* == struct_type) {
-            return try cg.allocator.dupe(u8, entry.key_ptr.*);
+        if (@intFromPtr(entry.value_ptr.*) == @intFromPtr(struct_type)) {
+            return cg.allocator.dupe(u8, entry.key_ptr.*);
         }
     }
     return try cg.allocator.dupe(u8, "anonymous_struct");
@@ -49,11 +43,10 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
         if (std.mem.startsWith(u8, path, "[")) {
             const close_bracket_pos = std.mem.indexOfScalar(u8, path, ']') orelse return errors.CodegenError.TypeMismatch;
             const index_str = path[1..close_bracket_pos];
-            const index_expr = if (variables.getVariable(cg, index_str)) |var_info| blk: {
-                break :blk c.LLVMBuildLoad2(cg.builder, var_info.type_ref, var_info.value, "index_var");
-            } else blk: {
-                break :blk try cg.generateExpressionFromString(index_str);
-            };
+            const index_expr = if (variables.getVariable(cg, index_str)) |var_info|
+                c.LLVMBuildLoad2(@ptrCast(cg.builder), @ptrCast(var_info.type_ref), @ptrCast(var_info.value), "index_var")
+            else
+                try cg.generateExpressionFromString(index_str);
             const var_type_kind = c.LLVMGetTypeKind(current_type);
             if (var_type_kind != c.LLVMArrayTypeKind) return errors.CodegenError.TypeMismatch;
             const element_type = c.LLVMGetElementType(current_type);
@@ -111,8 +104,8 @@ pub fn generateStructFieldAssignment(cg: *llvm.CodeGenerator, struct_name: []con
 }
 
 pub fn getStructFieldPointer(cg: *llvm.CodeGenerator, struct_type: c.LLVMTypeRef, struct_value: c.LLVMValueRef, field_index: c_uint) errors.CodegenError!c.LLVMValueRef {
-    var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), field_index, 0) };
-    return c.LLVMBuildGEP2(cg.builder, struct_type, struct_value, &indices[0], 2, "struct_field_ptr");
+    var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), field_index, 0) };
+    return c.LLVMBuildGEP2(@ptrCast(cg.builder), struct_type, struct_value, &indices[0], 2, "struct_field_ptr");
 }
 
 pub fn assignToField(cg: *llvm.CodeGenerator, field_ptr: c.LLVMValueRef, field_type: c.LLVMTypeRef, value_expr: *ast.Node) errors.CodegenError!void {
@@ -142,11 +135,11 @@ pub fn assignStringLiteralToArrayField(cg: *llvm.CodeGenerator, field_ptr: c.LLV
         return errors.CodegenError.TypeMismatch;
     }
     const memcpy_func = try cg.declareLibcFunction("memcpy");
-    const i8_type = c.LLVMInt8TypeInContext(cg.context);
+    const i8_type = c.LLVMInt8TypeInContext(@ptrCast(cg.context));
     const i8_ptr_type = c.LLVMPointerType(i8_type, 0);
     const size_t_type = utils.libcTypeToLLVM(cg, .size_t_type);
-    const field_i8_ptr = c.LLVMBuildBitCast(cg.builder, field_ptr, i8_ptr_type, "field_i8_ptr");
-    const global_str = c.LLVMBuildGlobalStringPtr(cg.builder, parsed_str.ptr, "temp_str_ptr");
+    const field_i8_ptr = c.LLVMBuildBitCast(@ptrCast(cg.builder), field_ptr, i8_ptr_type, "field_i8_ptr");
+    const global_str = c.LLVMBuildGlobalStringPtr(@ptrCast(cg.builder), parsed_str.ptr, "temp_str_ptr");
     const copy_size = c.LLVMConstInt(size_t_type, @as(c_ulonglong, @intCast(str_len)), 0);
     var memcpy_args = [_]c.LLVMValueRef{ field_i8_ptr, global_str, copy_size };
     _ = c.LLVMBuildCall2(cg.builder, c.LLVMGlobalGetValueType(memcpy_func), memcpy_func, &memcpy_args[0], 3, "");
@@ -230,19 +223,19 @@ pub fn generateStructFieldAccess(cg: *llvm.CodeGenerator, struct_var_info: Varia
 }
 
 pub fn generateStructType(cg: *llvm.CodeGenerator, struct_decl: ast.StructDecl) errors.CodegenError!void {
-    var field_types = std.ArrayList(c.LLVMTypeRef).init(cg.allocator);
-    defer field_types.deinit();
+    var field_types = std.ArrayList(c.LLVMTypeRef){};
+    defer field_types.deinit(cg.allocator);
     var field_map = std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(cg.allocator);
     for (struct_decl.fields.items, 0..) |field, i| {
         const field_type = utils.getLLVMType(cg, field.type_name);
-        try field_types.append(field_type);
+        try field_types.append(cg.allocator, @ptrCast(field_type));
         try field_map.put(field.name, @intCast(i));
     }
     const struct_name_z = try cg.allocator.dupeZ(u8, struct_decl.name);
     defer cg.allocator.free(struct_name_z);
-    const struct_type = c.LLVMStructCreateNamed(cg.context, struct_name_z.ptr);
+    const struct_type = c.LLVMStructCreateNamed(@ptrCast(cg.context), struct_name_z.ptr);
     c.LLVMStructSetBody(struct_type, field_types.items.ptr, @intCast(field_types.items.len), 0);
-    try cg.struct_types.put(struct_decl.name, struct_type);
+    try cg.struct_types.put(struct_decl.name, @ptrCast(struct_type));
     try cg.struct_fields.put(struct_decl.name, field_map);
     try cg.struct_declarations.put(struct_decl.name, struct_decl);
 }
