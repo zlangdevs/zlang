@@ -5,7 +5,7 @@ const llvm = @import("llvm.zig");
 
 pub fn pushScope(cg: *llvm.CodeGenerator) !void {
     const new_scope = std.HashMap([]const u8, structs.VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(cg.allocator);
-    try cg.variable_scopes.append(new_scope);
+    try cg.variable_scopes.append(cg.allocator, new_scope);
 }
 
 pub fn popScope(cg: *llvm.CodeGenerator) void {

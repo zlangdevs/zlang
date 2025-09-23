@@ -30,9 +30,9 @@ fn set_node_line(node: *ast.Node) void {
 const ParameterList = struct {
     items: std.ArrayList(ast.Parameter),
 
-    fn init(allocator: std.mem.Allocator) ParameterList {
+    fn init() ParameterList {
         return ParameterList{
-            .items = std.ArrayList(ast.Parameter).init(allocator),
+            .items = std.ArrayList(ast.Parameter){},
         };
     }
 };
@@ -41,9 +41,9 @@ const ParameterList = struct {
 const NodeList = struct {
     items: std.ArrayList(*ast.Node),
 
-    fn init(allocator: std.mem.Allocator) NodeList {
+    fn init() NodeList {
         return NodeList{
-            .items = std.ArrayList(*ast.Node).init(allocator),
+            .items = std.ArrayList(*ast.Node){},
         };
     }
 };
@@ -52,8 +52,8 @@ const NodeList = struct {
 export fn zig_create_program() ?*anyopaque {
     const program_data = ast.NodeData{
         .program = ast.Program{
-            .functions = std.ArrayList(*ast.Node).init(global_allocator),
-            .globals = std.ArrayList(*ast.Node).init(global_allocator),
+            .functions = std.ArrayList(*ast.Node){},
+            .globals = std.ArrayList(*ast.Node){},
         },
     };
 
@@ -82,7 +82,7 @@ export fn zig_create_parameter(name_ptr: [*c]const u8, type_ptr: [*c]const u8) ?
 
 export fn zig_create_param_list() ?*anyopaque {
     const param_list = global_allocator.create(ParameterList) catch return null;
-    param_list.* = ParameterList.init(global_allocator);
+    param_list.* = ParameterList.init();
     return @as(*anyopaque, @ptrCast(param_list));
 }
 
@@ -92,7 +92,7 @@ export fn zig_add_to_param_list(list_ptr: ?*anyopaque, param_ptr: ?*anyopaque) v
     const param_list = @as(*ParameterList, @ptrFromInt(@intFromPtr(list_ptr.?)));
     const param = @as(*ast.Parameter, @ptrFromInt(@intFromPtr(param_ptr.?)));
 
-    param_list.items.append(param.*) catch return;
+    param_list.items.append(global_allocator, param.*) catch return;
 }
 
 export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const u8, params_ptr: ?*anyopaque, body_ptr: ?*anyopaque) ?*anyopaque {
@@ -102,13 +102,13 @@ export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const
     const name_copy = global_allocator.dupe(u8, name) catch return null;
     const return_type_copy = global_allocator.dupe(u8, return_type) catch return null;
 
-    var parameters = std.ArrayList(ast.Parameter).init(global_allocator);
+    var parameters = std.ArrayList(ast.Parameter){};
     if (params_ptr) |ptr| {
         const param_list = @as(*ParameterList, @ptrFromInt(@intFromPtr(ptr)));
         parameters = param_list.items;
     }
 
-    var body = std.ArrayList(*ast.Node).init(global_allocator);
+    var body = std.ArrayList(*ast.Node){};
     if (body_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         body = node_list.items;
@@ -215,7 +215,7 @@ export fn zig_create_function_call(name_ptr: [*c]const u8, is_libc: c_int, args_
     const name = std.mem.span(name_ptr);
     const name_copy = global_allocator.dupe(u8, name) catch return null;
 
-    var args = std.ArrayList(*ast.Node).init(global_allocator);
+    var args = std.ArrayList(*ast.Node){};
     if (args_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         args = node_list.items;
@@ -368,9 +368,9 @@ export fn zig_create_string_literal(value_ptr: [*c]const u8) ?*anyopaque {
 const EnumValueList = struct {
     items: std.ArrayList(ast.EnumValue),
 
-    fn init(allocator: std.mem.Allocator) EnumValueList {
+    fn init() EnumValueList {
         return EnumValueList{
-            .items = std.ArrayList(ast.EnumValue).init(allocator),
+            .items = std.ArrayList(ast.EnumValue){},
         };
     }
 };
@@ -378,9 +378,9 @@ const EnumValueList = struct {
 const StructFieldList = struct {
     items: std.ArrayList(ast.StructField),
 
-    fn init(allocator: std.mem.Allocator) StructFieldList {
+    fn init() StructFieldList {
         return StructFieldList{
-            .items = std.ArrayList(ast.StructField).init(allocator),
+            .items = std.ArrayList(ast.StructField){},
         };
     }
 };
@@ -388,16 +388,16 @@ const StructFieldList = struct {
 const StructFieldValueList = struct {
     items: std.ArrayList(ast.StructFieldValue),
 
-    fn init(allocator: std.mem.Allocator) StructFieldValueList {
+    fn init() StructFieldValueList {
         return StructFieldValueList{
-            .items = std.ArrayList(ast.StructFieldValue).init(allocator),
+            .items = std.ArrayList(ast.StructFieldValue){},
         };
     }
 };
 
 export fn zig_create_enum_value_list() ?*anyopaque {
     const enum_value_list = global_allocator.create(EnumValueList) catch return null;
-    enum_value_list.* = EnumValueList.init(global_allocator);
+    enum_value_list.* = EnumValueList.init();
     return @as(*anyopaque, @ptrCast(enum_value_list));
 }
 
@@ -415,13 +415,13 @@ export fn zig_add_enum_value(list_ptr: ?*anyopaque, name_ptr: [*c]const u8, valu
         .value = value,
     };
 
-    enum_value_list.items.append(enum_value) catch return;
+    enum_value_list.items.append(global_allocator, enum_value) catch return;
 }
 
 export fn zig_create_enum_decl(name_ptr: [*c]const u8, values_ptr: ?*anyopaque) ?*anyopaque {
     const name = std.mem.span(name_ptr);
     const name_copy = global_allocator.dupe(u8, name) catch return null;
-    var values = std.ArrayList(ast.EnumValue).init(global_allocator);
+    var values = std.ArrayList(ast.EnumValue){};
     if (values_ptr) |ptr| {
         const enum_value_list = @as(*EnumValueList, @ptrFromInt(@intFromPtr(ptr)));
         values = enum_value_list.items;
@@ -441,7 +441,7 @@ export fn zig_create_enum_decl(name_ptr: [*c]const u8, values_ptr: ?*anyopaque) 
 
 export fn zig_create_struct_field_list() ?*anyopaque {
     const struct_field_list = global_allocator.create(StructFieldList) catch return null;
-    struct_field_list.* = StructFieldList.init(global_allocator);
+    struct_field_list.* = StructFieldList.init();
     return @as(*anyopaque, @ptrCast(struct_field_list));
 }
 
@@ -461,7 +461,7 @@ export fn zig_add_struct_field(list_ptr: ?*anyopaque, name_ptr: [*c]const u8, ty
         .default_value = null,
     };
 
-    struct_field_list.items.append(struct_field) catch return;
+    struct_field_list.items.append(global_allocator, struct_field) catch return;
 }
 
 export fn zig_add_struct_field_with_default(list_ptr: ?*anyopaque, name_ptr: [*c]const u8, type_name_ptr: [*c]const u8, default_value_ptr: ?*anyopaque) void {
@@ -484,13 +484,13 @@ export fn zig_add_struct_field_with_default(list_ptr: ?*anyopaque, name_ptr: [*c
         .default_value = default_value,
     };
 
-    struct_field_list.items.append(struct_field) catch return;
+    struct_field_list.items.append(global_allocator, struct_field) catch return;
 }
 
 export fn zig_create_struct_decl(name_ptr: [*c]const u8, fields_ptr: ?*anyopaque) ?*anyopaque {
     const name = std.mem.span(name_ptr);
     const name_copy = global_allocator.dupe(u8, name) catch return null;
-    var fields = std.ArrayList(ast.StructField).init(global_allocator);
+    var fields = std.ArrayList(ast.StructField){};
     if (fields_ptr) |ptr| {
         const struct_field_list = @as(*StructFieldList, @ptrFromInt(@intFromPtr(ptr)));
         fields = struct_field_list.items;
@@ -511,7 +511,7 @@ export fn zig_create_struct_decl(name_ptr: [*c]const u8, fields_ptr: ?*anyopaque
 export fn zig_create_struct_initializer(struct_name_ptr: [*c]const u8, field_values_ptr: ?*anyopaque) ?*anyopaque {
     const struct_name = std.mem.span(struct_name_ptr);
     const struct_name_copy = global_allocator.dupe(u8, struct_name) catch return null;
-    var field_values = std.ArrayList(ast.StructFieldValue).init(global_allocator);
+    var field_values = std.ArrayList(ast.StructFieldValue){};
     if (field_values_ptr) |ptr| {
         const struct_field_value_list = @as(*StructFieldValueList, @ptrFromInt(@intFromPtr(ptr)));
         field_values = struct_field_value_list.items;
@@ -532,7 +532,7 @@ export fn zig_create_struct_initializer(struct_name_ptr: [*c]const u8, field_val
 
 export fn zig_create_struct_field_value_list() ?*anyopaque {
     const struct_field_value_list = global_allocator.create(StructFieldValueList) catch return null;
-    struct_field_value_list.* = StructFieldValueList.init(global_allocator);
+    struct_field_value_list.* = StructFieldValueList.init();
     return @as(*anyopaque, @ptrCast(struct_field_value_list));
 }
 
@@ -547,7 +547,7 @@ export fn zig_add_struct_field_value(list_ptr: ?*anyopaque, field_name_ptr: [*c]
         .value = value,
     };
 
-    struct_field_value_list.items.append(struct_field_value) catch return;
+    struct_field_value_list.items.append(global_allocator, struct_field_value) catch return;
 }
 
 export fn zig_create_bool_literal(value: c_int) ?*anyopaque {
@@ -572,13 +572,13 @@ export fn zig_create_null_literal() ?*anyopaque {
 
 export fn zig_create_stmt_list() ?*anyopaque {
     const node_list = global_allocator.create(NodeList) catch return null;
-    node_list.* = NodeList.init(global_allocator);
+    node_list.* = NodeList.init();
     return @as(*anyopaque, @ptrCast(node_list));
 }
 
 export fn zig_create_arg_list() ?*anyopaque {
     const node_list = global_allocator.create(NodeList) catch return null;
-    node_list.* = NodeList.init(global_allocator);
+    node_list.* = NodeList.init();
     return @as(*anyopaque, @ptrCast(node_list));
 }
 
@@ -590,7 +590,7 @@ export fn zig_add_to_program(program_ptr: ?*anyopaque, function_ptr: ?*anyopaque
 
     switch (program_node.data) {
         .program => |*prog| {
-            prog.functions.append(function_node) catch return;
+            prog.functions.append(global_allocator, function_node) catch return;
         },
         else => return,
     }
@@ -604,7 +604,7 @@ export fn zig_add_global_to_program(program_ptr: ?*anyopaque, global_ptr: ?*anyo
 
     switch (program_node.data) {
         .program => |*prog| {
-            prog.globals.append(global_node) catch return;
+            prog.globals.append(global_allocator, global_node) catch return;
         },
         else => return,
     }
@@ -616,7 +616,7 @@ export fn zig_add_to_stmt_list(list_ptr: ?*anyopaque, stmt_ptr: ?*anyopaque) voi
     const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(list_ptr.?)));
     const stmt_node = @as(*ast.Node, @ptrFromInt(@intFromPtr(stmt_ptr.?)));
 
-    node_list.items.append(stmt_node) catch return;
+    node_list.items.append(global_allocator, stmt_node) catch return;
 }
 
 export fn zig_add_to_arg_list(list_ptr: ?*anyopaque, arg_ptr: ?*anyopaque) void {
@@ -625,7 +625,7 @@ export fn zig_add_to_arg_list(list_ptr: ?*anyopaque, arg_ptr: ?*anyopaque) void 
     const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(list_ptr.?)));
     const arg_node = @as(*ast.Node, @ptrFromInt(@intFromPtr(arg_ptr.?)));
 
-    node_list.items.append(arg_node) catch return;
+    node_list.items.append(global_allocator, arg_node) catch return;
 }
 
 export fn zig_create_brainfuck(code_ptr: [*c]const u8) ?*anyopaque {
@@ -674,7 +674,7 @@ export fn zig_create_for_stmt(condition_ptr: ?*anyopaque, body_ptr: ?*anyopaque)
         condition = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
     }
 
-    var body = std.ArrayList(*ast.Node).init(global_allocator);
+    var body = std.ArrayList(*ast.Node){};
     if (body_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         body = node_list.items;
@@ -700,7 +700,7 @@ export fn zig_create_c_for_stmt(init_ptr: ?*anyopaque, cond_ptr: ?*anyopaque, in
     if (cond_ptr) |ptr| cond = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
     if (inc_ptr) |ptr| increment = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
 
-    var body = std.ArrayList(*ast.Node).init(global_allocator);
+    var body = std.ArrayList(*ast.Node){};
     if (body_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         body = node_list.items;
@@ -738,7 +738,7 @@ export fn zig_create_continue_stmt() ?*anyopaque {
 }
 
 export fn zig_create_array_initializer(elements_ptr: ?*anyopaque) ?*anyopaque {
-    var elements = std.ArrayList(*ast.Node).init(global_allocator);
+    var elements = std.ArrayList(*ast.Node){};
     if (elements_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         elements = node_list.items;
@@ -817,7 +817,7 @@ export fn zig_create_method_call(object_ptr: ?*anyopaque, method_name_ptr: [*c]c
     const method_name = std.mem.span(method_name_ptr);
     const method_name_copy = global_allocator.dupe(u8, method_name) catch return null;
 
-    var args = std.ArrayList(*ast.Node).init(global_allocator);
+    var args = std.ArrayList(*ast.Node){};
     if (args_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         args = node_list.items;
@@ -843,7 +843,7 @@ export fn zig_create_c_function_decl(name_ptr: [*c]const u8, return_type_ptr: [*
     const name_copy = global_allocator.dupe(u8, name) catch return null;
     const return_type_copy = global_allocator.dupe(u8, return_type) catch return null;
 
-    var parameters = std.ArrayList(ast.Parameter).init(global_allocator);
+    var parameters = std.ArrayList(ast.Parameter){};
     if (params_ptr) |ptr| {
         const param_list = @as(*ParameterList, @ptrFromInt(@intFromPtr(ptr)));
         parameters = param_list.items;
@@ -869,7 +869,7 @@ export fn zig_create_wrapper_function(name_ptr: [*c]const u8, return_type_ptr: [
     const name_copy = global_allocator.dupe(u8, name) catch return null;
     const return_type_copy = global_allocator.dupe(u8, return_type) catch return null;
 
-    var parameters = std.ArrayList(ast.Parameter).init(global_allocator);
+    var parameters = std.ArrayList(ast.Parameter){};
     if (params_ptr) |ptr| {
         const param_list = @as(*ParameterList, @ptrFromInt(@intFromPtr(ptr)));
         parameters = param_list.items;

@@ -109,7 +109,7 @@ pub const Token = struct {
 
 pub fn tokenize(allocator: std.mem.Allocator, input: []const u8) errors.TokenizeError!std.ArrayList(Token) {
     var tokens = std.ArrayList(Token).init(allocator);
-    errdefer tokens.deinit();
+    errdefer tokens.deinit(allocator);
     var scanner: ?*anyopaque = null;
     if (zlang_lex_init(&scanner) != 0) {
         return errors.TokenizeError.LexerInitFailed;
@@ -144,7 +144,7 @@ pub fn freeTokens(allocator: std.mem.Allocator, tokens: std.ArrayList(Token)) vo
     for (tokens.items) |token| {
         allocator.free(token.lexeme);
     }
-    tokens.deinit();
+    tokens.deinit(allocator);
 }
 
 pub fn printTokens(tokens: std.ArrayList(Token)) void {

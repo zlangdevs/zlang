@@ -16,13 +16,13 @@ const ModuleInfo = struct {
         return ModuleInfo{
             .path = alloc.dupe(u8, path) catch unreachable,
             .ast = ast_node,
-            .dependencies = std.ArrayList([]const u8).init(alloc),
+            .dependencies = std.ArrayList([]const u8){},
         };
     }
 
     pub fn deinit(self: *ModuleInfo, alloc: std.mem.Allocator) void {
         alloc.free(self.path);
-        self.dependencies.deinit();
+        self.dependencies.deinit(alloc);
     }
 };
 
@@ -37,11 +37,11 @@ pub const Context = struct {
     optimize: bool,
     verbose: bool,
 
-    pub fn init(alloc: std.mem.Allocator) Context {
+    pub fn init() Context {
         return Context{
-            .input_files = std.ArrayList([]const u8).init(alloc),
-            .link_objects = std.ArrayList([]const u8).init(alloc),
-            .extra_args = std.ArrayList([]const u8).init(alloc),
+            .input_files = std.ArrayList([]const u8){},
+            .link_objects = std.ArrayList([]const u8){},
+            .extra_args = std.ArrayList([]const u8){},
             .output = consts.DEFAULT_OUTPUT_NAME,
             .arch = "",
             .keepll = false,
@@ -51,9 +51,10 @@ pub const Context = struct {
         };
     }
 
-    pub fn deinit(self: *Context) void {
-        self.input_files.deinit();
-        self.link_objects.deinit();
+    pub fn deinit(self: *Context, alloc: std.mem.Allocator) void {
+        self.input_files.deinit(alloc);
+        self.link_objects.deinit(alloc);
+        self.extra_args.deinit(alloc);
     }
 
     pub fn print(self: *const Context) void {
@@ -94,7 +95,7 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
             }
         },
         .use_stmt => |use_stmt| {
-            dependencies.append(use_stmt.module_path) catch {};
+            dependencies.append(std.heap.page_allocator, use_stmt.module_path) catch {};
         },
         else => {
             switch (node.data) {
@@ -159,12 +160,12 @@ fn resolveModulePath(base_path: []const u8, module_name: []const u8, alloc: std.
 }
 
 fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
-    var modules = std.ArrayList(ModuleInfo).init(alloc);
+    var modules = std.ArrayList(ModuleInfo){};
     defer {
         for (modules.items) |*module| {
             module.deinit(alloc);
         }
-        modules.deinit();
+        modules.deinit(alloc);
     }
     for (ctx.input_files.items) |input_file| {
         const input = read_file(input_file) catch |err| {
@@ -183,13 +184,13 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
         if (ast_root) |root| {
             var module = ModuleInfo.init(alloc, input_file, root);
             collectUseStatements(root, &module.dependencies);
-            try modules.append(module);
+            try modules.append(alloc, module);
         }
     }
     const merged_program_data = ast.NodeData{
         .program = ast.Program{
-            .functions = std.ArrayList(*ast.Node).init(alloc),
-            .globals = std.ArrayList(*ast.Node).init(alloc),
+            .functions = std.ArrayList(*ast.Node){},
+            .globals = std.ArrayList(*ast.Node){},
         },
     };
 
@@ -199,15 +200,15 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
             .program => |prog| {
                 for (prog.functions.items) |func| {
                     if (func.data != .use_stmt) {
-                        try merged_program.data.program.functions.append(func);
+                        try merged_program.data.program.functions.append(alloc, func);
                     }
                 }
                 for (prog.globals.items) |glob| {
-                    try merged_program.data.program.globals.append(glob);
+                    try merged_program.data.program.globals.append(alloc, glob);
                 }
             },
             else => {
-                try merged_program.data.program.functions.append(module.ast);
+                try merged_program.data.program.functions.append(alloc, module.ast);
             },
         }
     }
@@ -238,8 +239,8 @@ pub fn read_file(file_name: []const u8) anyerror![]const u8 {
 }
 
 fn parseArgs(args: [][:0]u8) anyerror!Context {
-    var context = Context.init(allocator);
-    errdefer context.deinit();
+    var context = Context.init();
+    errdefer context.deinit(allocator);
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -266,9 +267,9 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                 } else if (std.mem.eql(u8, flag, "-link")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.InvalidArgument;
-                    try context.link_objects.append(args[i]);
+                    try context.link_objects.append(allocator, args[i]);
                 } else if (std.mem.eql(u8, flag, "-c")) {
-                    try context.extra_args.append(flag);
+                    try context.extra_args.append(allocator, flag);
                     context.output = "output.o";
                 } else if (std.mem.eql(u8, flag, "-help")) {
                     return errors.CLIError.NoHelp;
@@ -279,11 +280,11 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
             else => {
                 const arg = args[i];
                 if (std.mem.endsWith(u8, arg, ".zl")) {
-                    try context.input_files.append(arg);
+                    try context.input_files.append(allocator, arg);
                 } else {
                     const stat = std.fs.cwd().statFile(arg) catch |err| {
                         if (err == error.FileNotFound) {
-                            try context.link_objects.append(arg);
+                            try context.link_objects.append(allocator, arg);
                             continue;
                         }
                         return err;
@@ -292,7 +293,7 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     if (stat.kind == .directory) {
                         try collectZlFilesFromDir(allocator, arg, &context.input_files);
                     } else {
-                        try context.link_objects.append(arg);
+                        try context.link_objects.append(allocator, arg);
                     }
                 }
             },
@@ -316,7 +317,7 @@ fn collectZlFilesFromDir(alloc: std.mem.Allocator, dir_path: []const u8, files_l
             const full_path = try std.fs.path.join(alloc, &[_][]const u8{ dir_path, entry.path });
             defer alloc.free(full_path);
             const path_copy = try alloc.dupe(u8, full_path);
-            try files_list.append(path_copy);
+            try files_list.append(alloc, path_copy);
         }
     }
 }
@@ -344,7 +345,8 @@ fn asciiLower(a: []const u8, alloc: std.mem.Allocator) ![]u8 {
 }
 
 fn stripCommentsAndPreproc(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
-    var out = std.ArrayList(u8).init(alloc);
+    var out = std.ArrayList(u8){};
+    defer out.deinit(alloc);
     var i: usize = 0;
     while (i < input.len) : (i += 1) {
         if (i + 1 < input.len and input[i] == '/' and input[i + 1] == '*') {
@@ -364,15 +366,16 @@ fn stripCommentsAndPreproc(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
             }
         }
         if (input[i] != '\r') {
-            try out.append(input[i]);
+            try out.append(alloc, input[i]);
         }
     }
-    return out.toOwnedSlice();
+    return out.toOwnedSlice(alloc);
 }
 
 fn collectStatements(alloc: std.mem.Allocator, content: []const u8) !std.ArrayList([]const u8) {
-    var list = std.ArrayList([]const u8).init(alloc);
-    var buf = std.ArrayList(u8).init(alloc);
+    var stmts = std.ArrayList([]const u8){};
+    var buf = std.ArrayList(u8){};
+    defer buf.deinit(alloc);
     var depth: usize = 0;
     for (content) |ch| {
         if (ch == '(') depth += 1;
@@ -381,19 +384,19 @@ fn collectStatements(alloc: std.mem.Allocator, content: []const u8) !std.ArrayLi
         }
         if (ch == ';' and depth == 0) {
             const stmt = try alloc.dupe(u8, trimSpaces(buf.items));
-            try list.append(stmt);
+            try stmts.append(alloc, stmt);
             buf.clearRetainingCapacity();
         } else {
             if (ch == '\n') {
                 if (buf.items.len == 0 or buf.items[buf.items.len - 1] != ' ') {
-                    try buf.append(' ');
+                    try buf.append(alloc, ' ');
                 }
             } else {
-                try buf.append(ch);
+                try buf.append(alloc, ch);
             }
         }
     }
-    return list;
+    return stmts;
 }
 
 fn containsAny(s: []const u8, subs: []const []const u8) bool {
@@ -468,13 +471,13 @@ fn mapCTypeToZType(alloc: std.mem.Allocator, raw0: []const u8) !?[]u8 {
     if (raw.len == 0) return null;
     var ptr_depth: usize = 0;
     {
-        var tmp = std.ArrayList(u8).init(alloc);
-        defer tmp.deinit();
+        var tmp = std.ArrayList(u8){};
+        defer tmp.deinit(alloc);
         for (raw) |ch| {
             if (ch == '*') {
                 ptr_depth += 1;
             } else {
-                try tmp.append(ch);
+                try tmp.append(alloc, ch);
             }
         }
         raw = try alloc.dupe(u8, trimSpaces(tmp.items));
@@ -482,18 +485,18 @@ fn mapCTypeToZType(alloc: std.mem.Allocator, raw0: []const u8) !?[]u8 {
 
     var lower = try asciiLower(raw, alloc);
     {
-        var tmp = std.ArrayList(u8).init(alloc);
-        defer tmp.deinit();
+        var tmp = std.ArrayList(u8){};
+        defer tmp.deinit(alloc);
         var seen_space = false;
         for (lower) |ch| {
             if (isSpace(ch)) {
                 if (!seen_space) {
-                    try tmp.append(' ');
+                    try tmp.append(alloc, ' ');
                     seen_space = true;
                 }
             } else {
                 seen_space = false;
-                try tmp.append(ch);
+                try tmp.append(alloc, ch);
             }
         }
         lower = try alloc.dupe(u8, trimSpaces(tmp.items));
@@ -544,52 +547,68 @@ fn mapCTypeToZType(alloc: std.mem.Allocator, raw0: []const u8) !?[]u8 {
     return try buildPtrType(alloc, base, ptr_depth);
 }
 
-fn parseAndWriteWrapper(alloc: std.mem.Allocator, writer: anytype, stmt_in: []const u8) !void {
+fn parseAndWriteWrapper(alloc: std.mem.Allocator, stmt_in: []const u8) !?[]const u8 {
     var stmt = trimSpaces(stmt_in);
-    if (stmt.len == 0) return;
-    if (containsAny(stmt, &[_][]const u8{ "typedef", "=" })) return;
-    if (containsAny(stmt, &[_][]const u8{ "{", "}" })) return;
+    if (stmt.len == 0) return null;
+    if (containsAny(stmt, &[_][]const u8{ "typedef", "=" })) return null;
+    if (containsAny(stmt, &[_][]const u8{ "{", "}" })) return null;
 
-    const open = std.mem.indexOfScalar(u8, stmt, '(') orelse return;
-    const close = std.mem.lastIndexOfScalar(u8, stmt, ')') orelse return;
-    if (close <= open) return;
+    const open = std.mem.indexOfScalar(u8, stmt, '(') orelse return null;
+    const close = std.mem.lastIndexOfScalar(u8, stmt, ')') orelse return null;
+    if (close <= open) return null;
 
     // disallow complex nested parentheses in params for now
     const inner = stmt[open + 1 .. close];
-    if (std.mem.indexOfScalar(u8, inner, '(') != null or std.mem.indexOfScalar(u8, inner, ')') != null) return;
+    if (std.mem.indexOfScalar(u8, inner, '(') != null or std.mem.indexOfScalar(u8, inner, ')') != null) return null;
     var k: isize = @as(isize, @intCast(open)) - 1;
     while (k >= 0 and isSpace(stmt[@as(usize, @intCast(k))])) : (k -= 1) {}
-    if (k < 0) return;
-    if (stmt[@as(usize, @intCast(k))] == '*' or stmt[@as(usize, @intCast(k))] == ')') return;
+    if (k < 0) return null;
+    if (stmt[@as(usize, @intCast(k))] == '*' or stmt[@as(usize, @intCast(k))] == ')') return null;
     var end_ident: isize = k;
     while (end_ident >= 0 and isIdentChar(stmt[@as(usize, @intCast(end_ident))])) : (end_ident -= 1) {}
     const name_start: usize = @as(usize, @intCast(end_ident + 1));
     const name_end: usize = @as(usize, @intCast(k + 1));
-    if (name_end <= name_start) return;
+    if (name_end <= name_start) return null;
     const name = trimSpaces(stmt[name_start..name_end]);
-    if (name.len == 0) return;
+    if (name.len == 0) return null;
     const ret_raw = trimSpaces(stmt[0..name_start]);
-    const ret_z = try mapCTypeToZType(alloc, ret_raw) orelse return;
-    var params_buf = std.ArrayList([]const u8).init(alloc);
-    defer params_buf.deinit();
+    const ret_z = try mapCTypeToZType(alloc, ret_raw) orelse return null;
+    var params_buf = std.ArrayList([]const u8){};
+    defer params_buf.deinit(alloc);
     const inner_trim = trimSpaces(inner);
     if (!(inner_trim.len == 0 or std.mem.eql(u8, inner_trim, "void"))) {
-        if (std.mem.indexOf(u8, inner_trim, "...") != null) return; // skip variadic, not supported by zlang yet:(
+        if (std.mem.indexOf(u8, inner_trim, "...") != null) return null; // skip variadic, not supported by zlang yet:(
         var it = std.mem.splitScalar(u8, inner_trim, ',');
         while (it.next()) |raw_param| {
             const p = stripTrailingParamName(raw_param);
             const zt_maybe = try mapCTypeToZType(alloc, p);
-            if (zt_maybe == null) return; // give up on this function
-            try params_buf.append(zt_maybe.?);
+            if (zt_maybe == null) return null; // give up on this function
+            try params_buf.append(alloc, zt_maybe.?);
         }
     }
-    try writer.print("wrap @{s}(", .{name});
+
+    var output = std.ArrayList(u8){};
+    defer output.deinit(alloc);
+
+    const wrap_start = try std.fmt.allocPrint(alloc, "wrap @{s}(", .{name});
+    defer alloc.free(wrap_start);
+    try output.appendSlice(alloc, wrap_start);
+
     var i: usize = 0;
     while (i < params_buf.items.len) : (i += 1) {
-        if (i > 0) try writer.print(", ", .{});
-        try writer.print("p{d}: {s}", .{ i, params_buf.items[i] });
+        if (i > 0) {
+            try output.appendSlice(alloc, ", ");
+        }
+        const param_str = try std.fmt.allocPrint(alloc, "p{d}: {s}", .{ i, params_buf.items[i] });
+        defer alloc.free(param_str);
+        try output.appendSlice(alloc, param_str);
     }
-    try writer.print(") >> {s};\n", .{ret_z});
+
+    const wrap_end = try std.fmt.allocPrint(alloc, ") >> {s};\n", .{ret_z});
+    defer alloc.free(wrap_end);
+    try output.appendSlice(alloc, wrap_end);
+
+    return try output.toOwnedSlice(alloc);
 }
 
 fn generateWrapperFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out_path: []const u8) !void {
@@ -599,18 +618,21 @@ fn generateWrapperFromHeader(alloc: std.mem.Allocator, header_path: []const u8, 
     const header_src = try read_file(header_path);
     const cleaned = try stripCommentsAndPreproc(a, header_src);
     var stmts = try collectStatements(a, cleaned);
-    defer stmts.deinit();
+    defer stmts.deinit(a);
     var file = try std.fs.cwd().createFile(out_path, .{ .truncate = true });
     defer file.close();
-    var w = file.writer();
-    try w.print("// Auto-generated by zlang wrap from: {s}\n", .{header_path});
+    const header_comment = try std.fmt.allocPrint(a, "// Auto-generated by zlang wrap from: {s}\n", .{header_path});
+    try file.writeAll(header_comment);
     for (stmts.items) |stmt| {
-        parseAndWriteWrapper(a, w, stmt) catch |e| {
+        const maybe_wrapper_str = parseAndWriteWrapper(a, stmt) catch |e| {
             switch (e) {
                 error.OutOfMemory => return e,
-                else => {},
             }
         };
+        if (maybe_wrapper_str) |wrapper_str| {
+            try file.writeAll(wrapper_str);
+            a.free(wrapper_str);
+        }
     }
 }
 pub fn main() !u8 {
@@ -662,7 +684,7 @@ pub fn main() !u8 {
         std.debug.print("{s}\n", .{error_msg});
         return 1;
     };
-    defer ctx.deinit();
+    defer ctx.deinit(allocator);
 
     const ast_root = parseMultiFile(&ctx, allocator) catch |err| {
         const loc = parser.lastParseErrorLocation();

@@ -8,14 +8,8 @@ const control_flow = @import("control_flow.zig");
 const variables = @import("variables.zig");
 const functions = @import("functions.zig");
 
-const c = @cImport({
-    @cInclude("llvm-c/Core.h");
-    @cInclude("llvm-c/IRReader.h");
-    @cInclude("llvm-c/Target.h");
-    @cInclude("llvm-c/TargetMachine.h");
-    @cInclude("llvm-c/Analysis.h");
-    @cInclude("llvm-c/ExecutionEngine.h");
-});
+const c_bindings = @import("c_bindings.zig");
+const c = c_bindings.c;
 
 pub const CodeGenerator = struct {
     context: c.LLVMContextRef,
@@ -48,8 +42,8 @@ pub const CodeGenerator = struct {
         if (builder == null) return errors.CodegenError.BuilderCreationFailed;
         const control_flow_analyzer = control_flow.ControlFlowAnalyzer.init(allocator);
 
-        var variable_scopes = std.ArrayList(std.HashMap([]const u8, structs.VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage)).init(allocator);
-        try variable_scopes.append(std.HashMap([]const u8, structs.VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator));
+        var variable_scopes = std.ArrayList(std.HashMap([]const u8, structs.VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage)){};
+        try variable_scopes.append(allocator, std.HashMap([]const u8, structs.VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator));
 
         return CodeGenerator{
             .context = context,
@@ -62,7 +56,7 @@ pub const CodeGenerator = struct {
             .current_function = null,
             .current_function_return_type = "",
             .control_flow_analyzer = control_flow_analyzer,
-            .loop_context_stack = std.ArrayList(structs.LoopContext).init(allocator),
+            .loop_context_stack = std.ArrayList(structs.LoopContext){},
             .variable_scopes = variable_scopes,
             .uses_float_modulo = false,
             .struct_types = std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
@@ -75,7 +69,7 @@ pub const CodeGenerator = struct {
         self.functions.deinit();
         self.variables.deinit();
         self.external_c_functions.deinit();
-        self.loop_context_stack.deinit();
+        self.loop_context_stack.deinit(self.allocator);
         self.struct_types.deinit();
         var struct_fields_iter = self.struct_fields.iterator();
         while (struct_fields_iter.next()) |entry| {
@@ -87,7 +81,7 @@ pub const CodeGenerator = struct {
         for (self.variable_scopes.items) |*scope| {
             scope.deinit();
         }
-        self.variable_scopes.deinit();
+        self.variable_scopes.deinit(self.allocator);
         c.LLVMDisposeBuilder(self.builder);
         c.LLVMDisposeModule(self.module);
         c.LLVMContextDispose(self.context);
@@ -141,7 +135,7 @@ pub const CodeGenerator = struct {
                 const base = try self.collectArrayIndices(arr_idx.array, indices);
                 var index_value = try self.generateExpression(arr_idx.index);
                 index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
-                try indices.append(index_value);
+                try indices.append(self.allocator, index_value);
                 return base;
             },
             else => return node,
@@ -166,21 +160,21 @@ pub const CodeGenerator = struct {
                 const array_name = try self.getBaseIdentifierName(qual_id.base);
                 defer self.allocator.free(array_name);
                 const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
-                var collected_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
-                defer collected_indices.deinit();
+                var collected_indices = std.ArrayList(c.LLVMValueRef){};
+                defer collected_indices.deinit(self.allocator);
                 const base_node = try self.collectArrayIndices(arr_idx.array, &collected_indices);
                 _ = base_node;
                 const index_value = try self.generateExpression(arr_idx.index);
-                try collected_indices.append(index_value);
+                try collected_indices.append(self.allocator, index_value);
 
-                var all_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
-                defer all_indices.deinit();
-                try all_indices.append(c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
+                var all_indices = std.ArrayList(c.LLVMValueRef){};
+                defer all_indices.deinit(self.allocator);
+                try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
 
                 var i: usize = collected_indices.items.len;
                 while (i > 0) {
                     i -= 1;
-                    try all_indices.append(collected_indices.items[i]);
+                    try all_indices.append(self.allocator, collected_indices.items[i]);
                 }
 
                 base_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
@@ -290,15 +284,15 @@ pub const CodeGenerator = struct {
         const array_var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
         var index_value = try self.generateExpression(array_index.index);
         index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
-        const element_type = c.LLVMGetElementType(array_var_info.type_ref);
+        const element_type = c.LLVMGetElementType(@ptrCast(array_var_info.type_ref));
         const element_type_kind = c.LLVMGetTypeKind(element_type);
         if (element_type_kind != c.LLVMStructTypeKind) {
             return errors.CodegenError.TypeMismatch;
         }
-        const struct_name = try self.getStructTypeName(element_type);
+        const struct_name = try self.getStructTypeName(@ptrCast(element_type));
         defer self.allocator.free(struct_name);
         var array_indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
-        const array_element_ptr = c.LLVMBuildGEP2(self.builder, array_var_info.type_ref, array_var_info.value, &array_indices[0], 2, "array_element_ptr");
+        const array_element_ptr = c.LLVMBuildGEP2(@ptrCast(self.builder), @ptrCast(array_var_info.type_ref), @ptrCast(array_var_info.value), &array_indices[0], 2, "array_element_ptr");
         try self.generateRecursiveFieldAssignment(array_element_ptr, element_type, struct_name, field_path, value_expr);
     }
 
@@ -345,13 +339,13 @@ pub const CodeGenerator = struct {
     fn generateRegularVariableAssignment(self: *CodeGenerator, as: ast.Assignment) errors.CodegenError!void {
         const ident = as.target.data.identifier;
         const var_info = CodeGenerator.getVariable(self, ident.name) orelse return errors.CodegenError.UndefinedVariable;
-        const var_type_kind = c.LLVMGetTypeKind(var_info.type_ref);
+        const var_type_kind = c.LLVMGetTypeKind(@ptrCast(var_info.type_ref));
         if (var_type_kind == c.LLVMArrayTypeKind) {
             try self.generateArrayReassignment(ident.name, as.value);
         } else {
             const value_raw = try self.generateExpressionWithContext(as.value, var_info.type_name);
-            const final_value = try self.castWithRules(value_raw, var_info.type_ref, as.value);
-            _ = c.LLVMBuildStore(self.builder, final_value, var_info.value);
+            const final_value = try self.castWithRules(value_raw, @ptrCast(var_info.type_ref), as.value);
+            _ = c.LLVMBuildStore(@ptrCast(self.builder), @ptrCast(final_value), @ptrCast(var_info.value));
         }
     }
 
@@ -439,30 +433,30 @@ pub const CodeGenerator = struct {
                             const struct_decl = self.getStructDecl(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
                             for (struct_decl.fields.items, 0..) |field, i| {
                                 if (field.default_value) |default_val| {
-                                    const field_ptr = try self.getStructFieldPointer(struct_type, var_info.value, @intCast(i));
+                                    const field_ptr = try self.getStructFieldPointer(@ptrCast(struct_type), var_info.value, @intCast(i));
                                     const field_type = self.getLLVMType(field.type_name);
-                                    const field_type_kind = c.LLVMGetTypeKind(field_type);
+                                    const field_type_kind = c.LLVMGetTypeKind(@ptrCast(field_type));
                                     if (default_val.data == .string_literal and field_type_kind == c.LLVMArrayTypeKind) {
-                                        try self.assignStringLiteralToArrayField(field_ptr, field_type, default_val.data.string_literal);
+                                        try self.assignStringLiteralToArrayField(field_ptr, @ptrCast(field_type), default_val.data.string_literal);
                                     } else {
                                         const value = try self.generateExpression(default_val);
-                                        const casted_value = self.castToType(value, field_type);
-                                        _ = c.LLVMBuildStore(self.builder, casted_value, field_ptr);
+                                        const casted_value = self.castToType(value, @ptrCast(field_type));
+                                        _ = c.LLVMBuildStore(@ptrCast(self.builder), @ptrCast(casted_value), @ptrCast(field_ptr));
                                     }
                                 }
                             }
 
                             for (struct_init.field_values.items) |field_val| {
                                 const field_index = field_map.get(field_val.field_name) orelse return errors.CodegenError.UndefinedVariable;
-                                const field_ptr = try self.getStructFieldPointer(struct_type, var_info.value, field_index);
+                                const field_ptr = try self.getStructFieldPointer(@ptrCast(struct_type), var_info.value, field_index);
                                 const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
                                 const field_type_kind = c.LLVMGetTypeKind(field_type);
                                 if (field_val.value.data == .string_literal and field_type_kind == c.LLVMArrayTypeKind) {
-                                    try self.assignStringLiteralToArrayField(field_ptr, field_type, field_val.value.data.string_literal);
+                                    try self.assignStringLiteralToArrayField(field_ptr, @ptrCast(field_type), field_val.value.data.string_literal);
                                 } else {
                                     const value = try self.generateExpression(field_val.value);
                                     const casted_value = try self.castWithRules(value, field_type, field_val.value);
-                                    _ = c.LLVMBuildStore(self.builder, casted_value, field_ptr);
+                                    _ = c.LLVMBuildStore(@ptrCast(self.builder), @ptrCast(casted_value), @ptrCast(field_ptr));
                                 }
                             }
                         } else {
@@ -512,7 +506,7 @@ pub const CodeGenerator = struct {
                     }
                     try CodeGenerator.putVariable(self, decl.name, structs.VariableInfo{
                         .value = null,
-                        .type_ref = c.LLVMVoidTypeInContext(self.context),
+                        .type_ref = @ptrCast(c.LLVMVoidTypeInContext(@ptrCast(self.context))),
                         .type_name = decl.type_name,
                     });
                     return;
@@ -522,10 +516,10 @@ pub const CodeGenerator = struct {
                     try self.generateArrayDeclaration(decl);
                 } else {
                     const var_type = self.getLLVMType(decl.type_name);
-                    const alloca = c.LLVMBuildAlloca(self.builder, var_type, decl.name.ptr);
+                    const alloca = c.LLVMBuildAlloca(@ptrCast(self.builder), @ptrCast(var_type), decl.name.ptr);
                     try CodeGenerator.putVariable(self, decl.name, structs.VariableInfo{
-                        .value = alloca,
-                        .type_ref = var_type,
+                        .value = @ptrCast(alloca),
+                        .type_ref = @ptrCast(var_type),
                         .type_name = decl.type_name,
                     });
                     if (decl.initializer) |initializer| {
@@ -536,7 +530,7 @@ pub const CodeGenerator = struct {
                             const struct_decl = self.getStructDecl(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
                             for (struct_decl.fields.items, 0..) |field, i| {
                                 if (field.default_value) |default_val| {
-                                    const field_ptr = try self.getStructFieldPointer(struct_type, alloca, @intCast(i));
+                                    const field_ptr = try self.getStructFieldPointer(@ptrCast(struct_type), @ptrCast(alloca), @intCast(i));
                                     const field_type = self.getLLVMType(field.type_name);
                                     const field_type_kind = c.LLVMGetTypeKind(field_type);
                                     if (default_val.data == .string_literal and field_type_kind == c.LLVMArrayTypeKind) {
@@ -653,24 +647,24 @@ pub const CodeGenerator = struct {
                 try self.generateArrayAssignment(arr_ass);
             },
             .array_compound_assignment => |arr_cass| {
-                var collected_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
-                defer collected_indices.deinit();
+                var collected_indices = std.ArrayList(c.LLVMValueRef){};
+                defer collected_indices.deinit(self.allocator);
                 const base_node = try self.collectArrayIndices(arr_cass.array, &collected_indices);
                 var index_value = try self.generateExpression(arr_cass.index);
                 index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
-                try collected_indices.append(index_value);
+                try collected_indices.append(self.allocator, index_value);
                 const array_name = try self.getBaseIdentifierName(base_node);
                 defer self.allocator.free(array_name);
                 const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
                 var final_type = var_info.type_ref;
                 for (0..collected_indices.items.len) |_| final_type = c.LLVMGetElementType(final_type);
-                var all_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
-                defer all_indices.deinit();
-                try all_indices.append(c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
+                var all_indices = std.ArrayList(c.LLVMValueRef){};
+                defer all_indices.deinit(self.allocator);
+                try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
                 var i = collected_indices.items.len;
                 while (i > 0) {
                     i -= 1;
-                    try all_indices.append(collected_indices.items[i]);
+                    try all_indices.append(self.allocator, collected_indices.items[i]);
                 }
                 const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
                 const current_val = c.LLVMBuildLoad2(self.builder, final_type, element_ptr, "load_elem");
@@ -788,7 +782,7 @@ pub const CodeGenerator = struct {
                 .break_block = exit_bb,
                 .continue_block = condition_bb,
             };
-            try self.loop_context_stack.append(loop_context);
+            try self.loop_context_stack.append(self.allocator, loop_context);
             _ = c.LLVMBuildBr(self.builder, condition_bb);
             c.LLVMPositionBuilderAtEnd(self.builder, condition_bb);
             const cond_value = try self.generateExpression(cond);
@@ -812,7 +806,7 @@ pub const CodeGenerator = struct {
                 .break_block = exit_bb,
                 .continue_block = body_bb,
             };
-            try self.loop_context_stack.append(loop_context);
+            try self.loop_context_stack.append(self.allocator, loop_context);
             _ = c.LLVMBuildBr(self.builder, body_bb);
             c.LLVMPositionBuilderAtEnd(self.builder, body_bb);
             try CodeGenerator.pushScope(self);
@@ -854,7 +848,7 @@ pub const CodeGenerator = struct {
             .break_block = exit_bb,
             .continue_block = increment_bb,
         };
-        try self.loop_context_stack.append(loop_context);
+        try self.loop_context_stack.append(self.allocator, loop_context);
         c.LLVMPositionBuilderAtEnd(self.builder, body_bb);
         for (c_for_stmt.body.items) |stmt| {
             try self.generateStatement(stmt);
@@ -873,13 +867,13 @@ pub const CodeGenerator = struct {
     }
 
     fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignment) errors.CodegenError!void {
-        var collected_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
-        defer collected_indices.deinit();
+        var collected_indices = std.ArrayList(c.LLVMValueRef){};
+        defer collected_indices.deinit(self.allocator);
 
         const base_node = try self.collectArrayIndices(arr_ass.array, &collected_indices);
         var index_value = try self.generateExpression(arr_ass.index);
         index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
-        try collected_indices.append(index_value);
+        try collected_indices.append(self.allocator, index_value);
 
         const array_name = try self.getBaseIdentifierName(base_node);
         defer self.allocator.free(array_name);
@@ -887,17 +881,17 @@ pub const CodeGenerator = struct {
 
         var final_type = var_info.type_ref;
         for (0..collected_indices.items.len) |_| {
-            final_type = c.LLVMGetElementType(final_type);
+            final_type = c.LLVMGetElementType(@ptrCast(final_type));
         }
 
-        var all_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
-        defer all_indices.deinit();
-        try all_indices.append(c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
+        var all_indices = std.ArrayList(c.LLVMValueRef){};
+        defer all_indices.deinit(self.allocator);
+        try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
 
         var i = collected_indices.items.len;
         while (i > 0) {
             i -= 1;
-            try all_indices.append(collected_indices.items[i]);
+            try all_indices.append(self.allocator, collected_indices.items[i]);
         }
 
         const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
@@ -914,12 +908,12 @@ pub const CodeGenerator = struct {
         switch (value_expr.data) {
             .array_initializer => |init_list| {
                 for (init_list.elements.items, 0..) |element, idx| {
-                    const element_type = c.LLVMGetElementType(var_info.type_ref);
-                    const expected_ty_name = self.getTypeNameFromLLVMType(element_type);
+                    const element_type = c.LLVMGetElementType(@ptrCast(var_info.type_ref));
+                    const expected_ty_name = self.getTypeNameFromLLVMType(@ptrCast(element_type));
                     const element_value_raw = try self.generateExpressionWithContext(element, expected_ty_name);
 
                     var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(idx)), 0) };
-                    const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
+                    const element_ptr = c.LLVMBuildGEP2(@ptrCast(self.builder), @ptrCast(var_info.type_ref), @ptrCast(var_info.value), &indices[0], 2, "array_element_ptr");
 
                     const casted_value = try self.castWithRules(element_value_raw, element_type, element);
                     _ = c.LLVMBuildStore(self.builder, casted_value, element_ptr);
@@ -976,12 +970,12 @@ pub const CodeGenerator = struct {
                 return errors.CodegenError.TypeMismatch;
             };
             const element_type = self.getLLVMType(element_type_name);
-            const array_type = c.LLVMArrayType(element_type, @intCast(array_size));
+            const array_type = c.LLVMArrayType(@ptrCast(element_type), @intCast(array_size));
             const alloca = c.LLVMBuildAlloca(self.builder, array_type, decl.name.ptr);
 
             try CodeGenerator.putVariable(self, decl.name, structs.VariableInfo{
-                .value = alloca,
-                .type_ref = array_type,
+                .value = @ptrCast(alloca),
+                .type_ref = @ptrCast(array_type),
                 .type_name = decl.type_name,
             });
             if (decl.initializer) |initializer| {
@@ -992,7 +986,7 @@ pub const CodeGenerator = struct {
                             const element_value_raw = try self.generateExpressionWithContext(element, expected_ty_name);
                             var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(idx)), 0) };
                             const element_ptr = c.LLVMBuildGEP2(self.builder, array_type, alloca, &indices[0], 2, "array_element_ptr");
-                            const casted_value = try self.castWithRules(element_value_raw, element_type, element);
+                            const casted_value = try self.castWithRules(element_value_raw, @ptrCast(element_type), element);
                             _ = c.LLVMBuildStore(self.builder, casted_value, element_ptr);
                         }
                     },
@@ -1085,21 +1079,21 @@ pub const CodeGenerator = struct {
                 const var_type = self.getLLVMType(decl.type_name);
                 const var_name_z = self.allocator.dupeZ(u8, decl.name) catch return errors.CodegenError.OutOfMemory;
                 defer self.allocator.free(var_name_z);
-                const global_var = c.LLVMAddGlobal(self.module, var_type, var_name_z.ptr);
+                const global_var = c.LLVMAddGlobal(self.module, @ptrCast(var_type), var_name_z.ptr);
 
                 if (decl.initializer) |initializer| {
                     const init_value = try self.generateExpression(initializer);
-                    const casted_init_value = try self.castWithRules(init_value, var_type, initializer);
+                    const casted_init_value = try self.castWithRules(init_value, @ptrCast(var_type), initializer);
                     c.LLVMSetInitializer(global_var, casted_init_value);
                 } else {
                     const default_value = utils.getDefaultValueForType(self, decl.type_name);
-                    c.LLVMSetInitializer(global_var, default_value);
+                    c.LLVMSetInitializer(global_var, @ptrCast(default_value));
                 }
 
                 c.LLVMSetLinkage(global_var, c.LLVMExternalLinkage);
                 try self.variables.put(try self.allocator.dupe(u8, decl.name), structs.VariableInfo{
-                    .value = global_var,
-                    .type_ref = var_type,
+                    .value = @ptrCast(global_var),
+                    .type_ref = @ptrCast(var_type),
                     .type_name = decl.type_name,
                 });
             },
@@ -1129,8 +1123,8 @@ pub const CodeGenerator = struct {
             c.LLVMSetLinkage(global_var, c.LLVMExternalLinkage);
             c.LLVMSetGlobalConstant(global_var, 1);
             try self.variables.put(try self.allocator.dupe(u8, enum_name_z), structs.VariableInfo{
-                .value = global_var,
-                .type_ref = c.LLVMInt32TypeInContext(self.context),
+                .value = @ptrCast(global_var),
+                .type_ref = @ptrCast(c.LLVMInt32TypeInContext(@ptrCast(self.context))),
                 .type_name = "i32",
             });
             current_value = value + 1;
@@ -1157,7 +1151,7 @@ pub const CodeGenerator = struct {
                 if (value_width == 1) {
                     return c.LLVMBuildZExt(self.builder, value, target_type, "zext");
                 } else {
-                    const target_type_name = self.getTypeNameFromLLVMType(target_type);
+                    const target_type_name = self.getTypeNameFromLLVMType(@ptrCast(target_type));
                     if (isUnsignedType(target_type_name)) {
                         return c.LLVMBuildZExt(self.builder, value, target_type, "zext");
                     } else {
@@ -1236,10 +1230,10 @@ pub const CodeGenerator = struct {
                 return c.LLVMGetIntTypeWidth(type1) == c.LLVMGetIntTypeWidth(type2);
             },
             c.LLVMFloatTypeKind, c.LLVMDoubleTypeKind, c.LLVMHalfTypeKind => {
-                return true; // Same kind means same float type
+                return true;
             },
             c.LLVMPointerTypeKind => {
-                return true; // For now, consider all pointers equal for casting purposes
+                return true;
             },
             c.LLVMVoidTypeKind => {
                 return true;
@@ -1260,8 +1254,8 @@ pub const CodeGenerator = struct {
                     return self.castToType(val, target_type);
                 } else if (cst.type_name) |tn| {
                     const named_ty = self.getLLVMType(tn);
-                    val = self.castToType(val, named_ty);
-                    from_ty = named_ty;
+                    val = self.castToType(val, @ptrCast(named_ty));
+                    from_ty = @ptrCast(named_ty);
                 }
             }
         }
@@ -1327,8 +1321,8 @@ pub const CodeGenerator = struct {
                 else => {},
             }
         }
-        const from_name = self.getTypeNameFromLLVMType(from_ty);
-        const to_name = self.getTypeNameFromLLVMType(target_type);
+        const from_name = self.getTypeNameFromLLVMType(@ptrCast(from_ty));
+        const to_name = self.getTypeNameFromLLVMType(@ptrCast(target_type));
 
         if (value_node) |vn3| {
             std.debug.print("Type mismatch at line {d}: cannot convert {s} to {s}\n", .{ vn3.line, from_name, to_name });
@@ -1339,34 +1333,35 @@ pub const CodeGenerator = struct {
     }
 
     pub fn parse_escape(self: *CodeGenerator, str: []const u8) errors.CodegenError![]const u8 {
-        var transformed_string = std.ArrayList(u8).init(self.allocator);
+        var transformed_string = std.ArrayList(u8){};
+        defer transformed_string.deinit(self.allocator);
         var i: usize = 0;
         while (i < str.len) : (i += 1) {
             if (str[i] == '\\') {
                 i += 1;
                 if (i < str.len) {
                     switch (str[i]) {
-                        'n' => transformed_string.append('\n') catch return errors.CodegenError.OutOfMemory,
-                        't' => transformed_string.append('\t') catch return errors.CodegenError.OutOfMemory,
-                        'r' => transformed_string.append('\r') catch return errors.CodegenError.OutOfMemory,
-                        '\'' => transformed_string.append('\'') catch return errors.CodegenError.OutOfMemory,
-                        '"' => transformed_string.append('"') catch return errors.CodegenError.OutOfMemory,
-                        '0' => transformed_string.append(0) catch return errors.CodegenError.OutOfMemory,
-                        '\\' => transformed_string.append('\\') catch return errors.CodegenError.OutOfMemory,
+                        'n' => transformed_string.append(self.allocator, '\n') catch return errors.CodegenError.OutOfMemory,
+                        't' => transformed_string.append(self.allocator, '\t') catch return errors.CodegenError.OutOfMemory,
+                        'r' => transformed_string.append(self.allocator, '\r') catch return errors.CodegenError.OutOfMemory,
+                        '\'' => transformed_string.append(self.allocator, '\'') catch return errors.CodegenError.OutOfMemory,
+                        '"' => transformed_string.append(self.allocator, '"') catch return errors.CodegenError.OutOfMemory,
+                        '0' => transformed_string.append(self.allocator, 0) catch return errors.CodegenError.OutOfMemory,
+                        '\\' => transformed_string.append(self.allocator, '\\') catch return errors.CodegenError.OutOfMemory,
                         else => {
-                            transformed_string.append('\\') catch return errors.CodegenError.OutOfMemory;
-                            transformed_string.append(str[i]) catch return errors.CodegenError.OutOfMemory;
+                            transformed_string.append(self.allocator, '\\') catch return errors.CodegenError.OutOfMemory;
+                            transformed_string.append(self.allocator, str[i]) catch return errors.CodegenError.OutOfMemory;
                         },
                     }
                 } else {
-                    transformed_string.append('\\') catch return errors.CodegenError.OutOfMemory;
+                    transformed_string.append(self.allocator, '\\') catch return errors.CodegenError.OutOfMemory;
                 }
             } else {
-                transformed_string.append(str[i]) catch return errors.CodegenError.OutOfMemory;
+                transformed_string.append(self.allocator, str[i]) catch return errors.CodegenError.OutOfMemory;
             }
         }
-        try transformed_string.append(0);
-        return transformed_string.toOwnedSlice();
+        try transformed_string.append(self.allocator, 0);
+        return transformed_string.toOwnedSlice(self.allocator);
     }
 
     fn prepareArgumentForLibcCall(self: *CodeGenerator, arg_value: c.LLVMValueRef, func_name: []const u8, arg_index: usize) c.LLVMValueRef {
@@ -1404,14 +1399,14 @@ pub const CodeGenerator = struct {
                     if (expected_type) |type_name| {
                         const target_ty = self.getLLVMType(type_name);
                         const inner = try self.generateExpression(cst.expr);
-                        return self.castToType(inner, target_ty);
+                        return @ptrCast(self.castToType(inner, @ptrCast(target_ty)));
                     } else {
                         return errors.CodegenError.TypeMismatch;
                     }
                 } else if (cst.type_name) |tn| {
                     const target_ty = self.getLLVMType(tn);
                     const inner = try self.generateExpression(cst.expr);
-                    return self.castToType(inner, target_ty);
+                    return self.castToType(inner, @ptrCast(target_ty));
                 } else {
                     return errors.CodegenError.TypeMismatch;
                 }
@@ -1606,7 +1601,7 @@ pub const CodeGenerator = struct {
                 if (cst.type_name) |tn| {
                     const target_ty = self.getLLVMType(tn);
                     const inner = try self.generateExpression(cst.expr);
-                    return self.castToType(inner, target_ty);
+                    return self.castToType(inner, @ptrCast(target_ty));
                 }
                 return errors.CodegenError.TypeMismatch;
             },
@@ -1618,7 +1613,7 @@ pub const CodeGenerator = struct {
                 }
 
                 if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
-                    return c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load");
+                    return c.LLVMBuildLoad2(self.builder, @ptrCast(var_info.type_ref), @ptrCast(var_info.value), "load");
                 }
                 return errors.CodegenError.UndefinedVariable;
             },
@@ -1629,8 +1624,8 @@ pub const CodeGenerator = struct {
                     const enum_var_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ base_name, qual_id.field });
                     defer self.allocator.free(enum_var_name);
                     if (CodeGenerator.getVariable(self, enum_var_name)) |enum_var_info| {
-                        const load_instr = c.LLVMBuildLoad2(self.builder, enum_var_info.type_ref, enum_var_info.value, "enum_value");
-                        const alignment = self.getAlignmentForType(enum_var_info.type_ref);
+                        const load_instr = c.LLVMBuildLoad2(self.builder, @ptrCast(enum_var_info.type_ref), @ptrCast(enum_var_info.value), "enum_value");
+                        const alignment = self.getAlignmentForType(@ptrCast(enum_var_info.type_ref));
                         c.LLVMSetAlignment(load_instr, alignment);
                         return load_instr;
                     }
@@ -1642,8 +1637,8 @@ pub const CodeGenerator = struct {
                     .identifier => {
                         const base_name = qual_id.base.data.identifier.name;
                         const var_info = CodeGenerator.getVariable(self, base_name) orelse return errors.CodegenError.UndefinedVariable;
-                        result_value = var_info.value;
-                        result_type = var_info.type_ref;
+                        result_value = @ptrCast(var_info.value);
+                        result_type = @ptrCast(var_info.type_ref);
                         result_type_name = var_info.type_name;
                     },
                     .array_index => {
@@ -1652,9 +1647,9 @@ pub const CodeGenerator = struct {
                         defer self.allocator.free(array_name);
                         const array_var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
                         const index_value = try self.generateExpression(array_index.index);
-                        const element_type = c.LLVMGetElementType(array_var_info.type_ref);
+                        const element_type = c.LLVMGetElementType(@ptrCast(array_var_info.type_ref));
                         var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
-                        result_value = c.LLVMBuildGEP2(self.builder, array_var_info.type_ref, array_var_info.value, &indices[0], 2, "array_element_ptr");
+                        result_value = c.LLVMBuildGEP2(self.builder, @ptrCast(array_var_info.type_ref), @ptrCast(array_var_info.value), &indices[0], 2, "array_element_ptr");
                         result_type = element_type;
                         const elem_type_kind = c.LLVMGetTypeKind(element_type);
                         if (elem_type_kind == c.LLVMStructTypeKind) {
@@ -1691,14 +1686,14 @@ pub const CodeGenerator = struct {
                         _ = c.LLVMBuildStore(self.builder, result_value, temp_alloca);
                         struct_ptr = temp_alloca;
                     }
-                    const field_ptr = try self.getStructFieldPointer(struct_type, struct_ptr, field_index);
+                    const field_ptr = try self.getStructFieldPointer(@ptrCast(struct_type), @ptrCast(struct_ptr), field_index);
                     const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
                     const field_type_kind = c.LLVMGetTypeKind(field_type);
                     if (field_type_kind == c.LLVMArrayTypeKind) {
-                        return field_ptr;
+                        return @ptrCast(field_ptr);
                     }
-                    const load_instr = c.LLVMBuildLoad2(self.builder, field_type, field_ptr, "struct_field");
-                    const alignment = self.getAlignmentForType(field_type);
+                    const load_instr = c.LLVMBuildLoad2(self.builder, field_type, @ptrCast(field_ptr), "struct_field");
+                    const alignment = self.getAlignmentForType(@ptrCast(field_type));
                     c.LLVMSetAlignment(load_instr, alignment);
                     return load_instr;
                 } else if (type_kind == c.LLVMPointerTypeKind) {
@@ -1711,13 +1706,13 @@ pub const CodeGenerator = struct {
                                 const struct_type = self.struct_types.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
                                 const field_map = self.struct_fields.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
                                 const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
-                                const field_ptr = try self.getStructFieldPointer(struct_type, result_value, field_index);
+                                const field_ptr = try self.getStructFieldPointer(@ptrCast(struct_type), @ptrCast(result_value), field_index);
                                 const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
                                 const field_type_kind = c.LLVMGetTypeKind(field_type);
                                 if (field_type_kind == c.LLVMArrayTypeKind) {
-                                    return field_ptr;
+                                    return @ptrCast(field_ptr);
                                 }
-                                const load_instr = c.LLVMBuildLoad2(self.builder, field_type, field_ptr, "struct_field");
+                                const load_instr = c.LLVMBuildLoad2(@ptrCast(self.builder), @ptrCast(field_type), @ptrCast(field_ptr), "struct_field");
                                 const alignment = self.getAlignmentForType(field_type);
                                 c.LLVMSetAlignment(load_instr, alignment);
                                 return load_instr;
@@ -2105,11 +2100,11 @@ pub const CodeGenerator = struct {
             },
             .method_call => |method| {
                 // Convert method call to function call: obj.method(args) -> method(obj, args)
-                var args = std.ArrayList(*ast.Node).init(self.allocator);
-                defer args.deinit();
-                try args.append(method.object);
+                var args = std.ArrayList(*ast.Node){};
+                defer args.deinit(self.allocator);
+                try args.append(self.allocator, method.object);
                 for (method.args.items) |arg| {
-                    try args.append(arg);
+                    try args.append(self.allocator, arg);
                 }
                 const function_call = ast.FunctionCall{
                     .name = method.method_name,
@@ -2122,12 +2117,12 @@ pub const CodeGenerator = struct {
                 return try CodeGenerator.generateFunctionCall(self, call);
             },
             .array_index => |arr_idx| {
-                var collected_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
-                defer collected_indices.deinit();
+                var collected_indices = std.ArrayList(c.LLVMValueRef){};
+                defer collected_indices.deinit(self.allocator);
 
                 const base_node = try self.collectArrayIndices(arr_idx.array, &collected_indices);
                 const index_value = try self.generateExpression(arr_idx.index);
-                try collected_indices.append(index_value);
+                try collected_indices.append(self.allocator, index_value);
 
                 const array_name = try self.getBaseIdentifierName(base_node);
                 defer self.allocator.free(array_name);
@@ -2138,14 +2133,14 @@ pub const CodeGenerator = struct {
                     final_type = c.LLVMGetElementType(final_type);
                 }
 
-                var all_indices = std.ArrayList(c.LLVMValueRef).init(self.allocator);
-                defer all_indices.deinit();
-                try all_indices.append(c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
+                var all_indices = std.ArrayList(c.LLVMValueRef){};
+                defer all_indices.deinit(self.allocator);
+                try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
 
                 var i = collected_indices.items.len;
                 while (i > 0) {
                     i -= 1;
-                    try all_indices.append(collected_indices.items[i]);
+                    try all_indices.append(self.allocator, collected_indices.items[i]);
                 }
 
                 const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
@@ -2521,26 +2516,26 @@ pub const CodeGenerator = struct {
         defer arena_alloc.free(ir_file);
         try self.writeToFile(ir_file);
 
-        var clang_args_list = std.ArrayList([]const u8).init(arena_alloc);
-        try clang_args_list.appendSlice(&[_][]const u8{ "clang", ir_file, "-o", output, "-lc" });
+        var clang_args_list = std.ArrayList([]const u8){};
+        try clang_args_list.appendSlice(arena_alloc, &[_][]const u8{ "clang", ir_file, "-o", output, "-lc" });
 
         if (arch.len != 0) {
             const march_flag: []const u8 = try std.fmt.allocPrint(arena_alloc, "--target={s}", .{arch});
-            try clang_args_list.append(march_flag);
+            try clang_args_list.append(arena_alloc, march_flag);
         }
 
         for (link_objects) |obj| {
-            try clang_args_list.append(obj);
+            try clang_args_list.append(arena_alloc, obj);
         }
 
         if (self.uses_float_modulo) {
-            try clang_args_list.append("-lm");
+            try clang_args_list.append(arena_alloc, "-lm");
         }
 
         if (optimize) {
             // Optimize llvm ir
-            var opt_args_list = std.ArrayList([]const u8).init(arena_alloc);
-            try opt_args_list.appendSlice(&[_][]const u8{
+            var opt_args_list = std.ArrayList([]const u8){};
+            try opt_args_list.appendSlice(arena_alloc, &[_][]const u8{
                 "opt",
                 "-O3",
                 ir_file,
@@ -2558,12 +2553,12 @@ pub const CodeGenerator = struct {
                 return error.CompilationFailed;
             }
 
-            try clang_args_list.append("-O3"); // Append additional flag to clang (+100% fps)
+            try clang_args_list.append(arena_alloc, "-O3"); // Append additional flag to clang (+100% fps)
         }
 
         // Append additional arguments
         for (extra_flags) |ef| {
-            try clang_args_list.append(ef);
+            try clang_args_list.append(arena_alloc, ef);
         }
 
         var child = std.process.Child.init(clang_args_list.items, arena_alloc);
