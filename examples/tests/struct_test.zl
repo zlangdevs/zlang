@@ -80,6 +80,31 @@ fun gen_line(x1: i32, y1: i32, x2: i32, y2: i32) >> Line {
     return res;
 } 
 
+fun add(a: i32, b: i32) >> i32 {return a + b;}
+fun mul(a: i32, b: i32) >> i32 {return a * b;}
+fun idp(p: ptr<i32>) >> ptr<i32> {return p;}
+
+struct MathOps {
+    bin ptr<i32(i32, i32)>,
+    other ptr<i32(i32, i32)>,
+    transform ptr<ptr<i32>(ptr<i32>)>
+}
+
+fun apply_bin(m: MathOps, x: i32, y: i32) >> i32 {
+    ptr<i32(i32, i32)> f = m.bin;
+    return f(x, y);
+}
+
+fun swap_and_apply(m: MathOps, x: i32, y: i32) >> i32 {
+    ptr<i32(i32, i32)> f = m.other;
+    return f(x, y);
+}
+
+fun ptr_roundtrip(m: MathOps, p: ptr<i32>) >> ptr<i32> {
+    ptr<ptr<i32>(ptr<i32>)> t = m.transform;
+    return t(p);
+}
+
 fun main() >> i32 {
     Person alex;
     Person default; ?? normies lol
@@ -164,5 +189,22 @@ fun main() >> i32 {
 
     i32 big_area = big_rect.area();
     @printf("Scaled area: (expected 360):%d\n", big_area);
+    
+    MathOps ops;
+    ops.bin = add;
+    ops.other = mul;
+    ops.transform = idp;
+
+    i32 x = 6;
+    i32 y = 7;
+    i32 r1 = ops.apply_bin(x, y);
+    @printf("(expected 13):%d\n", r1);
+
+    i32 r2 = ops.swap_and_apply(x, y);
+    @printf("(expected 42):%d\n", r2);
+
+    ptr<i32> px = &x;
+    ptr<i32> pr = ops.ptr_roundtrip(px);
+    @printf("ptr roundtrip: %p -> %p\n", px, pr);
     return 0;
 }

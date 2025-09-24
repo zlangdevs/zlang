@@ -124,6 +124,26 @@ pub fn getDefaultValueForType(cg: *codegen.CodeGenerator, type_name: []const u8)
 pub fn getLLVMType(self: *codegen.CodeGenerator, type_name: []const u8) c.LLVMTypeRef {
     if (std.mem.startsWith(u8, type_name, "ptr<") and std.mem.endsWith(u8, type_name, ">")) {
         const inner_type_name = type_name[4 .. type_name.len - 1];
+        // detect function type inside ptr<ret(args)> without changing grammar
+        if (std.mem.indexOfScalar(u8, inner_type_name, '(')) |lp| if (std.mem.lastIndexOfScalar(u8, inner_type_name, ')')) |rp| if (rp > lp) {
+            const ret_part = std.mem.trim(u8, inner_type_name[0..lp], " \t");
+            const args_part_full = inner_type_name[lp + 1 .. rp];
+            var args_list = std.ArrayList(c.LLVMTypeRef){};
+            defer args_list.deinit(self.allocator);
+            var it = std.mem.tokenizeAny(u8, args_part_full, ",");
+            while (it.next()) |arg_raw| {
+                const arg_trim = std.mem.trim(u8, arg_raw, " \t");
+                if (arg_trim.len == 0) continue;
+                const arg_ty = self.getLLVMType(arg_trim);
+                args_list.append(self.allocator, arg_ty) catch unreachable;
+            }
+            const ret_ty = self.getLLVMType(ret_part);
+            const fn_ty = if (args_list.items.len > 0)
+                c.LLVMFunctionType(ret_ty, args_list.items.ptr, @intCast(args_list.items.len), 0)
+            else
+                c.LLVMFunctionType(ret_ty, null, 0, 0);
+            return c.LLVMPointerType(fn_ty, 0);
+        };
         const inner_type = self.getLLVMType(inner_type_name);
         return c.LLVMPointerType(inner_type, 0);
     } else if (std.mem.startsWith(u8, type_name, "arr<") and std.mem.endsWith(u8, type_name, ">")) {

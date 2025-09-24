@@ -125,6 +125,9 @@ fun test_deeply_nested_param(p: ptr<ptr<ptr<ptr<i32>>>>) >> ptr<ptr<i32>> {
     return result;
 }
 
+fun add(a: i32, b: i32) >> i32 {return a + b;}
+fun realloc_i32(p: ptr<i32>) >> ptr<i32> {return p;}
+
 fun main() >> i32 {
     @printf("=== Comprehensive Pointer Test ===\n\n");
 
@@ -169,5 +172,13 @@ fun main() >> i32 {
     i32 base = 128;
     i32 modified = base + 3;
     i32 double_modified = modified - 1;
+    ?? function pointer tests
+    ptr<i32(i32, i32)> math_fn = add;
+    i32 sum = math_fn(5,4);
+    @printf("(expected 9):%d\n", sum);
+    ptr<ptr<i32>(ptr<i32>)> ptr_function = realloc_i32;
+    ptr<i32> q = &x;
+    ptr<i32> r = ptr_function(q);
+    @printf("ptr_function call: %p -> %p\n", q, r);
     return 0;
 }

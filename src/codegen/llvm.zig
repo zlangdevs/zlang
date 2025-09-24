@@ -1489,16 +1489,22 @@ pub const CodeGenerator = struct {
                 } else if (std.mem.eql(u8, ident.name, "false")) {
                     return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 0, 0);
                 }
+
                 if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
-                    if (c.LLVMGetTypeKind(var_info.type_ref) == c.LLVMVoidTypeKind) {
-                        return errors.CodegenError.TypeMismatch;
+                    return c.LLVMBuildLoad2(self.builder, @ptrCast(var_info.type_ref), @ptrCast(var_info.value), "load");
+                }
+                var func_iter = c.LLVMGetFirstFunction(self.module);
+                while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
+                    const func_name_ptr = c.LLVMGetValueName(func_iter);
+                    if (func_name_ptr != null) {
+                        const func_name_slice = std.mem.span(func_name_ptr);
+                        if (std.mem.eql(u8, func_name_slice, ident.name)) {
+                            return func_iter;
+                        }
                     }
-                    const loaded = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load");
-                    if (expected_type) |type_name| {
-                        const target_ty = self.getLLVMType(type_name);
-                        return try self.castWithRules(loaded, target_ty, expr);
-                    }
-                    return loaded;
+                }
+                if (self.functions.get(ident.name)) |declared_func| {
+                    return declared_func;
                 }
                 return errors.CodegenError.UndefinedVariable;
             },
@@ -1522,14 +1528,16 @@ pub const CodeGenerator = struct {
                     const rhs_val = try self.generateExpressionWithContext(b.rhs, expected_type);
                     const kind = c.LLVMGetTypeKind(target_ty);
                     if (kind == c.LLVMFloatTypeKind or kind == c.LLVMDoubleTypeKind or kind == c.LLVMHalfTypeKind) {
+                        const lhs_casted = try self.castWithRules(lhs_val, target_ty, b.lhs);
+                        const rhs_casted = try self.castWithRules(rhs_val, target_ty, b.rhs);
                         return switch (b.op) {
-                            '+' => c.LLVMBuildFAdd(self.builder, lhs_val, rhs_val, "fadd"),
-                            '-' => c.LLVMBuildFSub(self.builder, lhs_val, rhs_val, "fsub"),
-                            '*' => c.LLVMBuildFMul(self.builder, lhs_val, rhs_val, "fmul"),
-                            '/' => c.LLVMBuildFDiv(self.builder, lhs_val, rhs_val, "fdiv"),
+                            '+' => c.LLVMBuildFAdd(self.builder, lhs_casted, rhs_casted, "fadd"),
+                            '-' => c.LLVMBuildFSub(self.builder, lhs_casted, rhs_casted, "fsub"),
+                            '*' => c.LLVMBuildFMul(self.builder, lhs_casted, rhs_casted, "fmul"),
+                            '/' => c.LLVMBuildFDiv(self.builder, lhs_casted, rhs_casted, "fdiv"),
                             '%' => blk: {
                                 self.uses_float_modulo = true;
-                                break :blk c.LLVMBuildFRem(self.builder, lhs_val, rhs_val, "frem");
+                                break :blk c.LLVMBuildFRem(self.builder, lhs_casted, rhs_casted, "frem");
                             },
                             '&', '|', 'A', '$', '^', '<', '>' => try self.generateBinaryOp(b),
                             else => errors.CodegenError.UnsupportedOperation,
@@ -1614,6 +1622,19 @@ pub const CodeGenerator = struct {
 
                 if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                     return c.LLVMBuildLoad2(self.builder, @ptrCast(var_info.type_ref), @ptrCast(var_info.value), "load");
+                }
+                var func_iter = c.LLVMGetFirstFunction(self.module);
+                while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
+                    const func_name_ptr = c.LLVMGetValueName(func_iter);
+                    if (func_name_ptr != null) {
+                        const func_name_slice = std.mem.span(func_name_ptr);
+                        if (std.mem.eql(u8, func_name_slice, ident.name)) {
+                            return func_iter;
+                        }
+                    }
+                }
+                if (self.functions.get(ident.name)) |declared_func| {
+                    return declared_func;
                 }
                 return errors.CodegenError.UndefinedVariable;
             },
@@ -2368,6 +2389,28 @@ pub const CodeGenerator = struct {
             } else if (rhs_kind == c.LLVMFloatTypeKind and c.LLVMGetTypeKind(result_type) == c.LLVMDoubleTypeKind) {
                 casted_rhs = c.LLVMBuildFPExt(self.builder, rhs_value, result_type, "fpext_rhs");
             }
+            const lhs_ty_now = c.LLVMTypeOf(casted_lhs);
+            if (lhs_ty_now != result_type) {
+                const lhs_kind_now = c.LLVMGetTypeKind(lhs_ty_now);
+                if (lhs_kind_now == c.LLVMIntegerTypeKind) {
+                    casted_lhs = c.LLVMBuildSIToFP(self.builder, casted_lhs, result_type, "sitofp_lhs2");
+                } else if ((lhs_kind_now == c.LLVMHalfTypeKind or lhs_kind_now == c.LLVMFloatTypeKind) and c.LLVMGetTypeKind(result_type) == c.LLVMDoubleTypeKind) {
+                    casted_lhs = c.LLVMBuildFPExt(self.builder, casted_lhs, result_type, "fpext_lhs2");
+                } else if (lhs_kind_now == c.LLVMDoubleTypeKind and c.LLVMGetTypeKind(result_type) == c.LLVMFloatTypeKind) {
+                    casted_lhs = c.LLVMBuildFPTrunc(self.builder, casted_lhs, result_type, "fptrunc_lhs");
+                }
+            }
+            const rhs_ty_now = c.LLVMTypeOf(casted_rhs);
+            if (rhs_ty_now != result_type) {
+                const rhs_kind_now = c.LLVMGetTypeKind(rhs_ty_now);
+                if (rhs_kind_now == c.LLVMIntegerTypeKind) {
+                    casted_rhs = c.LLVMBuildSIToFP(self.builder, casted_rhs, result_type, "sitofp_rhs2");
+                } else if ((rhs_kind_now == c.LLVMHalfTypeKind or rhs_kind_now == c.LLVMFloatTypeKind) and c.LLVMGetTypeKind(result_type) == c.LLVMDoubleTypeKind) {
+                    casted_rhs = c.LLVMBuildFPExt(self.builder, casted_rhs, result_type, "fpext_rhs2");
+                } else if (rhs_kind_now == c.LLVMDoubleTypeKind and c.LLVMGetTypeKind(result_type) == c.LLVMFloatTypeKind) {
+                    casted_rhs = c.LLVMBuildFPTrunc(self.builder, casted_rhs, result_type, "fptrunc_rhs");
+                }
+            }
         } else if (bin_op.op != '&' and bin_op.op != '|') {
             casted_lhs = self.castToType(lhs_value, result_type);
             casted_rhs = self.castToType(rhs_value, result_type);
@@ -2550,6 +2593,11 @@ pub const CodeGenerator = struct {
 
             const result = try opt_child_process.wait();
             if (result != .Exited or result.Exited != 0) {
+                if (opt_child_process.stderr) |s| {
+                    var buf: [4096]u8 = undefined;
+                    const n = s.read(&buf) catch 0;
+                    if (n > 0) std.debug.print("opt stderr: {s}\n", .{buf[0..n]});
+                }
                 return error.CompilationFailed;
             }
 
@@ -2568,11 +2616,16 @@ pub const CodeGenerator = struct {
         try child.spawn();
         const result = try child.wait();
 
-        if (!keep_ll) {
+        if (!keep_ll and (result == .Exited and result.Exited == 0)) {
             std.fs.cwd().deleteFile(ir_file) catch {};
         }
 
         if (result != .Exited or result.Exited != 0) {
+            if (child.stderr) |s| {
+                var buf: [8192]u8 = undefined;
+                const n = s.read(&buf) catch 0;
+                if (n > 0) std.debug.print("clang stderr: {s}\n", .{buf[0..n]});
+            }
             return error.CompilationFailed;
         }
     }
