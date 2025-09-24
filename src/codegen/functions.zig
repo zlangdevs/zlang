@@ -202,6 +202,50 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
             if (cg.functions.get(call.name)) |declared_func| {
                 func = declared_func;
             } else {
+                if (llvm.CodeGenerator.getVariable(cg, call.name)) |var_info| {
+                    const callee_ptr = c.LLVMBuildLoad2(@ptrCast(cg.builder), @ptrCast(var_info.type_ref), @ptrCast(var_info.value), "load_fnptr");
+                    var fn_ty: c.LLVMTypeRef = undefined;
+                    var param_types = std.ArrayList(c.LLVMTypeRef){};
+                    defer param_types.deinit(cg.allocator);
+                    if (std.mem.startsWith(u8, var_info.type_name, "ptr<") and std.mem.endsWith(u8, var_info.type_name, ">")) {
+                        const inner = var_info.type_name[4 .. var_info.type_name.len - 1];
+                        if (std.mem.indexOfScalar(u8, inner, '(')) |lp| {
+                            if (std.mem.lastIndexOfScalar(u8, inner, ')')) |rp| {
+                                if (rp > lp) {
+                                    const ret_part = std.mem.trim(u8, inner[0..lp], " \t");
+                                    const args_part_full = inner[lp + 1 .. rp];
+                                    var it = std.mem.tokenizeAny(u8, args_part_full, ",");
+                                    while (it.next()) |arg_raw| {
+                                        const arg_trim = std.mem.trim(u8, arg_raw, " \t");
+                                        if (arg_trim.len == 0) continue;
+                                        const aty = cg.getLLVMType(arg_trim);
+                                        param_types.append(cg.allocator, aty) catch unreachable;
+                                    }
+                                    const ret_ty = cg.getLLVMType(ret_part);
+                                    fn_ty = if (param_types.items.len > 0)
+                                        c.LLVMFunctionType(@ptrCast(ret_ty), param_types.items.ptr, @intCast(param_types.items.len), 0)
+                                    else
+                                        c.LLVMFunctionType(@ptrCast(ret_ty), null, 0, 0);
+                                } else return errors.CodegenError.TypeMismatch;
+                            } else return errors.CodegenError.TypeMismatch;
+                        } else return errors.CodegenError.TypeMismatch;
+                    } else return errors.CodegenError.TypeMismatch;
+
+                    var args = std.ArrayList(c.LLVMValueRef){};
+                    defer args.deinit(cg.allocator);
+                    for (call.args.items, 0..) |arg, i| {
+                        var v = try cg.generateExpression(arg);
+                        if (i < param_types.items.len) {
+                            v = try cg.castWithRules(v, param_types.items[i], arg);
+                        }
+                        try args.append(cg.allocator, v);
+                    }
+                    const res = if (args.items.len > 0)
+                        c.LLVMBuildCall2(@ptrCast(cg.builder), fn_ty, @ptrCast(callee_ptr), args.items.ptr, @intCast(args.items.len), "call")
+                    else
+                        c.LLVMBuildCall2(@ptrCast(cg.builder), fn_ty, @ptrCast(callee_ptr), null, 0, "call");
+                    return res;
+                }
                 return errors.CodegenError.UndefinedFunction;
             }
         }

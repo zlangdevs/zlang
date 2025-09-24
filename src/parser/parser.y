@@ -124,7 +124,7 @@ void* ast_root = NULL;
 %type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration wrap_statement
 %type <node> enum_values enum_value_list struct_fields struct_field_list
 %type <node> struct_initializer struct_field_values struct_field_value_list initializer_expression ref_expression ref_base
-%type <string> type_name function_name string_literal complex_type_name module_path
+%type <string> type_name function_name string_literal complex_type_name module_path function_type_core function_type_param_list
 
 %start program
 
@@ -275,12 +275,62 @@ complex_type_name:
         free($3);
         $$ = result;
     }
+  | TOKEN_IDENTIFIER TOKEN_LESS function_type_core TOKEN_GREATER %prec TOKEN_LESS {
+        char* result = malloc(strlen($1) + strlen($3) + 5);
+        sprintf(result, "%s<%s>", $1, $3);
+        free($3);
+        $$ = result;
+    }
+;
+function_type_core:
+    type_name TOKEN_LPAREN TOKEN_RPAREN {
+        const char* ret = $1;
+        size_t len = strlen(ret) + 3;
+        char* result = malloc(len);
+        result[0] = '\0';
+        strcat(result, ret);
+        strcat(result, "()");
+        free($1);
+        $$ = result;
+    }
+  | type_name TOKEN_LPAREN function_type_param_list TOKEN_RPAREN {
+        const char* ret = $1;
+        const char* params = $3;
+        size_t len = strlen(ret) + strlen(params) + 3;
+        char* result = malloc(len);
+        result[0] = '\0';
+        strcat(result, ret);
+        strcat(result, "(");
+        strcat(result, params);
+        strcat(result, ")");
+        free($1);
+        free($3);
+        $$ = result;
+    }
 ;
 
-type_name:
+function_type_param_list:
+    type_name { $$ = $1; }
+  | function_type_param_list TOKEN_COMMA type_name {
+        const char* lhs = $1;
+        const char* rhs = $3;
+        size_t len = strlen(lhs) + strlen(rhs) + 2;
+        char* result = malloc(len);
+        result[0] = '\0';
+        strcat(result, lhs);
+        strcat(result, ",");
+        strcat(result, rhs);
+        free($1);
+        free($3);
+        $$ = result;
+    }
+;
+
+ type_name:
     complex_type_name { $$ = $1; }
   | TOKEN_IDENTIFIER { $$ = strdup($1); }
-;
+ ;
+
 
 statement_list:
     /* empty */ { $$ = zig_create_stmt_list(); }
