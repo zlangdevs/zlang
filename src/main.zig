@@ -271,10 +271,27 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                 } else if (std.mem.eql(u8, flag, "-c")) {
                     try context.extra_args.append(allocator, flag);
                     context.output = "output.o";
+                } else if (std.mem.startsWith(u8, flag, "-l") and flag.len > 2) {
+                    // pass-through library flag like -lGL, -lm, etc.
+                    try context.extra_args.append(allocator, flag);
+                } else if (std.mem.startsWith(u8, flag, "-L") and flag.len > 2) {
+                    // pass-through library search path like -L/usr/lib
+                    try context.extra_args.append(allocator, flag);
+                } else if (std.mem.eql(u8, flag, "-l") or std.mem.eql(u8, flag, "-L")) {
+                    // Support separated form: -l GL  or  -L /usr/lib
+                    i += 1;
+                    if (i >= args.len) return errors.CLIError.InvalidArgument;
+                    const combined = try std.fmt.allocPrint(allocator, "{s}{s}", .{ flag, args[i] });
+                    defer allocator.free(combined);
+                    try context.extra_args.append(allocator, combined);
+                } else if (std.mem.startsWith(u8, flag, "-Wl,")) {
+                    // Pass through linker options like -Wl,-rpath,/path or others
+                    try context.extra_args.append(allocator, flag);
                 } else if (std.mem.eql(u8, flag, "-help")) {
                     return errors.CLIError.NoHelp;
                 } else {
-                    return errors.CLIError.InvalidArgument;
+                    // Forward any other unknown flags directly to clang/linker
+                    try context.extra_args.append(allocator, flag);
                 }
             },
             else => {
