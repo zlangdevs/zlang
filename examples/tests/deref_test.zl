@@ -1,0 +1,35 @@
+fun add(a: i32, b: i32) >> i32 {return a + b;}
+
+struct Holder {
+    v ptr<i32>
+}
+
+fun main() >> i32 {
+    i32 x = 7;
+    ptr<i32> p = &x;
+    i32 y = *p;
+    @printf("(expected 7):%d\n", y);
+
+    x = 9;
+    @printf("(expected 9):%d\n", x);
+
+    ptr<ptr<i32>> pp = &p;
+    i32 z = **pp;
+    @printf("(expected 9):%d\n", z);
+
+    Holder h;
+    h.v = &x;
+    i32 hv = *h.v;
+    @printf("(expected 9):%d\n", hv);
+
+    ptr<i32(i32, i32)> f = add;
+    i32 s = f(3, 4);
+    @printf("(expected 7):%d\n", s);
+
+    i32 sum = *p + **pp;
+    @printf("(expected 18):%d\n", sum);
+
+    return 0;
+}
+
+

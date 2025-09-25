@@ -1595,6 +1595,26 @@ pub const CodeGenerator = struct {
                             return errors.CodegenError.UnsupportedOperation;
                         }
                     },
+                    '*' => {
+                        var ptr_val: c.LLVMValueRef = undefined;
+                        if (expected_type) |tn| {
+                            const inner_expected = std.fmt.allocPrint(self.allocator, "ptr<{s}>", .{tn}) catch return errors.CodegenError.OutOfMemory;
+                            defer self.allocator.free(inner_expected);
+                            ptr_val = try self.generateExpressionWithContext(un.operand, inner_expected);
+                        } else {
+                            ptr_val = try self.generateExpression(un.operand);
+                        }
+                        const ptr_ty = c.LLVMTypeOf(ptr_val);
+                        if (c.LLVMGetTypeKind(ptr_ty) != c.LLVMPointerTypeKind) return errors.CodegenError.TypeMismatch;
+                        if (expected_type) |tn2| {
+                            const load_ty = self.getLLVMType(tn2);
+                            if (c.LLVMGetTypeKind(load_ty) == c.LLVMFunctionTypeKind) return ptr_val;
+                            return c.LLVMBuildLoad2(self.builder, @ptrCast(load_ty), ptr_val, "deref_ctx");
+                        }
+                        const elem_ty = c.LLVMGetElementType(ptr_ty);
+                        if (c.LLVMGetTypeKind(elem_ty) == c.LLVMFunctionTypeKind) return ptr_val;
+                        return c.LLVMBuildLoad2(self.builder, elem_ty, ptr_val, "deref");
+                    },
                     else => return self.generateExpression(expr),
                 }
             },
@@ -1859,14 +1879,29 @@ pub const CodeGenerator = struct {
                         return errors.CodegenError.TypeMismatch;
                     },
                     '*' => {
+                        if (un.operand.data == .unary_op and un.operand.data.unary_op.op == '&') return try self.generateExpression(un.operand);
+                        if (un.operand.data == .identifier) {
+                            const ident = un.operand.data.identifier;
+                            if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
+                                const ptr_ty = var_info.type_ref;
+                                const ptr_val = c.LLVMBuildLoad2(self.builder, @ptrCast(ptr_ty), @ptrCast(var_info.value), "load_ptr_for_deref");
+                                const elem_ty = c.LLVMGetElementType(@ptrCast(ptr_ty));
+                                if (c.LLVMGetTypeKind(elem_ty) == c.LLVMFunctionTypeKind) {
+                                    return ptr_val;
+                                }
+                                return c.LLVMBuildLoad2(self.builder, elem_ty, ptr_val, "deref");
+                            }
+                        }
                         const operand_val = try self.generateExpression(un.operand);
                         const operand_type = c.LLVMTypeOf(operand_val);
-                        if (c.LLVMGetTypeKind(operand_type) == c.LLVMPointerTypeKind) {
-                            const pointee_type = c.LLVMGetElementType(operand_type);
-                            return c.LLVMBuildLoad2(self.builder, pointee_type, operand_val, "deref");
-                        } else {
+                        if (c.LLVMGetTypeKind(operand_type) != c.LLVMPointerTypeKind) {
                             return errors.CodegenError.TypeMismatch;
                         }
+                        const pointee_type = c.LLVMGetElementType(operand_type);
+                        if (c.LLVMGetTypeKind(pointee_type) == c.LLVMFunctionTypeKind) {
+                            return operand_val;
+                        }
+                        return c.LLVMBuildLoad2(self.builder, pointee_type, operand_val, "deref");
                     },
                     'D' => {
                         if (un.operand.data == .identifier) {
