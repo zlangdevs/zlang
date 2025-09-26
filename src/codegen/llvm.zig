@@ -7,6 +7,7 @@ const bfck = @import("bf.zig");
 const control_flow = @import("control_flow.zig");
 const variables = @import("variables.zig");
 const functions = @import("functions.zig");
+const numeric = @import("numeric.zig");
 
 const c_bindings = @import("c_bindings.zig");
 const c = c_bindings.c;
@@ -329,7 +330,7 @@ pub const CodeGenerator = struct {
     pub const generateStructFieldAssignment = structs.generateStructFieldAssignment;
 
     pub fn generateExpressionFromString(self: *CodeGenerator, expr_str: []const u8) errors.CodegenError!c.LLVMValueRef {
-        if (std.fmt.parseInt(i64, expr_str, 10)) |value| {
+        if (numeric.parseNumericLiteral(expr_str)) |value| {
             return c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
         } else |_| {
             return errors.CodegenError.TypeMismatch;
@@ -1151,11 +1152,15 @@ pub const CodeGenerator = struct {
                 if (value_width == 1) {
                     return c.LLVMBuildZExt(self.builder, value, target_type, "zext");
                 } else {
-                    const target_type_name = self.getTypeNameFromLLVMType(@ptrCast(target_type));
-                    if (isUnsignedType(target_type_name)) {
+                    if (value_width <= 16) {
                         return c.LLVMBuildZExt(self.builder, value, target_type, "zext");
                     } else {
-                        return c.LLVMBuildSExt(self.builder, value, target_type, "sext");
+                        const target_type_name = self.getTypeNameFromLLVMType(@ptrCast(target_type));
+                        if (isUnsignedType(target_type_name)) {
+                            return c.LLVMBuildZExt(self.builder, value, target_type, "zext");
+                        } else {
+                            return c.LLVMBuildSExt(self.builder, value, target_type, "sext");
+                        }
                     }
                 }
             }
@@ -1412,7 +1417,7 @@ pub const CodeGenerator = struct {
                 }
             },
             .float_literal => |float| {
-                const float_val = std.fmt.parseFloat(f64, float.value) catch 0.0;
+                const float_val = numeric.parseFloatLiteral(float.value) catch 0.0;
 
                 if (expected_type) |type_name| {
                     if (std.mem.eql(u8, type_name, "f16")) {
@@ -1428,7 +1433,7 @@ pub const CodeGenerator = struct {
             },
             .number_literal => |num| {
                 if (std.mem.indexOf(u8, num.value, ".") != null) {
-                    const float_val = std.fmt.parseFloat(f64, num.value) catch 0.0;
+                    const float_val = numeric.parseFloatLiteral(num.value) catch 0.0;
 
                     if (expected_type) |type_name| {
                         if (std.mem.eql(u8, type_name, "f16")) {
@@ -1444,7 +1449,7 @@ pub const CodeGenerator = struct {
                 } else {
                     if (expected_type) |type_name| {
                         if (std.mem.eql(u8, type_name, "f16") or std.mem.eql(u8, type_name, "f32") or std.mem.eql(u8, type_name, "f64")) {
-                            const ival = std.fmt.parseInt(i64, num.value, 10) catch 0;
+                            const ival = numeric.parseNumericLiteral(num.value) catch 0;
                             const fval: f64 = @floatFromInt(ival);
                             if (std.mem.eql(u8, type_name, "f16")) {
                                 return c.LLVMConstReal(c.LLVMHalfTypeInContext(self.context), fval);
@@ -1457,25 +1462,25 @@ pub const CodeGenerator = struct {
                         const llvm_type = self.getLLVMType(type_name);
                         if (std.mem.startsWith(u8, type_name, "u")) {
                             if (std.mem.startsWith(u8, num.value, "-")) {
-                                const sval = std.fmt.parseInt(i64, num.value, 10) catch {
+                                const sval = numeric.parseNumericLiteral(num.value) catch {
                                     return errors.CodegenError.TypeMismatch;
                                 };
                                 const uval: u64 = @bitCast(sval);
                                 return c.LLVMConstInt(llvm_type, @as(c_ulonglong, @intCast(uval)), 0);
                             } else {
-                                const value = std.fmt.parseInt(u64, num.value, 10) catch {
+                                const value = numeric.parseNumericLiteralUnsigned(num.value) catch {
                                     return errors.CodegenError.TypeMismatch;
                                 };
                                 return c.LLVMConstInt(llvm_type, @as(c_ulonglong, @intCast(value)), 0);
                             }
                         } else {
-                            const value = std.fmt.parseInt(i64, num.value, 10) catch {
+                            const value = numeric.parseNumericLiteral(num.value) catch {
                                 return errors.CodegenError.TypeMismatch;
                             };
                             return c.LLVMConstInt(llvm_type, @as(c_ulonglong, @intCast(value)), 0);
                         }
                     } else {
-                        const value = std.fmt.parseInt(i64, num.value, 10) catch 0;
+                        const value = numeric.parseNumericLiteral(num.value) catch 0;
                         return c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
                     }
                 }
@@ -1787,15 +1792,15 @@ pub const CodeGenerator = struct {
                 return errors.CodegenError.TypeMismatch;
             },
             .float_literal => |float| {
-                const float_val = std.fmt.parseFloat(f64, float.value) catch 0.0;
+                const float_val = numeric.parseFloatLiteral(float.value) catch 0.0;
                 return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
             },
             .number_literal => |num| {
                 if (std.mem.indexOf(u8, num.value, ".") != null) {
-                    const float_val = std.fmt.parseFloat(f64, num.value) catch 0.0;
+                    const float_val = numeric.parseFloatLiteral(num.value) catch 0.0;
                     return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
                 } else {
-                    const value = std.fmt.parseInt(i64, num.value, 10) catch 0;
+                    const value = numeric.parseNumericLiteral(num.value) catch 0;
                     return c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
                 }
             },
