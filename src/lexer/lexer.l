@@ -23,11 +23,16 @@ IDENT    {LETTER}({LETTER}|{DIGIT})*
 STRING   \"([^"\\]|\\.)*\"
 CHAR     '([^'\\]|\\.)'
 INTEGER  {DIGIT}+
-FLOAT_BASIC  {DIGIT}+\.{DIGIT}+
-EXPONENT [eE][+-]?{DIGIT}+
-FLOAT_EXP_INT  {DIGIT}+{EXPONENT}
-FLOAT_EXP_DOT  {DIGIT}+\.{DIGIT}+{EXPONENT}
-FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
+HEX_LITERAL    0[xX][0-9a-fA-F]+(['][0-9a-fA-F]+)*
+BINARY_LITERAL 0[bB][01]+(['][01]+)*
+OCTAL_LITERAL  0[0-7]+(['][0-7]+)*
+DELIMITED_INTEGER {DIGIT}+(['][0-9]+)+
+DIGIT_WITH_DELIM {DIGIT}+(['][0-9]+)*
+FLOAT_BASIC  {DIGIT_WITH_DELIM}\.{DIGIT_WITH_DELIM}
+EXPONENT [eE][+-]?{DIGIT_WITH_DELIM}
+FLOAT_EXP_INT  {DIGIT_WITH_DELIM}{EXPONENT}
+FLOAT_EXP_DOT  {DIGIT_WITH_DELIM}\.{DIGIT_WITH_DELIM}{EXPONENT}
+FLOAT_DOT  \.{DIGIT_WITH_DELIM}{EXPONENT}?
 
 %%
 
@@ -51,6 +56,10 @@ FLOAT_DOT  \.{DIGIT}+{EXPONENT}?
 {FLOAT_EXP_INT}  { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_FLOAT; }
 {FLOAT_DOT}      { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_FLOAT; }
 {FLOAT_BASIC}    { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_FLOAT; }
+{HEX_LITERAL}        { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_NUMBER; }
+{BINARY_LITERAL}     { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_NUMBER; }
+{OCTAL_LITERAL}      { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_NUMBER; }
+{DELIMITED_INTEGER}  { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_NUMBER; }
 {INTEGER}        { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_NUMBER; }
 {STRING}    { yylval.string = strndup(yytext+1, yyleng-2); last_was_rparen = 0; return TOKEN_STRING; }
 {CHAR}      {

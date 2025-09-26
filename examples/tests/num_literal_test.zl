@@ -1,21 +1,185 @@
 fun main() >> i32 {
-    i32 simple  = 2;
-    i32 neg     = -2 as _;
-    i32 pos     = +2 as _;
-    i32 exp_pos = 2e2 as _;
-    f32 exp_neg = 2e-2;
-    f32 exp_zer = 2e0;
-    f32 neg_exp = -2e-2;
-    f32 neg_var = -neg_exp;
-    
-    @printf("(expected 2):%d\n", simple);
-    @printf("(expected -2):%d\n", neg);
-    @printf("(expected 2):%d\n", pos);
-    @printf("(expected 200):%d\n", exp_pos);
-    @printf("(expected 0.020000):%f\n", exp_neg);
-    @printf("(expected 2.000000)%f\n", exp_zer);
-    @printf("(expected -0.020000)%f\n", neg_exp);
-    @printf("(expected 0.020000)%f\n", neg_var);
-    
+    @printf("=== COMPREHENSIVE NUMERIC LITERALS TEST ===\n");
+    @printf("Testing C23-style numeric literal support\n\n");
+
+    ?? =========================
+    ?? DECIMAL LITERALS
+    ?? =========================
+    @printf("--- DECIMAL LITERALS ---\n");
+
+    i32 simple_dec = 42;
+    i32 negative_dec = -123;
+    i32 delimited_dec = 1'000'000;
+    i32 multi_delim_dec = 12'345'678;
+    i32 small_delim_dec = 1'234;
+
+    @printf("simple_dec (expected 42):%d\n", simple_dec);
+    @printf("negative_dec (expected -123):%d\n", negative_dec);
+    @printf("delimited_dec (expected 1000000):%d\n", delimited_dec);
+    @printf("multi_delim_dec (expected 12345678):%d\n", multi_delim_dec);
+    @printf("small_delim_dec (expected 1234):%d\n", small_delim_dec);
+
+    ?? =========================
+    ?? HEXADECIMAL LITERALS
+    ?? =========================
+    @printf("\n--- HEXADECIMAL LITERALS ---\n");
+
+    i32 hex_lowercase = 0xff;
+    i32 hex_uppercase = 0xFF;
+    i32 hex_mixed_case = 0xAbCd;
+    i32 hex_upper_x = 0X2A;
+    i32 hex_delimited = 0xFF'FF;
+    i32 hex_multi_delim = 0xDE'AD'BE'EF as _;
+    i32 hex_single = 0xF;
+    i32 hex_zero = 0x0;
+
+    @printf("hex_lowercase (expected 255):%d\n", hex_lowercase);
+    @printf("hex_uppercase (expected 255):%d\n", hex_uppercase);
+    @printf("hex_mixed_case (expected 43981):%d\n", hex_mixed_case);
+    @printf("hex_upper_x (expected 42):%d\n", hex_upper_x);
+    @printf("hex_delimited (expected 65535):%d\n", hex_delimited);
+    @printf("hex_multi_delim (expected -559038737):%d\n", hex_multi_delim);
+    @printf("hex_single (expected 15):%d\n", hex_single);
+    @printf("hex_zero (expected 0):%d\n", hex_zero);
+
+    ?? =========================
+    ?? BINARY LITERALS
+    ?? =========================
+    @printf("\n--- BINARY LITERALS ---\n");
+
+    i32 bin_simple = 0b101010;
+    i32 bin_upper = 0B1111;
+    i32 bin_delimited = 0b1010'1010;
+    i32 bin_multi_delim = 0b1101'1110'1010'1101;
+    i32 bin_single = 0b1;
+    i32 bin_zero = 0b0;
+    i32 bin_byte = 0b1111'1111;
+    i32 bin_alternating = 0b0101'0101'0101'0101;
+
+    @printf("bin_simple (expected 42):%d\n", bin_simple);
+    @printf("bin_upper (expected 15):%d\n", bin_upper);
+    @printf("bin_delimited (expected 170):%d\n", bin_delimited);
+    @printf("bin_multi_delim (expected 57005):%d\n", bin_multi_delim);
+    @printf("bin_single (expected 1):%d\n", bin_single);
+    @printf("bin_zero (expected 0):%d\n", bin_zero);
+    @printf("bin_byte (expected 255):%d\n", bin_byte);
+    @printf("bin_alternating (expected 21845):%d\n", bin_alternating);
+
+    ?? =========================
+    ?? OCTAL LITERALS
+    ?? =========================
+    @printf("\n--- OCTAL LITERALS ---\n");
+
+    i32 oct_simple = 052;
+    i32 oct_larger = 0123;
+    i32 oct_max_3digit = 0777;
+    i32 oct_single = 07;
+    i32 oct_zero = 00;
+    i32 oct_permissions = 0644;
+
+    @printf("oct_simple (expected 42):%d\n", oct_simple);
+    @printf("oct_larger (expected 83):%d\n", oct_larger);
+    @printf("oct_max_3digit (expected 511):%d\n", oct_max_3digit);
+    @printf("oct_single (expected 7):%d\n", oct_single);
+    @printf("oct_zero (expected 0):%d\n", oct_zero);
+    @printf("oct_permissions (expected 420):%d\n", oct_permissions);
+
+    ?? =========================
+    ?? FLOATING POINT LITERALS
+    ?? =========================
+    @printf("\n--- FLOATING POINT LITERALS ---\n");
+
+    f32 float_simple = 3.14159;
+    f32 float_delimited = 1'000.5;
+    f32 float_multi_delim = 12'345.678'9;
+    f32 float_small_delim = 1.23'4;
+    f32 float_leading_dot = .123'456;
+    f32 float_trailing_zero = 1'000.0;
+
+    @printf("float_simple (expected 3.141590):%f\n", float_simple);
+    @printf("float_delimited (expected 1000.500000):%f\n", float_delimited);
+    @printf("float_multi_delim (expected 12345.678711):%f\n", float_multi_delim);
+    @printf("float_small_delim (expected 1.234000):%f\n", float_small_delim);
+    @printf("float_leading_dot (expected 0.123456):%f\n", float_leading_dot);
+    @printf("float_trailing_zero (expected 1000.000000):%f\n", float_trailing_zero);
+
+    ?? =========================
+    ?? EXPONENTIAL NOTATION
+    ?? =========================
+    @printf("\n--- EXPONENTIAL NOTATION ---\n");
+
+    f32 exp_simple = 1.23e2;
+    f32 exp_negative = 1.23e-2;
+    f32 exp_positive = 1.23e+2;
+    f32 exp_delimited = 1'000.5e2;
+    f32 exp_delim_exp = 1.23e1'0 as _;
+    f32 exp_complex = 12'345.67e-3;
+
+    @printf("exp_simple (expected 123.000000):%f\n", exp_simple);
+    @printf("exp_negative (expected 0.012300):%f\n", exp_negative);
+    @printf("exp_positive (expected 123.000000):%f\n", exp_positive);
+    @printf("exp_delimited (expected 100050.000000):%f\n", exp_delimited);
+    @printf("exp_delim_exp (expected 12300000256.000000):%f\n", exp_delim_exp);
+    @printf("exp_complex (expected 12.345670):%f\n", exp_complex);
+
+    ?? =========================
+    ?? MIXED EXPRESSIONS
+    ?? =========================
+    @printf("\n--- MIXED EXPRESSIONS ---\n");
+
+    i32 sum_mixed = 0x10 + 0b1000 + 020 + 8;
+    i32 hex_calc = 0xFF - 0xAB;
+    i32 bin_shift = (0b1010 << 0b10) as _;
+    i32 delim_sum = 1'000 + 2'500;
+
+    @printf("sum_mixed (16+8+16+8, expected 48):%d\n", sum_mixed);
+    @printf("hex_calc (255-171, expected 84):%d\n", hex_calc);
+    @printf("bin_shift (10<<2, expected 40):%d\n", bin_shift);
+    @printf("delim_sum (1000+2500, expected 3500):%d\n", delim_sum);
+
+    ?? =========================
+    ?? EDGE CASES
+    ?? =========================
+    @printf("\n--- EDGE CASES ---\n");
+
+    i32 max_hex_byte = 0xFF;
+    i32 max_bin_byte = 0b1111'1111;
+    i32 max_oct_byte = 0377;
+    i32 zero_variants = 0 + 0x0 + 0b0 + 00;
+
+    @printf("max_hex_byte (expected 255):%d\n", max_hex_byte);
+    @printf("max_bin_byte (expected 255):%d\n", max_bin_byte);
+    @printf("max_oct_byte (expected 255):%d\n", max_oct_byte);
+    @printf("zero_variants (0+0+0+0, expected 0):%d\n", zero_variants);
+
+    ?? =========================
+    ?? COMPATIBILITY TEST
+    ?? =========================
+    @printf("\n--- C23 COMPATIBILITY EXAMPLES ---\n");
+
+    ?? Examples from C23 standard
+    i32 c23_oct1 = 052;    ?? 42 in decimal
+    i32 c23_oct2 = 0123;   ?? 83 in decimal
+    i32 c23_hex1 = 0x2A;   ?? 42 in decimal
+    i32 c23_hex2 = 0xFF;   ?? 255 in decimal
+    i32 c23_hex3 = 0X1A2B; ?? can use 0X
+    i32 c23_bin1 = 0b101010;  ?? 42 in decimal
+    i32 c23_bin2 = 0B1111;    ?? 15 in decimal
+    i32 c23_delim_dec = 1'000'000;
+    i32 c23_delim_hex = 0xFF'FF'FF'FF as _;
+    i32 c23_delim_bin = 0b1010'1010;
+
+    @printf("c23_oct1 (052, expected 42):%d\n", c23_oct1);
+    @printf("c23_oct2 (0123, expected 83):%d\n", c23_oct2);
+    @printf("c23_hex1 (0x2A, expected 42):%d\n", c23_hex1);
+    @printf("c23_hex2 (0xFF, expected 255):%d\n", c23_hex2);
+    @printf("c23_hex3 (0X1A2B, expected 6699):%d\n", c23_hex3);
+    @printf("c23_bin1 (0b101010, expected 42):%d\n", c23_bin1);
+    @printf("c23_bin2 (0B1111, expected 15):%d\n", c23_bin2);
+    @printf("c23_delim_dec (1'000'000, expected 1000000):%d\n", c23_delim_dec);
+    @printf("c23_delim_hex (0xFF'FF'FF'FF, expected -1):%d\n", c23_delim_hex);
+    @printf("c23_delim_bin (0b1010'1010, expected 170):%d\n", c23_delim_bin);
+
+    @printf("\n=== ALL NUMERIC LITERAL TESTS COMPLETED ===\n");
     return 0;
 }
