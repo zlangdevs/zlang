@@ -810,6 +810,93 @@ export fn zig_create_array_compound_assignment(array_ptr: ?*anyopaque, index_ptr
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_simd_initializer(elements_ptr: ?*anyopaque) ?*anyopaque {
+    var elements = std.ArrayList(*ast.Node){};
+    if (elements_ptr) |ptr| {
+        const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
+        elements = node_list.items;
+    }
+    const simd_init_data = ast.NodeData{
+        .simd_initializer = ast.SimdInitializer{
+            .elements = elements,
+        },
+    };
+    const node = ast.Node.create(global_allocator, simd_init_data) catch return null;
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_simd_index(simd_ptr: ?*anyopaque, index_ptr: ?*anyopaque) ?*anyopaque {
+    if (simd_ptr == null or index_ptr == null) return null;
+    const simd = @as(*ast.Node, @ptrFromInt(@intFromPtr(simd_ptr.?)));
+    const index = @as(*ast.Node, @ptrFromInt(@intFromPtr(index_ptr.?)));
+    const simd_index_data = ast.NodeData{
+        .simd_index = ast.SimdIndex{
+            .simd = simd,
+            .index = index,
+        },
+    };
+    const node = ast.Node.create(global_allocator, simd_index_data) catch return null;
+    set_node_line(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_simd_assignment(simd_ptr: ?*anyopaque, index_ptr: ?*anyopaque, value_ptr: ?*anyopaque) ?*anyopaque {
+    if (simd_ptr == null or index_ptr == null or value_ptr == null) return null;
+    const simd = @as(*ast.Node, @ptrFromInt(@intFromPtr(simd_ptr.?)));
+    const index = @as(*ast.Node, @ptrFromInt(@intFromPtr(index_ptr.?)));
+    const value = @as(*ast.Node, @ptrFromInt(@intFromPtr(value_ptr.?)));
+    const simd_assignment_data = ast.NodeData{
+        .simd_assignment = ast.SimdAssignment{
+            .simd = simd,
+            .index = index,
+            .value = value,
+        },
+    };
+    const node = ast.Node.create(global_allocator, simd_assignment_data) catch return null;
+    set_node_line(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_simd_compound_assignment(simd_ptr: ?*anyopaque, index_ptr: ?*anyopaque, value_ptr: ?*anyopaque, op: c_int) ?*anyopaque {
+    if (simd_ptr == null or index_ptr == null or value_ptr == null) return null;
+    const simd = @as(*ast.Node, @ptrFromInt(@intFromPtr(simd_ptr.?)));
+    const index = @as(*ast.Node, @ptrFromInt(@intFromPtr(index_ptr.?)));
+    const value = @as(*ast.Node, @ptrFromInt(@intFromPtr(value_ptr.?)));
+    const simd_compound_assignment_data = ast.NodeData{
+        .simd_compound_assignment = ast.SimdCompoundAssignment{
+            .simd = simd,
+            .index = index,
+            .value = value,
+            .op = @as(u8, @intCast(op)),
+        },
+    };
+    const node = ast.Node.create(global_allocator, simd_compound_assignment_data) catch return null;
+    set_node_line(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_simd_method_call(simd_ptr: ?*anyopaque, method_name_ptr: [*c]const u8, args_ptr: ?*anyopaque) ?*anyopaque {
+    if (simd_ptr == null or method_name_ptr == null) return null;
+    const simd = @as(*ast.Node, @ptrFromInt(@intFromPtr(simd_ptr.?)));
+    const method_name = std.mem.span(method_name_ptr);
+    const method_name_copy = global_allocator.dupe(u8, method_name) catch return null;
+    var args = std.ArrayList(*ast.Node){};
+    if (args_ptr) |ptr| {
+        const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
+        args = node_list.items;
+    }
+    const simd_method_data = ast.NodeData{
+        .simd_method_call = ast.SimdMethodCall{
+            .simd = simd,
+            .method_name = method_name_copy,
+            .args = args,
+        },
+    };
+    const node = ast.Node.create(global_allocator, simd_method_data) catch return null;
+    set_node_line(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_create_method_call(object_ptr: ?*anyopaque, method_name_ptr: [*c]const u8, args_ptr: ?*anyopaque) ?*anyopaque {
     if (object_ptr == null or method_name_ptr == null) return null;
 
