@@ -28,6 +28,11 @@ pub const NodeType = enum {
     array_index,
     array_assignment,
     array_compound_assignment,
+    simd_initializer,
+    simd_index,
+    simd_assignment,
+    simd_compound_assignment,
+    simd_method_call,
     c_function_decl,
     use_stmt,
     enum_decl,
@@ -158,6 +163,10 @@ pub const ArrayInitializer = struct {
     elements: std.ArrayList(*Node),
 };
 
+pub const SimdInitializer = struct {
+    elements: std.ArrayList(*Node),
+};
+
 pub const ArrayIndex = struct {
     array: *Node,
     index: *Node,
@@ -174,6 +183,30 @@ pub const ArrayCompoundAssignment = struct {
     index: *Node,
     value: *Node,
     op: u8,
+};
+
+pub const SimdIndex = struct {
+    simd: *Node,
+    index: *Node,
+};
+
+pub const SimdAssignment = struct {
+    simd: *Node,
+    index: *Node,
+    value: *Node,
+};
+
+pub const SimdCompoundAssignment = struct {
+    simd: *Node,
+    index: *Node,
+    value: *Node,
+    op: u8,
+};
+
+pub const SimdMethodCall = struct {
+    simd: *Node,
+    method_name: []const u8,
+    args: std.ArrayList(*Node),
 };
 
 pub const CFunctionDecl = struct {
@@ -256,6 +289,11 @@ pub const NodeData = union(NodeType) {
     array_index: ArrayIndex,
     array_assignment: ArrayAssignment,
     array_compound_assignment: ArrayCompoundAssignment,
+    simd_initializer: SimdInitializer,
+    simd_index: SimdIndex,
+    simd_assignment: SimdAssignment,
+    simd_compound_assignment: SimdCompoundAssignment,
+    simd_method_call: SimdMethodCall,
     c_function_decl: CFunctionDecl,
     use_stmt: UseStmt,
     enum_decl: EnumDecl,
@@ -386,6 +424,42 @@ pub const Node = struct {
                 arr_cass.array.destroy();
                 arr_cass.index.destroy();
                 arr_cass.value.destroy();
+            },
+            .simd_initializer => |*simd_init| {
+                for (simd_init.elements.items) |element| {
+                    element.destroy();
+                }
+                simd_init.elements.deinit(self.allocator);
+            },
+            .simd_index => |simd_idx| {
+                simd_idx.simd.destroy();
+                simd_idx.index.destroy();
+            },
+            .simd_assignment => |simd_ass| {
+                simd_ass.simd.destroy();
+                simd_ass.index.destroy();
+                simd_ass.value.destroy();
+            },
+            .simd_compound_assignment => |simd_cass| {
+                simd_cass.simd.destroy();
+                simd_cass.index.destroy();
+                simd_cass.value.destroy();
+            },
+            .simd_method_call => |*simd_method| {
+                simd_method.simd.destroy();
+                for (simd_method.args.items) |arg| {
+                    arg.destroy();
+                }
+                simd_method.args.deinit(self.allocator);
+            },
+            .c_function_decl => |*c_func| {
+                self.allocator.free(c_func.name);
+                self.allocator.free(c_func.return_type);
+                for (c_func.parameters.items) |param| {
+                    self.allocator.free(param.name);
+                    self.allocator.free(param.type_name);
+                }
+                c_func.parameters.deinit(self.allocator);
             },
             .use_stmt => |use_stmt| {
                 self.allocator.free(use_stmt.module_path);
@@ -687,6 +761,53 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             printIndent(indent + 1, true, false);
             std.debug.print("] and \n", .{});
             printAST(arr_cass.value, indent + 2, true, false);
+        },
+        .simd_initializer => |simd_init| {
+            std.debug.print("⚡ SIMD Initializer ({} elements)\n", .{simd_init.elements.items.len});
+            for (simd_init.elements.items, 0..) |element, i| {
+                const is_elem_last = i == simd_init.elements.items.len - 1;
+                printAST(element, indent + 1, is_elem_last, false);
+            }
+        },
+        .simd_index => |simd_idx| {
+            std.debug.print("⚡ SIMD Index:\n", .{});
+            printAST(simd_idx.simd, indent + 1, false, false);
+            printIndent(indent + 1, true, false);
+            std.debug.print("[\n", .{});
+            printAST(simd_idx.index, indent + 2, true, false);
+            std.debug.print("    ]\n", .{});
+        },
+        .simd_assignment => |simd_ass| {
+            std.debug.print("⚡ SIMD Assignment:\n", .{});
+            printAST(simd_ass.simd, indent + 1, false, false);
+            printIndent(indent + 1, false, false);
+            std.debug.print("[\n", .{});
+            printAST(simd_ass.index, indent + 2, false, false);
+            printIndent(indent + 1, true, false);
+            std.debug.print("] = \n", .{});
+            printAST(simd_ass.value, indent + 2, true, false);
+        },
+        .simd_compound_assignment => |simd_cass| {
+            std.debug.print("⚡ SIMD Compound Assignment: \x1b[35m{c}= \x1b[0m\n", .{simd_cass.op});
+            printAST(simd_cass.simd, indent + 1, false, false);
+            printIndent(indent + 1, false, false);
+            std.debug.print("[\n", .{});
+            printAST(simd_cass.index, indent + 2, false, false);
+            printIndent(indent + 1, true, false);
+            std.debug.print("] and \n", .{});
+            printAST(simd_cass.value, indent + 2, true, false);
+        },
+        .simd_method_call => |simd_method| {
+            std.debug.print("⚡ SIMD Method Call: \x1b[32m{s}\x1b[0m\n", .{simd_method.method_name});
+            std.debug.print("SIMD object:\n", .{});
+            printAST(simd_method.simd, indent + 1, false, false);
+            if (simd_method.args.items.len > 0) {
+                std.debug.print("Arguments:\n", .{});
+                for (simd_method.args.items, 0..) |arg, i| {
+                    const is_arg_last = i == simd_method.args.items.len - 1;
+                    printAST(arg, indent + 1, is_arg_last, false);
+                }
+            }
         },
         .c_function_decl => |c_func| {
             if (c_func.parameters.items.len > 0) {

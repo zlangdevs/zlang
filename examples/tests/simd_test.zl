@@ -1,0 +1,166 @@
+... TODO: implement reassign operators(+=, -=) ...
+
+fun main() >> i32 {
+    @printf("=== Comprehensive SIMD Test ===\n");
+
+    ?? Test 1: SIMD Vector Declarations and Initialization
+    @printf("\n1. SIMD Vector Declarations:\n");
+    simd<f32, 4> float_vec1 = {1.0, 2.0, 3.0, 4.0};
+    simd<f32, 4> float_vec2 = {5.0, 6.0, 7.0, 8.0};
+    simd<i32, 4> int_vec1 = {10, 20, 30, 40};
+    simd<i32, 4> int_vec2 = {2, 4, 6, 8};
+    simd<f64, 2> double_vec1 = {1.5, 2.5};
+    simd<f64, 2> double_vec2 = {3.5, 4.5};
+
+    @printf("float_vec1 = [%.1f, %.1f, %.1f, %.1f]\n", float_vec1[0], float_vec1[1], float_vec1[2], float_vec1[3]);
+    @printf("float_vec2 = [%.1f, %.1f, %.1f, %.1f]\n", float_vec2[0], float_vec2[1], float_vec2[2], float_vec2[3]);
+    @printf("int_vec1 = [%d, %d, %d, %d]\n", int_vec1[0], int_vec1[1], int_vec1[2], int_vec1[3]);
+    @printf("int_vec2 = [%d, %d, %d, %d]\n", int_vec2[0], int_vec2[1], int_vec2[2], int_vec2[3]);
+    @printf("double_vec1 = [%.1f, %.1f]\n", double_vec1[0], double_vec1[1]);
+    @printf("double_vec2 = [%.1f, %.1f]\n", double_vec2[0], double_vec2[1]);
+
+    ?? Test 2: Element Access and Assignment
+    @printf("\n2. Element Access and Assignment:\n");
+    f32 first_element = float_vec1[0];
+    i32 second_element = int_vec1[1];
+    @printf("Original: float_vec1[0] = %.1f, int_vec1[1] = %d\n", first_element, second_element);
+
+    float_vec1[0] = 100.0;
+    int_vec1[1] = 999;
+    @printf("Modified: float_vec1[0] = %.1f, int_vec1[1] = %d\n", float_vec1[0], int_vec1[1]);
+
+    ?? Test 3: SIMD Arithmetic Operations - Float Vectors
+    @printf("\n3. Float SIMD Arithmetic Operations:\n");
+    simd<f32, 4> add_result = float_vec1 + float_vec2;
+    simd<f32, 4> sub_result = float_vec2 - float_vec1;
+    simd<f32, 4> mul_result = float_vec1 * float_vec2;
+    simd<f32, 4> div_result = float_vec2 / float_vec1;
+
+    @printf("Addition:       [%.1f, %.1f, %.1f, %.1f] + [%.1f, %.1f, %.1f, %.1f] = [%.1f, %.1f, %.1f, %.1f]\n",
+        float_vec1[0], float_vec1[1], float_vec1[2], float_vec1[3],
+        float_vec2[0], float_vec2[1], float_vec2[2], float_vec2[3],
+        add_result[0], add_result[1], add_result[2], add_result[3]);
+
+    @printf("Subtraction:    [%.1f, %.1f, %.1f, %.1f] - [%.1f, %.1f, %.1f, %.1f] = [%.1f, %.1f, %.1f, %.1f]\n",
+        float_vec2[0], float_vec2[1], float_vec2[2], float_vec2[3],
+        float_vec1[0], float_vec1[1], float_vec1[2], float_vec1[3],
+        sub_result[0], sub_result[1], sub_result[2], sub_result[3]);
+
+    @printf("Multiplication: [%.1f, %.1f, %.1f, %.1f] * [%.1f, %.1f, %.1f, %.1f] = [%.1f, %.1f, %.1f, %.1f]\n",
+        float_vec1[0], float_vec1[1], float_vec1[2], float_vec1[3],
+        float_vec2[0], float_vec2[1], float_vec2[2], float_vec2[3],
+        mul_result[0], mul_result[1], mul_result[2], mul_result[3]);
+
+    @printf("Division:       [%.1f, %.1f, %.1f, %.1f] / [%.1f, %.1f, %.1f, %.1f] = [%.1f, %.1f, %.1f, %.1f]\n",
+        float_vec2[0], float_vec2[1], float_vec2[2], float_vec2[3],
+        float_vec1[0], float_vec1[1], float_vec1[2], float_vec1[3],
+        div_result[0], div_result[1], div_result[2], div_result[3]);
+
+    ?? Test 4: SIMD Arithmetic Operations - Integer Vectors
+    @printf("\n4. Integer SIMD Arithmetic Operations:\n");
+    simd<i32, 4> iadd_result = int_vec1 + int_vec2;
+    simd<i32, 4> isub_result = int_vec1 - int_vec2;
+    simd<i32, 4> imul_result = int_vec1 * int_vec2;
+    simd<i32, 4> idiv_result = int_vec1 / int_vec2;
+
+    @printf("Addition:       [%d, %d, %d, %d] + [%d, %d, %d, %d] = [%d, %d, %d, %d]\n",
+        int_vec1[0], int_vec1[1], int_vec1[2], int_vec1[3],
+        int_vec2[0], int_vec2[1], int_vec2[2], int_vec2[3],
+        iadd_result[0], iadd_result[1], iadd_result[2], iadd_result[3]);
+
+    @printf("Subtraction:    [%d, %d, %d, %d] - [%d, %d, %d, %d] = [%d, %d, %d, %d]\n",
+        int_vec1[0], int_vec1[1], int_vec1[2], int_vec1[3],
+        int_vec2[0], int_vec2[1], int_vec2[2], int_vec2[3],
+        isub_result[0], isub_result[1], isub_result[2], isub_result[3]);
+
+    @printf("Multiplication: [%d, %d, %d, %d] * [%d, %d, %d, %d] = [%d, %d, %d, %d]\n",
+        int_vec1[0], int_vec1[1], int_vec1[2], int_vec1[3],
+        int_vec2[0], int_vec2[1], int_vec2[2], int_vec2[3],
+        imul_result[0], imul_result[1], imul_result[2], imul_result[3]);
+
+    @printf("Division:       [%d, %d, %d, %d] / [%d, %d, %d, %d] = [%d, %d, %d, %d]\n",
+        int_vec1[0], int_vec1[1], int_vec1[2], int_vec1[3],
+        int_vec2[0], int_vec2[1], int_vec2[2], int_vec2[3],
+        idiv_result[0], idiv_result[1], idiv_result[2], idiv_result[3]);
+
+    ?? Test 5: SIMD Bitwise Operations - Integer Vectors
+    @printf("\n5. Integer SIMD Bitwise Operations:\n");
+    simd<i32, 4> and_result = int_vec1 & int_vec2;
+    simd<i32, 4> or_result = int_vec1 | int_vec2;
+    simd<i32, 4> xor_result = int_vec1 ^ int_vec2;
+
+    @printf("Bitwise AND:    [%d, %d, %d, %d] & [%d, %d, %d, %d] = [%d, %d, %d, %d]\n",
+        int_vec1[0], int_vec1[1], int_vec1[2], int_vec1[3],
+        int_vec2[0], int_vec2[1], int_vec2[2], int_vec2[3],
+        and_result[0], and_result[1], and_result[2], and_result[3]);
+
+    @printf("Bitwise OR:     [%d, %d, %d, %d] | [%d, %d, %d, %d] = [%d, %d, %d, %d]\n",
+        int_vec1[0], int_vec1[1], int_vec1[2], int_vec1[3],
+        int_vec2[0], int_vec2[1], int_vec2[2], int_vec2[3],
+        or_result[0], or_result[1], or_result[2], or_result[3]);
+
+    @printf("Bitwise XOR:    [%d, %d, %d, %d] ^ [%d, %d, %d, %d] = [%d, %d, %d, %d]\n",
+        int_vec1[0], int_vec1[1], int_vec1[2], int_vec1[3],
+        int_vec2[0], int_vec2[1], int_vec2[2], int_vec2[3],
+        xor_result[0], xor_result[1], xor_result[2], xor_result[3]);
+
+    ?? Test 6: Double-precision SIMD Operations
+    @printf("\n6. Double-precision SIMD Operations:\n");
+    simd<f64, 2> dadd_result = double_vec1 + double_vec2;
+    simd<f64, 2> dmul_result = double_vec1 * double_vec2;
+
+    @printf("Double ADD:     [%.1f, %.1f] + [%.1f, %.1f] = [%.1f, %.1f]\n",
+        double_vec1[0], double_vec1[1],
+        double_vec2[0], double_vec2[1],
+        dadd_result[0], dadd_result[1]);
+
+    @printf("Double MUL:     [%.1f, %.1f] * [%.1f, %.1f] = [%.1f, %.1f]\n",
+        double_vec1[0], double_vec1[1],
+        double_vec2[0], double_vec2[1],
+        dmul_result[0], dmul_result[1]);
+
+    ?? Test 7: Different SIMD Vector Sizes
+    @printf("\n7. Different Vector Sizes:\n");
+    simd<f32, 2> small_vec1 = {10.0, 20.0};
+    simd<f32, 2> small_vec2 = {5.0, 2.0};
+    simd<f32, 8> large_vec1 = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0};
+    simd<f32, 8> large_vec2 = {2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0};
+
+    simd<f32, 2> small_result = small_vec1 / small_vec2;
+    simd<f32, 8> large_result = large_vec1 * large_vec2;
+
+    @printf("2-element:      [%.1f, %.1f] / [%.1f, %.1f] = [%.1f, %.1f]\n",
+        small_vec1[0], small_vec1[1],
+        small_vec2[0], small_vec2[1],
+        small_result[0], small_result[1]);
+
+    @printf("8-element:      [%.0f, %.0f, %.0f, %.0f, %.0f, %.0f, %.0f, %.0f] * [%.0f, %.0f, %.0f, %.0f, %.0f, %.0f, %.0f, %.0f]\n",
+        large_vec1[0], large_vec1[1], large_vec1[2], large_vec1[3], large_vec1[4], large_vec1[5], large_vec1[6], large_vec1[7],
+        large_vec2[0], large_vec2[1], large_vec2[2], large_vec2[3], large_vec2[4], large_vec2[5], large_vec2[6], large_vec2[7]);
+    @printf("                = [%.0f, %.0f, %.0f, %.0f, %.0f, %.0f, %.0f, %.0f]\n",
+        large_result[0], large_result[1], large_result[2], large_result[3], large_result[4], large_result[5], large_result[6], large_result[7]);
+
+    ?? Test 8: Mixed Operations and Reassignment
+    @printf("\n8. Complex Operations:\n");
+    simd<f32, 4> result1 = float_vec1 + float_vec2;
+    simd<f32, 4> result2 = result1 * float_vec1;
+    simd<f32, 4> final_result = result2 - float_vec2;
+
+    @printf("Complex:        ((vec1 + vec2) * vec1) - vec2 = [%.1f, %.1f, %.1f, %.1f]\n",
+        final_result[0], final_result[1], final_result[2], final_result[3]);
+
+    ?? Test 9: Element modification and vector operations
+    @printf("\n9. Element Modification + Vector Ops:\n");
+    simd<i32, 4> modify_vec = {100, 200, 300, 400};
+    @printf("Original:       [%d, %d, %d, %d]\n", modify_vec[0], modify_vec[1], modify_vec[2], modify_vec[3]);
+
+    modify_vec[1] = 999;
+    modify_vec[3] = 111;
+    @printf("After modify:   [%d, %d, %d, %d]\n", modify_vec[0], modify_vec[1], modify_vec[2], modify_vec[3]);
+
+    simd<i32, 4> final_int_result = modify_vec + int_vec2;
+    @printf("After + vec2:   [%d, %d, %d, %d]\n", final_int_result[0], final_int_result[1], final_int_result[2], final_int_result[3]);
+
+    @printf("\n=== All SIMD Tests Completed Successfully! ===\n");
+    return 0;
+}

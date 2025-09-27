@@ -345,7 +345,7 @@ pub const CodeGenerator = struct {
             try self.generateArrayReassignment(ident.name, as.value);
         } else {
             const value_raw = try self.generateExpressionWithContext(as.value, var_info.type_name);
-            const final_value = try self.castWithRules(value_raw, @ptrCast(var_info.type_ref), as.value);
+            const final_value = try self.castWithSourceRules(value_raw, @ptrCast(var_info.type_ref), as.value);
             _ = c.LLVMBuildStore(@ptrCast(self.builder), @ptrCast(final_value), @ptrCast(var_info.value));
         }
     }
@@ -515,6 +515,8 @@ pub const CodeGenerator = struct {
 
                 if (std.mem.startsWith(u8, decl.type_name, "arr<") and std.mem.endsWith(u8, decl.type_name, ">")) {
                     try self.generateArrayDeclaration(decl);
+                } else if (std.mem.startsWith(u8, decl.type_name, "simd<") and std.mem.endsWith(u8, decl.type_name, ">")) {
+                    try self.generateSimdDeclaration(decl);
                 } else {
                     const var_type = self.getLLVMType(decl.type_name);
                     const alloca = c.LLVMBuildAlloca(@ptrCast(self.builder), @ptrCast(var_type), decl.name.ptr);
@@ -577,11 +579,11 @@ pub const CodeGenerator = struct {
                                 }
                             }
                             const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
-                            const casted_value = try self.castWithRules(init_value, var_type, initializer);
+                            const casted_value = try self.castWithSourceRules(init_value, var_type, initializer);
                             _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                         } else {
                             const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
-                            const casted_value = try self.castWithRules(init_value, var_type, initializer);
+                            const casted_value = try self.castWithSourceRules(init_value, var_type, initializer);
                             _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                         }
                     } else if (c.LLVMGetTypeKind(var_type) == c.LLVMStructTypeKind) {
@@ -645,7 +647,23 @@ pub const CodeGenerator = struct {
                 try self.generateContinueStatement();
             },
             .array_assignment => |arr_ass| {
-                try self.generateArrayAssignment(arr_ass);
+                const array_name = try self.getBaseIdentifierName(arr_ass.array);
+                defer self.allocator.free(array_name);
+                const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
+
+                // Check if this is a SIMD vector assignment
+                if (std.mem.startsWith(u8, var_info.type_name, "simd<")) {
+                    const simd_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_simd");
+                    var index_value = try self.generateExpression(arr_ass.index);
+                    index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
+                    const element_type = c.LLVMGetElementType(var_info.type_ref);
+                    const element_value = try self.generateExpression(arr_ass.value);
+                    const casted_value = try self.castWithRules(element_value, element_type, arr_ass.value);
+                    const updated_simd = c.LLVMBuildInsertElement(self.builder, simd_val, casted_value, index_value, "simd_insert");
+                    _ = c.LLVMBuildStore(self.builder, updated_simd, var_info.value);
+                } else {
+                    try self.generateArrayAssignment(arr_ass);
+                }
             },
             .array_compound_assignment => |arr_cass| {
                 var collected_indices = std.ArrayList(c.LLVMValueRef){};
@@ -1016,6 +1034,157 @@ pub const CodeGenerator = struct {
         }
     }
 
+    fn generateSimdDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.CodegenError!void {
+        const inner = decl.type_name[5 .. decl.type_name.len - 1];
+        var comma_pos: ?usize = null;
+        var search_idx: usize = inner.len;
+        while (search_idx > 0) {
+            search_idx -= 1;
+            if (inner[search_idx] == ',') {
+                comma_pos = search_idx;
+                break;
+            }
+        }
+        if (comma_pos) |pos| {
+            const element_type_part = inner[0..pos];
+            const element_type_name = std.mem.trim(u8, element_type_part, " \t");
+            const size_part = inner[pos + 1 ..];
+            const size_str = std.mem.trim(u8, size_part, " \t");
+            const vector_size = std.fmt.parseInt(u32, size_str, 10) catch {
+                return errors.CodegenError.TypeMismatch;
+            };
+            const element_type = self.getLLVMType(element_type_name);
+            const vector_type = c.LLVMVectorType(@ptrCast(element_type), vector_size);
+            const alloca = c.LLVMBuildAlloca(self.builder, vector_type, decl.name.ptr);
+            try CodeGenerator.putVariable(self, decl.name, structs.VariableInfo{
+                .value = @ptrCast(alloca),
+                .type_ref = @ptrCast(vector_type),
+                .type_name = decl.type_name,
+            });
+            if (decl.initializer) |initializer| {
+                switch (initializer.data) {
+                    .array_initializer => |init_list| {
+                        if (init_list.elements.items.len == 0) {
+                            return errors.CodegenError.TypeMismatch;
+                        }
+                        var result = c.LLVMGetUndef(vector_type);
+                        for (init_list.elements.items, 0..) |element, i| {
+                            const element_value = try self.generateExpression(element);
+                            const casted_value = self.castToType(element_value, element_type);
+                            const index = c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(i)), 0);
+                            result = c.LLVMBuildInsertElement(self.builder, result, casted_value, index, "simd_init");
+                        }
+                        _ = c.LLVMBuildStore(self.builder, result, alloca);
+                    },
+                    .binary_op => {
+                        const expr_value = try self.generateExpression(initializer);
+                        _ = c.LLVMBuildStore(self.builder, expr_value, alloca);
+                    },
+                    else => {
+                        return errors.CodegenError.TypeMismatch;
+                    },
+                }
+            }
+        } else {
+            return errors.CodegenError.TypeMismatch;
+        }
+    }
+
+    fn generateSimdBinaryOp(self: *CodeGenerator, op: u8, lhs: c.LLVMValueRef, rhs: c.LLVMValueRef) errors.CodegenError!c.LLVMValueRef {
+        const lhs_type = c.LLVMTypeOf(lhs);
+        const element_type = c.LLVMGetElementType(lhs_type);
+        const type_kind = c.LLVMGetTypeKind(element_type);
+        return switch (op) {
+            '+' => if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind)
+                c.LLVMBuildFAdd(self.builder, lhs, rhs, "simd_fadd")
+            else
+                c.LLVMBuildAdd(self.builder, lhs, rhs, "simd_add"),
+            '-' => if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind)
+                c.LLVMBuildFSub(self.builder, lhs, rhs, "simd_fsub")
+            else
+                c.LLVMBuildSub(self.builder, lhs, rhs, "simd_sub"),
+            '*' => if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind)
+                c.LLVMBuildFMul(self.builder, lhs, rhs, "simd_fmul")
+            else
+                c.LLVMBuildMul(self.builder, lhs, rhs, "simd_mul"),
+            '/' => if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind)
+                c.LLVMBuildFDiv(self.builder, lhs, rhs, "simd_fdiv")
+            else
+                c.LLVMBuildSDiv(self.builder, lhs, rhs, "simd_sdiv"),
+            'A' => c.LLVMBuildAnd(self.builder, lhs, rhs, "simd_and"),
+            '$' => c.LLVMBuildOr(self.builder, lhs, rhs, "simd_or"),
+            '^' => c.LLVMBuildXor(self.builder, lhs, rhs, "simd_xor"),
+            '=' => if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind)
+                c.LLVMBuildFCmp(self.builder, c.LLVMRealOEQ, lhs, rhs, "simd_fcmp_eq")
+            else
+                c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, lhs, rhs, "simd_icmp_eq"),
+            '!' => if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind)
+                c.LLVMBuildFCmp(self.builder, c.LLVMRealONE, lhs, rhs, "simd_fcmp_ne")
+            else
+                c.LLVMBuildICmp(self.builder, c.LLVMIntNE, lhs, rhs, "simd_icmp_ne"),
+            'L' => if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind)
+                c.LLVMBuildFCmp(self.builder, c.LLVMRealOLT, lhs, rhs, "simd_fcmp_lt")
+            else
+                c.LLVMBuildICmp(self.builder, c.LLVMIntSLT, lhs, rhs, "simd_icmp_slt"),
+            'G' => if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind)
+                c.LLVMBuildFCmp(self.builder, c.LLVMRealOGT, lhs, rhs, "simd_fcmp_gt")
+            else
+                c.LLVMBuildICmp(self.builder, c.LLVMIntSGT, lhs, rhs, "simd_icmp_sgt"),
+            'l' => if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind)
+                c.LLVMBuildFCmp(self.builder, c.LLVMRealOLE, lhs, rhs, "simd_fcmp_le")
+            else
+                c.LLVMBuildICmp(self.builder, c.LLVMIntSLE, lhs, rhs, "simd_icmp_sle"),
+            'g' => if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind)
+                c.LLVMBuildFCmp(self.builder, c.LLVMRealOGE, lhs, rhs, "simd_fcmp_ge")
+            else
+                c.LLVMBuildICmp(self.builder, c.LLVMIntSGE, lhs, rhs, "simd_icmp_sge"),
+            else => errors.CodegenError.UnsupportedOperation,
+        };
+    }
+
+    fn generateSimdReduction(self: *CodeGenerator, operation: []const u8, simd_value: c.LLVMValueRef) errors.CodegenError!c.LLVMValueRef {
+        const simd_type = c.LLVMTypeOf(simd_value);
+        const element_type = c.LLVMGetElementType(simd_type);
+        const type_kind = c.LLVMGetTypeKind(element_type);
+        const vector_size = c.LLVMGetVectorSize(simd_type);
+        var result = c.LLVMBuildExtractElement(self.builder, simd_value, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), "extract_0");
+        var i: u32 = 1;
+        while (i < vector_size) : (i += 1) {
+            const index = c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(i)), 0);
+            const element = c.LLVMBuildExtractElement(self.builder, simd_value, index, "extract_elem");
+            if (std.mem.eql(u8, operation, "sum")) {
+                result = if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind)
+                    c.LLVMBuildFAdd(self.builder, result, element, "reduce_fadd")
+                else
+                    c.LLVMBuildAdd(self.builder, result, element, "reduce_add");
+            } else if (std.mem.eql(u8, operation, "product")) {
+                result = if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind)
+                    c.LLVMBuildFMul(self.builder, result, element, "reduce_fmul")
+                else
+                    c.LLVMBuildMul(self.builder, result, element, "reduce_mul");
+            } else if (std.mem.eql(u8, operation, "min")) {
+                if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind) {
+                    const cmp = c.LLVMBuildFCmp(self.builder, c.LLVMRealOLT, result, element, "min_cmp");
+                    result = c.LLVMBuildSelect(self.builder, cmp, result, element, "reduce_fmin");
+                } else {
+                    const cmp = c.LLVMBuildICmp(self.builder, c.LLVMIntSLT, result, element, "min_cmp");
+                    result = c.LLVMBuildSelect(self.builder, cmp, result, element, "reduce_min");
+                }
+            } else if (std.mem.eql(u8, operation, "max")) {
+                if (type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind or type_kind == c.LLVMHalfTypeKind) {
+                    const cmp = c.LLVMBuildFCmp(self.builder, c.LLVMRealOGT, result, element, "max_cmp");
+                    result = c.LLVMBuildSelect(self.builder, cmp, result, element, "reduce_fmax");
+                } else {
+                    const cmp = c.LLVMBuildICmp(self.builder, c.LLVMIntSGT, result, element, "max_cmp");
+                    result = c.LLVMBuildSelect(self.builder, cmp, result, element, "reduce_max");
+                }
+            } else {
+                return errors.CodegenError.UnsupportedOperation;
+            }
+        }
+        return result;
+    }
+
     fn generateContinueStatement(self: *CodeGenerator) errors.CodegenError!void {
         if (self.loop_context_stack.items.len == 0) {
             return errors.CodegenError.TypeMismatch;
@@ -1084,7 +1253,7 @@ pub const CodeGenerator = struct {
 
                 if (decl.initializer) |initializer| {
                     const init_value = try self.generateExpression(initializer);
-                    const casted_init_value = try self.castWithRules(init_value, @ptrCast(var_type), initializer);
+                    const casted_init_value = try self.castWithSourceRules(init_value, @ptrCast(var_type), initializer);
                     c.LLVMSetInitializer(global_var, casted_init_value);
                 } else {
                     const default_value = utils.getDefaultValueForType(self, decl.type_name);
@@ -1133,6 +1302,10 @@ pub const CodeGenerator = struct {
     }
 
     pub fn castToType(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef) c.LLVMValueRef {
+        return self.castToTypeWithSourceInfo(value, target_type, null);
+    }
+
+    pub fn castToTypeWithSourceInfo(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef, source_type_name: ?[]const u8) c.LLVMValueRef {
         const value_type = c.LLVMTypeOf(value);
 
         if (value_type == target_type) {
@@ -1152,8 +1325,12 @@ pub const CodeGenerator = struct {
                 if (value_width == 1) {
                     return c.LLVMBuildZExt(self.builder, value, target_type, "zext");
                 } else {
-                    if (value_width <= 16) {
-                        return c.LLVMBuildZExt(self.builder, value, target_type, "zext");
+                    if (source_type_name) |src_name| {
+                        if (isUnsignedType(src_name)) {
+                            return c.LLVMBuildZExt(self.builder, value, target_type, "zext");
+                        } else {
+                            return c.LLVMBuildSExt(self.builder, value, target_type, "sext");
+                        }
                     } else {
                         const target_type_name = self.getTypeNameFromLLVMType(@ptrCast(target_type));
                         if (isUnsignedType(target_type_name)) {
@@ -1193,6 +1370,89 @@ pub const CodeGenerator = struct {
         }
 
         return value;
+    }
+
+    pub fn castWithSourceRules(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef, value_node: ?*ast.Node) errors.CodegenError!c.LLVMValueRef {
+        var val = value;
+        var from_ty = c.LLVMTypeOf(val);
+        var source_type_name: ?[]const u8 = null;
+        if (value_node) |vn| {
+            if (vn.data == .identifier) {
+                const var_name = vn.data.identifier;
+                if (CodeGenerator.getVariable(self, var_name.name)) |var_info| {
+                    source_type_name = var_info.type_name;
+                }
+            } else if (vn.data == .cast) {
+                const cst = vn.data.cast;
+                if (cst.auto) {
+                    return self.castToTypeWithSourceInfo(val, target_type, source_type_name);
+                } else if (cst.type_name) |tn| {
+                    const named_ty = self.getLLVMType(tn);
+                    val = self.castToTypeWithSourceInfo(val, @ptrCast(named_ty), source_type_name);
+                    from_ty = @ptrCast(named_ty);
+                }
+            }
+        }
+        if (self.typesAreEqual(from_ty, target_type)) return val;
+        const fk = c.LLVMGetTypeKind(from_ty);
+        const tk = c.LLVMGetTypeKind(target_type);
+        if (fk == c.LLVMIntegerTypeKind and tk == c.LLVMIntegerTypeKind) {
+            const fw = c.LLVMGetIntTypeWidth(from_ty);
+            const tw = c.LLVMGetIntTypeWidth(target_type);
+            if (tw >= fw) {
+                return self.castToTypeWithSourceInfo(val, target_type, source_type_name);
+            }
+        } else {
+            const f_float = fk == c.LLVMFloatTypeKind or fk == c.LLVMDoubleTypeKind or fk == c.LLVMHalfTypeKind;
+            const t_float = tk == c.LLVMFloatTypeKind or tk == c.LLVMDoubleTypeKind or tk == c.LLVMHalfTypeKind;
+            if (f_float and t_float and floatBitWidth(target_type) >= floatBitWidth(from_ty)) {
+                return self.castToTypeWithSourceInfo(val, target_type, source_type_name);
+            }
+        }
+        if (fk == c.LLVMPointerTypeKind and tk == c.LLVMPointerTypeKind) {
+            return self.castToTypeWithSourceInfo(val, target_type, source_type_name);
+        }
+        const to_kind = c.LLVMGetTypeKind(target_type);
+        if (value_node) |vn2| {
+            switch (vn2.data) {
+                .number_literal => {
+                    if (to_kind == c.LLVMIntegerTypeKind) {
+                        return self.castToTypeWithSourceInfo(val, target_type, source_type_name);
+                    }
+                },
+                .char_literal => {
+                    if (to_kind == c.LLVMIntegerTypeKind) {
+                        return self.castToTypeWithSourceInfo(val, target_type, source_type_name);
+                    }
+                },
+                .float_literal => {
+                    if (to_kind == c.LLVMFloatTypeKind or to_kind == c.LLVMDoubleTypeKind or to_kind == c.LLVMHalfTypeKind) {
+                        return self.castToTypeWithSourceInfo(val, target_type, source_type_name);
+                    }
+                },
+                .unary_op => |un| {
+                    if (un.op == '-' or un.op == '+') {
+                        const inner = un.operand;
+                        switch (inner.data) {
+                            .number_literal => {
+                                if (to_kind == c.LLVMIntegerTypeKind) {
+                                    return self.castToTypeWithSourceInfo(val, target_type, source_type_name);
+                                }
+                            },
+                            .float_literal => {
+                                if (to_kind == c.LLVMFloatTypeKind or to_kind == c.LLVMDoubleTypeKind or to_kind == c.LLVMHalfTypeKind) {
+                                    return self.castToTypeWithSourceInfo(val, target_type, source_type_name);
+                                }
+                            },
+                            else => {},
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
+        return val;
     }
 
     fn floatBitWidth(ty: c.LLVMTypeRef) usize {
@@ -2189,6 +2449,13 @@ pub const CodeGenerator = struct {
                 defer self.allocator.free(array_name);
                 const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
 
+                if (std.mem.startsWith(u8, var_info.type_name, "simd<")) {
+                    const simd_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_simd");
+                    var simd_index_value = collected_indices.items[collected_indices.items.len - 1];
+                    simd_index_value = self.castToType(simd_index_value, c.LLVMInt32TypeInContext(self.context));
+                    return c.LLVMBuildExtractElement(self.builder, simd_val, simd_index_value, "simd_extract");
+                }
+
                 var final_type = var_info.type_ref;
                 for (0..collected_indices.items.len) |_| {
                     final_type = c.LLVMGetElementType(final_type);
@@ -2210,6 +2477,26 @@ pub const CodeGenerator = struct {
             },
             .struct_initializer => |struct_init| {
                 return try self.generateStructInitializer(struct_init);
+            },
+            .simd_method_call => |simd_method| {
+                const simd_value = try self.generateExpression(simd_method.simd);
+                const simd_type = c.LLVMTypeOf(simd_value);
+
+                // Verify this is actually a SIMD vector type
+                if (c.LLVMGetTypeKind(simd_type) != c.LLVMVectorTypeKind) {
+                    return errors.CodegenError.TypeMismatch;
+                }
+
+                // Handle SIMD reduction operations
+                if (std.mem.eql(u8, simd_method.method_name, "sum") or
+                    std.mem.eql(u8, simd_method.method_name, "product") or
+                    std.mem.eql(u8, simd_method.method_name, "min") or
+                    std.mem.eql(u8, simd_method.method_name, "max"))
+                {
+                    return try self.generateSimdReduction(simd_method.method_name, simd_value);
+                }
+
+                return errors.CodegenError.UnsupportedOperation;
             },
             else => return errors.CodegenError.TypeMismatch,
         }
@@ -2375,11 +2662,19 @@ pub const CodeGenerator = struct {
     fn generateBinaryOp(self: *CodeGenerator, bin_op: ast.BinaryOp) errors.CodegenError!c.LLVMValueRef {
         const lhs_value = try self.generateExpression(bin_op.lhs);
         const lhs_type = c.LLVMTypeOf(lhs_value);
+        if (c.LLVMGetTypeKind(lhs_type) == c.LLVMVectorTypeKind) {
+            const rhs_value = try self.generateExpression(bin_op.rhs);
+            const rhs_type = c.LLVMTypeOf(rhs_value);
+            if (c.LLVMGetTypeKind(rhs_type) == c.LLVMVectorTypeKind) {
+                return try self.generateSimdBinaryOp(bin_op.op, lhs_value, rhs_value);
+            }
+        }
+
         const lhs_type_name = self.getTypeNameFromLLVMType(lhs_type);
         const rhs_value = try self.generateExpressionWithContext(bin_op.rhs, lhs_type_name);
-        const rhs_type = c.LLVMTypeOf(rhs_value);
 
         const lhs_kind = c.LLVMGetTypeKind(lhs_type);
+        const rhs_type = c.LLVMTypeOf(rhs_value);
         const rhs_kind = c.LLVMGetTypeKind(rhs_type);
         if (bin_op.op != '&' and bin_op.op != '|') {
             if (lhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(lhs_type) == 1) {
