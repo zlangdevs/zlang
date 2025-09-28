@@ -1,5 +1,3 @@
-... TODO: implement reassign operators(+=, -=) ...
-
 fun main() >> i32 {
     @printf("=== Comprehensive SIMD Test ===\n");
 
@@ -140,17 +138,52 @@ fun main() >> i32 {
     @printf("                = [%.0f, %.0f, %.0f, %.0f, %.0f, %.0f, %.0f, %.0f]\n",
         large_result[0], large_result[1], large_result[2], large_result[3], large_result[4], large_result[5], large_result[6], large_result[7]);
 
-    ?? Test 8: Mixed Operations and Reassignment
-    @printf("\n8. Complex Operations:\n");
-    simd<f32, 4> result1 = float_vec1 + float_vec2;
-    simd<f32, 4> result2 = result1 * float_vec1;
-    simd<f32, 4> final_result = result2 - float_vec2;
+    ?? Test 8: SIMD Compound Assignment Operators
+    @printf("\n8. SIMD Compound Assignment Operators:\n");
+    simd<f32, 4> compound_vec = {10.0, 20.0, 30.0, 40.0};
+    simd<i32, 4> int_compound_vec = {100, 200, 300, 400};
 
-    @printf("Complex:        ((vec1 + vec2) * vec1) - vec2 = [%.1f, %.1f, %.1f, %.1f]\n",
-        final_result[0], final_result[1], final_result[2], final_result[3]);
+    @printf("Original float: [%.1f, %.1f, %.1f, %.1f]\n", compound_vec[0], compound_vec[1], compound_vec[2], compound_vec[3]);
+    @printf("Original int:   [%d, %d, %d, %d]\n", int_compound_vec[0], int_compound_vec[1], int_compound_vec[2], int_compound_vec[3]);
 
-    ?? Test 9: Element modification and vector operations
-    @printf("\n9. Element Modification + Vector Ops:\n");
+    ?? Test += operator
+    compound_vec[0] += 5.0;
+    compound_vec[1] += 2.5;
+    int_compound_vec[0] += 50;
+    int_compound_vec[1] += 25;
+
+    @printf("After +=:       [%.1f, %.1f, %.1f, %.1f]\n", compound_vec[0], compound_vec[1], compound_vec[2], compound_vec[3]);
+    @printf("After += (int): [%d, %d, %d, %d]\n", int_compound_vec[0], int_compound_vec[1], int_compound_vec[2], int_compound_vec[3]);
+
+    ?? Test -= operator
+    compound_vec[2] -= 5.0;
+    compound_vec[3] -= 10.0;
+    int_compound_vec[2] -= 50;
+    int_compound_vec[3] -= 100;
+
+    @printf("After -=:       [%.1f, %.1f, %.1f, %.1f]\n", compound_vec[0], compound_vec[1], compound_vec[2], compound_vec[3]);
+    @printf("After -= (int): [%d, %d, %d, %d]\n", int_compound_vec[0], int_compound_vec[1], int_compound_vec[2], int_compound_vec[3]);
+
+    ?? Test *= operator
+    compound_vec[0] *= 2.0;
+    compound_vec[1] *= 1.5;
+    int_compound_vec[0] *= 2;
+    int_compound_vec[1] *= 3;
+
+    @printf("After *=:       [%.1f, %.1f, %.1f, %.1f]\n", compound_vec[0], compound_vec[1], compound_vec[2], compound_vec[3]);
+    @printf("After *= (int): [%d, %d, %d, %d]\n", int_compound_vec[0], int_compound_vec[1], int_compound_vec[2], int_compound_vec[3]);
+
+    ?? Test /= operator
+    compound_vec[2] /= 5.0;
+    compound_vec[3] /= 3.0;
+    int_compound_vec[2] /= 5;
+    int_compound_vec[3] /= 10;
+
+    @printf("After /=:       [%.1f, %.1f, %.1f, %.1f]\n", compound_vec[0], compound_vec[1], compound_vec[2], compound_vec[3]);
+    @printf("After /= (int): [%d, %d, %d, %d]\n", int_compound_vec[0], int_compound_vec[1], int_compound_vec[2], int_compound_vec[3]);
+
+    ?? Test 9: Mixed Operations and Element Modification
+    @printf("\n9. Mixed Operations and Element Modification:\n");
     simd<i32, 4> modify_vec = {100, 200, 300, 400};
     @printf("Original:       [%d, %d, %d, %d]\n", modify_vec[0], modify_vec[1], modify_vec[2], modify_vec[3]);
 
