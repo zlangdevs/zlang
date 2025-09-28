@@ -675,6 +675,42 @@ pub const CodeGenerator = struct {
                 const array_name = try self.getBaseIdentifierName(base_node);
                 defer self.allocator.free(array_name);
                 const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
+                if (std.mem.startsWith(u8, var_info.type_name, "simd<")) {
+                    const current_simd = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_simd");
+                    const current_element = c.LLVMBuildExtractElement(self.builder, current_simd, index_value, "extract_elem");
+                    const element_type = c.LLVMGetElementType(var_info.type_ref);
+                    const expected_ty_name = self.getTypeNameFromLLVMType(element_type);
+                    const rhs_raw = try self.generateExpressionWithContext(arr_cass.value, expected_ty_name);
+                    const rhs_val = try self.castWithRules(rhs_raw, element_type, arr_cass.value);
+                    const element_kind = c.LLVMGetTypeKind(element_type);
+                    const new_element = if (element_kind == c.LLVMFloatTypeKind or element_kind == c.LLVMDoubleTypeKind or element_kind == c.LLVMHalfTypeKind) blk: {
+                        break :blk switch (arr_cass.op) {
+                            '+' => c.LLVMBuildFAdd(self.builder, current_element, rhs_val, "fadd"),
+                            '-' => c.LLVMBuildFSub(self.builder, current_element, rhs_val, "fsub"),
+                            '*' => c.LLVMBuildFMul(self.builder, current_element, rhs_val, "fmul"),
+                            '/' => c.LLVMBuildFDiv(self.builder, current_element, rhs_val, "fdiv"),
+                            else => return errors.CodegenError.UnsupportedOperation,
+                        };
+                    } else if (element_kind == c.LLVMIntegerTypeKind) blk: {
+                        break :blk switch (arr_cass.op) {
+                            '+' => c.LLVMBuildAdd(self.builder, current_element, rhs_val, "add"),
+                            '-' => c.LLVMBuildSub(self.builder, current_element, rhs_val, "sub"),
+                            '*' => c.LLVMBuildMul(self.builder, current_element, rhs_val, "mul"),
+                            '/' => blk2: {
+                                const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(element_type));
+                                break :blk2 if (is_unsigned)
+                                    c.LLVMBuildUDiv(self.builder, current_element, rhs_val, "udiv")
+                                else
+                                    c.LLVMBuildSDiv(self.builder, current_element, rhs_val, "sdiv");
+                            },
+                            else => return errors.CodegenError.UnsupportedOperation,
+                        };
+                    } else return errors.CodegenError.UnsupportedOperation;
+                    const updated_simd = c.LLVMBuildInsertElement(self.builder, current_simd, new_element, index_value, "simd_update");
+                    _ = c.LLVMBuildStore(self.builder, updated_simd, var_info.value);
+                    return;
+                }
+
                 var final_type = var_info.type_ref;
                 for (0..collected_indices.items.len) |_| final_type = c.LLVMGetElementType(final_type);
                 var all_indices = std.ArrayList(c.LLVMValueRef){};
@@ -731,6 +767,59 @@ pub const CodeGenerator = struct {
                 }
 
                 _ = c.LLVMBuildStore(self.builder, new_val, element_ptr);
+            },
+            .simd_compound_assignment => |simd_cass| {
+                const simd_name = try self.getBaseIdentifierName(simd_cass.simd);
+                defer self.allocator.free(simd_name);
+                const var_info = CodeGenerator.getVariable(self, simd_name) orelse return errors.CodegenError.UndefinedVariable;
+
+                // Load the current SIMD vector
+                const current_simd = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_simd");
+
+                // Get the index and cast to i32
+                var index_value = try self.generateExpression(simd_cass.index);
+                index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
+
+                // Extract the current element
+                const current_element = c.LLVMBuildExtractElement(self.builder, current_simd, index_value, "extract_elem");
+
+                // Generate the RHS value
+                const element_type = c.LLVMGetElementType(var_info.type_ref);
+                const expected_ty_name = self.getTypeNameFromLLVMType(element_type);
+                const rhs_raw = try self.generateExpressionWithContext(simd_cass.value, expected_ty_name);
+                const rhs_val = try self.castWithRules(rhs_raw, element_type, simd_cass.value);
+
+                // Perform the compound operation using scalar operations
+                const element_kind = c.LLVMGetTypeKind(element_type);
+                const new_element = if (element_kind == c.LLVMFloatTypeKind or element_kind == c.LLVMDoubleTypeKind or element_kind == c.LLVMHalfTypeKind) blk: {
+                    break :blk switch (simd_cass.op) {
+                        '+' => c.LLVMBuildFAdd(self.builder, current_element, rhs_val, "fadd"),
+                        '-' => c.LLVMBuildFSub(self.builder, current_element, rhs_val, "fsub"),
+                        '*' => c.LLVMBuildFMul(self.builder, current_element, rhs_val, "fmul"),
+                        '/' => c.LLVMBuildFDiv(self.builder, current_element, rhs_val, "fdiv"),
+                        else => return errors.CodegenError.UnsupportedOperation,
+                    };
+                } else if (element_kind == c.LLVMIntegerTypeKind) blk: {
+                    break :blk switch (simd_cass.op) {
+                        '+' => c.LLVMBuildAdd(self.builder, current_element, rhs_val, "add"),
+                        '-' => c.LLVMBuildSub(self.builder, current_element, rhs_val, "sub"),
+                        '*' => c.LLVMBuildMul(self.builder, current_element, rhs_val, "mul"),
+                        '/' => blk2: {
+                            const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(element_type));
+                            break :blk2 if (is_unsigned)
+                                c.LLVMBuildUDiv(self.builder, current_element, rhs_val, "udiv")
+                            else
+                                c.LLVMBuildSDiv(self.builder, current_element, rhs_val, "sdiv");
+                        },
+                        else => return errors.CodegenError.UnsupportedOperation,
+                    };
+                } else return errors.CodegenError.UnsupportedOperation;
+
+                // Insert the new element back into the vector
+                const updated_simd = c.LLVMBuildInsertElement(self.builder, current_simd, new_element, index_value, "simd_update");
+
+                // Store the updated vector
+                _ = c.LLVMBuildStore(self.builder, updated_simd, var_info.value);
             },
             .c_function_decl => |c_func| {
                 try CodeGenerator.generateCFunctionDeclaration(self, c_func);
@@ -1079,6 +1168,16 @@ pub const CodeGenerator = struct {
                     .binary_op => {
                         const expr_value = try self.generateExpression(initializer);
                         _ = c.LLVMBuildStore(self.builder, expr_value, alloca);
+                    },
+                    .function_call => {
+                        const expr_value = try self.generateExpressionWithContext(initializer, decl.type_name);
+                        const casted_value = try self.castWithRules(expr_value, vector_type, initializer);
+                        _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
+                    },
+                    .identifier => {
+                        const expr_value = try self.generateExpressionWithContext(initializer, decl.type_name);
+                        const casted_value = try self.castWithRules(expr_value, vector_type, initializer);
+                        _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                     },
                     else => {
                         return errors.CodegenError.TypeMismatch;
@@ -1546,6 +1645,15 @@ pub const CodeGenerator = struct {
         if (fk == c.LLVMPointerTypeKind and tk == c.LLVMPointerTypeKind) {
             return self.castToType(val, target_type);
         }
+        if (fk == c.LLVMVectorTypeKind and tk == c.LLVMVectorTypeKind) {
+            const from_element_type = c.LLVMGetElementType(from_ty);
+            const to_element_type = c.LLVMGetElementType(target_type);
+            const from_size = c.LLVMGetVectorSize(from_ty);
+            const to_size = c.LLVMGetVectorSize(target_type);
+            if (self.typesAreEqual(from_element_type, to_element_type) and from_size == to_size) {
+                return self.castToType(val, target_type);
+            }
+        }
 
         const to_kind = c.LLVMGetTypeKind(target_type);
         if (value_node) |vn2| {
@@ -1882,6 +1990,48 @@ pub const CodeGenerator = struct {
                     },
                     else => return self.generateExpression(expr),
                 }
+            },
+            .array_initializer => |init_list| {
+                if (expected_type) |type_name| {
+                    if (std.mem.startsWith(u8, type_name, "simd<")) {
+                        const vector_type = self.getLLVMType(type_name);
+                        const element_type = c.LLVMGetElementType(vector_type);
+
+                        if (init_list.elements.items.len == 0) {
+                            return errors.CodegenError.TypeMismatch;
+                        }
+
+                        var result = c.LLVMGetUndef(vector_type);
+                        for (init_list.elements.items, 0..) |element, i| {
+                            const element_value = try self.generateExpression(element);
+                            const casted_value = self.castToType(element_value, element_type);
+                            const index = c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(i)), 0);
+                            result = c.LLVMBuildInsertElement(self.builder, result, casted_value, index, "simd_init");
+                        }
+                        return result;
+                    }
+                }
+                return errors.CodegenError.TypeMismatch;
+            },
+            .simd_initializer => |simd_init| {
+                if (expected_type) |type_name| {
+                    if (std.mem.startsWith(u8, type_name, "simd<")) {
+                        const vector_type = self.getLLVMType(type_name);
+                        const element_type = c.LLVMGetElementType(vector_type);
+                        if (simd_init.elements.items.len == 0) {
+                            return errors.CodegenError.TypeMismatch;
+                        }
+                        var result = c.LLVMGetUndef(vector_type);
+                        for (simd_init.elements.items, 0..) |element, i| {
+                            const element_value = try self.generateExpression(element);
+                            const casted_value = self.castToType(element_value, element_type);
+                            const index = c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(i)), 0);
+                            result = c.LLVMBuildInsertElement(self.builder, result, casted_value, index, "simd_init");
+                        }
+                        return result;
+                    }
+                }
+                return errors.CodegenError.TypeMismatch;
             },
             else => return self.generateExpression(expr),
         }
@@ -2497,6 +2647,16 @@ pub const CodeGenerator = struct {
                 }
 
                 return errors.CodegenError.UnsupportedOperation;
+            },
+            .array_initializer => |_| {
+                // Array initializers need context to determine type
+                // This case should typically be handled by generateExpressionWithContext
+                return errors.CodegenError.TypeMismatch;
+            },
+            .simd_initializer => |_| {
+                // SIMD initializers need context to determine type
+                // This case should typically be handled by generateExpressionWithContext
+                return errors.CodegenError.TypeMismatch;
             },
             else => return errors.CodegenError.TypeMismatch,
         }
