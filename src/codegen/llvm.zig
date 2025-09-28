@@ -1664,14 +1664,47 @@ pub const CodeGenerator = struct {
                     if (expected_type) |type_name| {
                         const target_ty = self.getLLVMType(type_name);
                         const inner = try self.generateExpression(cst.expr);
-                        return @ptrCast(self.castToType(inner, @ptrCast(target_ty)));
+                        var source_type_name: ?[]const u8 = null;
+                        if (cst.expr.data == .identifier) {
+                            const ident = cst.expr.data.identifier;
+                            if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
+                                source_type_name = var_info.type_name;
+                            }
+                        } else if (cst.expr.data == .qualified_identifier) {
+                            const qual_id = cst.expr.data.qualified_identifier;
+                            if (qual_id.base.data == .identifier) {
+                                const base_name = qual_id.base.data.identifier.name;
+                                if (CodeGenerator.getVariable(self, base_name)) |base_var| {
+                                    if (std.mem.startsWith(u8, base_var.type_name, "ptr<") and std.mem.endsWith(u8, base_var.type_name, ">")) {
+                                        const inner_type_name = base_var.type_name[4 .. base_var.type_name.len - 1];
+                                        const struct_decl = self.struct_declarations.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
+                                        const field_map = self.struct_fields.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
+                                        const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
+                                        source_type_name = struct_decl.fields.items[field_index].type_name;
+                                    } else {
+                                        const struct_decl = self.struct_declarations.get(base_var.type_name) orelse return errors.CodegenError.TypeMismatch;
+                                        const field_map = self.struct_fields.get(base_var.type_name) orelse return errors.CodegenError.TypeMismatch;
+                                        const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
+                                        source_type_name = struct_decl.fields.items[field_index].type_name;
+                                    }
+                                }
+                            }
+                        }
+                        return @ptrCast(self.castToTypeWithSourceInfo(inner, @ptrCast(target_ty), source_type_name));
                     } else {
                         return errors.CodegenError.TypeMismatch;
                     }
                 } else if (cst.type_name) |tn| {
                     const target_ty = self.getLLVMType(tn);
                     const inner = try self.generateExpression(cst.expr);
-                    return self.castToType(inner, @ptrCast(target_ty));
+                    var source_type_name: ?[]const u8 = null;
+                    if (cst.expr.data == .identifier) {
+                        const ident = cst.expr.data.identifier;
+                        if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
+                            source_type_name = var_info.type_name;
+                        }
+                    }
+                    return self.castToTypeWithSourceInfo(inner, @ptrCast(target_ty), source_type_name);
                 } else {
                     return errors.CodegenError.TypeMismatch;
                 }
@@ -1894,7 +1927,33 @@ pub const CodeGenerator = struct {
                 if (cst.type_name) |tn| {
                     const target_ty = self.getLLVMType(tn);
                     const inner = try self.generateExpression(cst.expr);
-                    return self.castToType(inner, @ptrCast(target_ty));
+                    var source_type_name: ?[]const u8 = null;
+                    if (cst.expr.data == .identifier) {
+                        const ident = cst.expr.data.identifier;
+                        if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
+                            source_type_name = var_info.type_name;
+                        }
+                    } else if (cst.expr.data == .qualified_identifier) {
+                        const qual_id = cst.expr.data.qualified_identifier;
+                        if (qual_id.base.data == .identifier) {
+                            const base_name = qual_id.base.data.identifier.name;
+                            if (CodeGenerator.getVariable(self, base_name)) |base_var| {
+                                if (std.mem.startsWith(u8, base_var.type_name, "ptr<") and std.mem.endsWith(u8, base_var.type_name, ">")) {
+                                    const inner_type_name = base_var.type_name[4 .. base_var.type_name.len - 1];
+                                    const struct_decl = self.struct_declarations.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
+                                    const field_map = self.struct_fields.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
+                                    const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
+                                    source_type_name = struct_decl.fields.items[field_index].type_name;
+                                } else {
+                                    const struct_decl = self.struct_declarations.get(base_var.type_name) orelse return errors.CodegenError.TypeMismatch;
+                                    const field_map = self.struct_fields.get(base_var.type_name) orelse return errors.CodegenError.TypeMismatch;
+                                    const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
+                                    source_type_name = struct_decl.fields.items[field_index].type_name;
+                                }
+                            }
+                        }
+                    }
+                    return self.castToTypeWithSourceInfo(inner, @ptrCast(target_ty), source_type_name);
                 }
                 return errors.CodegenError.TypeMismatch;
             },
