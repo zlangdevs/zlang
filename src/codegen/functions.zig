@@ -144,6 +144,13 @@ fn hasValidControlFlow(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
 }
 
 pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFunctionDecl) errors.CodegenError!void {
+    const func_name_z = try cg.allocator.dupeZ(u8, c_func.name);
+    defer cg.allocator.free(func_name_z);
+    if (c.LLVMGetNamedFunction(@ptrCast(cg.module), func_name_z.ptr)) |existing_func| {
+        try cg.functions.put(try cg.allocator.dupe(u8, c_func.name), @ptrCast(existing_func));
+        return;
+    }
+
     var param_types = std.ArrayList(c.LLVMTypeRef){};
     defer param_types.deinit(cg.allocator);
     for (c_func.parameters.items) |param| {
@@ -154,8 +161,6 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
         c.LLVMFunctionType(@ptrCast(return_type), param_types.items.ptr, @intCast(param_types.items.len), 0)
     else
         c.LLVMFunctionType(@ptrCast(return_type), null, 0, 0);
-    const func_name_z = try cg.allocator.dupeZ(u8, c_func.name);
-    defer cg.allocator.free(func_name_z);
     _ = cg.functions.remove(c_func.name);
     const llvm_func = c.LLVMAddFunction(@ptrCast(cg.module), func_name_z.ptr, function_type);
     try cg.functions.put(try cg.allocator.dupe(u8, c_func.name), @ptrCast(llvm_func));
