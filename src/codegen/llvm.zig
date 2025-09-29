@@ -29,6 +29,9 @@ pub const CodeGenerator = struct {
     struct_types: std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     struct_fields: std.HashMap([]const u8, std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     struct_declarations: std.HashMap([]const u8, ast.StructDecl, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    function_to_module: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    module_dependencies: std.HashMap([]const u8, std.ArrayList([]const u8), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    current_module_name: []const u8,
 
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
         _ = c.LLVMInitializeNativeTarget();
@@ -63,6 +66,9 @@ pub const CodeGenerator = struct {
             .struct_types = std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .struct_fields = std.HashMap([]const u8, std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .struct_declarations = std.HashMap([]const u8, ast.StructDecl, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .function_to_module = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .module_dependencies = std.HashMap([]const u8, std.ArrayList([]const u8), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .current_module_name = "",
         };
     }
 
@@ -79,6 +85,12 @@ pub const CodeGenerator = struct {
         self.struct_fields.deinit();
         self.struct_declarations.deinit();
 
+        var deps_it = self.module_dependencies.iterator();
+        while (deps_it.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.module_dependencies.deinit();
+        self.function_to_module.deinit();
         for (self.variable_scopes.items) |*scope| {
             scope.deinit();
         }
@@ -86,6 +98,36 @@ pub const CodeGenerator = struct {
         c.LLVMDisposeBuilder(self.builder);
         c.LLVMDisposeModule(self.module);
         c.LLVMContextDispose(self.context);
+    }
+
+    pub fn registerModule(self: *CodeGenerator, module_name: []const u8, deps: []const []const u8) !void {
+        var list = std.ArrayList([]const u8){};
+        for (deps) |d| {
+            try list.append(self.allocator, try self.allocator.dupe(u8, d));
+        }
+        try self.module_dependencies.put(try self.allocator.dupe(u8, module_name), list);
+    }
+
+    pub fn registerFunctionModule(self: *CodeGenerator, func_name: []const u8, module_name: []const u8) !void {
+        try self.function_to_module.put(try self.allocator.dupe(u8, func_name), try self.allocator.dupe(u8, module_name));
+    }
+
+    pub fn setCurrentModuleByFunction(self: *CodeGenerator, func_name: []const u8) void {
+        if (self.function_to_module.get(func_name)) |m| {
+            self.current_module_name = m;
+        } else {
+            self.current_module_name = "";
+        }
+    }
+
+    pub fn canAccess(self: *CodeGenerator, from_module: []const u8, target_module: []const u8) bool {
+        if (from_module.len == 0 or std.mem.eql(u8, from_module, target_module)) return true;
+        if (self.module_dependencies.get(from_module)) |list| {
+            for (list.items) |dep| {
+                if (std.mem.eql(u8, dep, target_module)) return true;
+            }
+        }
+        return false;
     }
 
     fn buildQualifiedName(self: *CodeGenerator, node: *ast.Node) ![]const u8 {

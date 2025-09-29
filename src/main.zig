@@ -195,6 +195,40 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
     };
 
     const merged_program = try ast.Node.create(alloc, merged_program_data);
+    var module_name_map = std.StringHashMap([]const u8).init(alloc);
+    defer module_name_map.deinit();
+    var module_deps = std.StringHashMap(std.ArrayList([]const u8)).init(alloc);
+    defer {
+        var it = module_deps.iterator();
+        while (it.next()) |entry| entry.value_ptr.deinit(alloc);
+        module_deps.deinit();
+    }
+    for (modules.items) |module| {
+        const base = std.fs.path.basename(module.path);
+        const name_no_ext = if (std.mem.endsWith(u8, base, ".zl")) base[0 .. base.len - 3] else base;
+        try module_name_map.put(module.path, try alloc.dupe(u8, name_no_ext));
+        var deps = std.ArrayList([]const u8){};
+        for (module.dependencies.items) |d| try deps.append(alloc, try alloc.dupe(u8, d));
+        try module_deps.put(try alloc.dupe(u8, name_no_ext), deps);
+    }
+    var func_to_module = std.StringHashMap([]const u8).init(alloc);
+    defer func_to_module.deinit();
+    for (modules.items) |module| {
+        switch (module.ast.data) {
+            .program => |prog| {
+                for (prog.functions.items) |func| {
+                    const owner = module_name_map.get(module.path).?;
+                    if (func.data == .function) {
+                        try func_to_module.put(func.data.function.name, owner);
+                    } else if (func.data == .c_function_decl) {
+                        try func_to_module.put(func.data.c_function_decl.name, owner);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
     for (modules.items) |module| {
         switch (module.ast.data) {
             .program => |prog| {
@@ -732,6 +766,35 @@ pub fn main() !u8 {
     };
 
     defer code_generator.deinit();
+    {
+        for (ctx.input_files.items) |input_file| {
+            const input = read_file(input_file) catch continue;
+            const ast_root2 = parser.parse(allocator, input) catch continue;
+            if (ast_root2) |root| {
+                var deps = std.ArrayList([]const u8){};
+                defer deps.deinit(allocator);
+                collectUseStatements(root, &deps);
+                const base = std.fs.path.basename(input_file);
+                const name_no_ext = if (std.mem.endsWith(u8, base, ".zl")) base[0 .. base.len - 3] else base;
+                var dep_slices = std.ArrayList([]const u8){};
+                defer dep_slices.deinit(allocator);
+                for (deps.items) |d| dep_slices.append(allocator, d) catch {};
+                code_generator.registerModule(name_no_ext, dep_slices.items) catch {};
+                switch (root.data) {
+                    .program => |prog| {
+                        for (prog.functions.items) |fn_node| {
+                            if (fn_node.data == .function) {
+                                code_generator.registerFunctionModule(fn_node.data.function.name, name_no_ext) catch {};
+                            } else if (fn_node.data == .c_function_decl) {
+                                code_generator.registerFunctionModule(fn_node.data.c_function_decl.name, name_no_ext) catch {};
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+    }
     code_generator.generateCode(ast_root) catch |err| {
         const error_msg = switch (err) {
             error.FunctionCreationFailed => "Failed to create function.",

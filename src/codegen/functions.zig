@@ -81,6 +81,7 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
 
 pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.CodegenError!void {
     const llvm_func = cg.functions.get(func.name) orelse return errors.CodegenError.UndefinedFunction;
+    cg.setCurrentModuleByFunction(func.name);
     cg.current_function = llvm_func;
     cg.current_function_return_type = func.return_type;
     const entry_block = c.LLVMAppendBasicBlockInContext(@ptrCast(cg.context), @ptrCast(llvm_func), "entry");
@@ -192,14 +193,24 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
             if (func_name_ptr != null) {
                 const func_name_slice = std.mem.span(func_name_ptr);
                 if (std.mem.eql(u8, func_name_slice, call.name) and c.LLVMIsDeclaration(func_iter) != 0) {
-                    func = func_iter;
-                    found_external = true;
+                    if (cg.functions.get(call.name)) |declared_func| {
+                        func = declared_func;
+                    } else {
+                        func = func_iter;
+                        found_external = true;
+                    }
                     break;
                 }
             }
         }
         if (!found_external) {
             if (cg.functions.get(call.name)) |declared_func| {
+                // visibility check for wrapper defined in another module
+                if (cg.function_to_module.get(call.name)) |target_mod| {
+                    if (!cg.canAccess(cg.current_module_name, target_mod)) {
+                        return errors.CodegenError.UndefinedFunction;
+                    }
+                }
                 func = declared_func;
             } else {
                 if (llvm.CodeGenerator.getVariable(cg, call.name)) |var_info| {
@@ -245,6 +256,12 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                     else
                         c.LLVMBuildCall2(@ptrCast(cg.builder), fn_ty, @ptrCast(callee_ptr), null, 0, "call");
                     return res;
+                }
+                // If there is an extern with this name in another module, require visibility
+                if (cg.function_to_module.get(call.name)) |target_mod2| {
+                    if (!cg.canAccess(cg.current_module_name, target_mod2)) {
+                        return errors.CodegenError.UndefinedFunction;
+                    }
                 }
                 return errors.CodegenError.UndefinedFunction;
             }
