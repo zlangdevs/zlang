@@ -297,25 +297,16 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                 }
             }
         } else {
-            var func_iter = c.LLVMGetFirstFunction(cg.module);
-            while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
-                const func_name_ptr = c.LLVMGetValueName(func_iter);
-                if (func_name_ptr != null) {
-                    const func_name_slice = std.mem.span(func_name_ptr);
-                    if (std.mem.eql(u8, func_name_slice, call.name) and c.LLVMIsDeclaration(func_iter) != 0) {
-                        const func_type = c.LLVMGlobalGetValueType(func_iter);
-                        const param_count = c.LLVMCountParamTypes(func_type);
-                        if (i < @as(usize, @intCast(param_count))) {
-                            var param_types = std.ArrayList(c.LLVMTypeRef){};
-                            defer param_types.deinit(cg.allocator);
-                            try param_types.resize(cg.allocator, @as(usize, @intCast(param_count)));
-                            c.LLVMGetParamTypes(func_type, param_types.items.ptr);
-                            const expected_type = param_types.items[i];
-                            arg_value = try cg.castWithRules(arg_value, expected_type, arg);
-                        }
-                        break;
-                    }
-                }
+            // Use the actual function that will be called for type checking
+            const func_type = c.LLVMGlobalGetValueType(func);
+            const param_count = c.LLVMCountParamTypes(func_type);
+            if (i < @as(usize, @intCast(param_count))) {
+                var param_types = std.ArrayList(c.LLVMTypeRef){};
+                defer param_types.deinit(cg.allocator);
+                try param_types.resize(cg.allocator, @as(usize, @intCast(param_count)));
+                c.LLVMGetParamTypes(func_type, param_types.items.ptr);
+                const expected_type = param_types.items[i];
+                arg_value = try cg.castWithRules(arg_value, expected_type, arg);
             }
         }
 
