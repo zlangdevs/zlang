@@ -213,6 +213,7 @@ pub const CFunctionDecl = struct {
     name: []const u8,
     return_type: []const u8,
     parameters: std.ArrayList(Parameter),
+    is_wrapped: bool,
 };
 
 pub const UseStmt = struct {
