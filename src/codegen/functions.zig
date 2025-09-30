@@ -77,6 +77,7 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
 
     const llvm_func = c.LLVMAddFunction(@ptrCast(cg.module), func_name_z.ptr, function_type);
     try cg.functions.put(func.name, @ptrCast(llvm_func));
+    try cg.regular_functions.put(func.name, true);
 }
 
 pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.CodegenError!void {
@@ -161,10 +162,12 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
         c.LLVMFunctionType(@ptrCast(return_type), param_types.items.ptr, @intCast(param_types.items.len), 0)
     else
         c.LLVMFunctionType(@ptrCast(return_type), null, 0, 0);
-    _ = cg.functions.remove(c_func.name);
-    const llvm_func = c.LLVMAddFunction(@ptrCast(cg.module), func_name_z.ptr, function_type);
-    try cg.functions.put(try cg.allocator.dupe(u8, c_func.name), @ptrCast(llvm_func));
-    c.LLVMSetLinkage(llvm_func, c.LLVMExternalLinkage);
+    if (cg.functions.get(c_func.name) == null) {
+        const llvm_func = c.LLVMAddFunction(@ptrCast(cg.module), func_name_z.ptr, function_type);
+        try cg.functions.put(try cg.allocator.dupe(u8, c_func.name), @ptrCast(llvm_func));
+        c.LLVMSetLinkage(llvm_func, c.LLVMExternalLinkage);
+    }
+    try cg.c_function_declarations.put(try cg.allocator.dupe(u8, c_func.name), c_func.is_wrapped);
 }
 
 pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) errors.CodegenError!c.LLVMValueRef {
@@ -210,6 +213,14 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
         }
         if (!found_external) {
             if (cg.functions.get(call.name)) |declared_func| {
+                if (cg.regular_functions.get(call.name) == null) {
+                    if (cg.c_function_declarations.get(call.name)) |is_wrapped| {
+                        if (!is_wrapped) {
+                            // Pure C function declared with "fun @name" cannot be called without @
+                            return errors.CodegenError.UndefinedFunction;
+                        }
+                    }
+                }
                 // visibility check for wrapper defined in another module
                 if (cg.function_to_module.get(call.name)) |target_mod| {
                     if (!cg.canAccess(cg.current_module_name, target_mod)) {

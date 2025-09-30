@@ -941,6 +941,7 @@ export fn zig_create_c_function_decl(name_ptr: [*c]const u8, return_type_ptr: [*
             .name = name_copy,
             .return_type = return_type_copy,
             .parameters = parameters,
+            .is_wrapped = false,
         },
     };
 
@@ -967,6 +968,7 @@ export fn zig_create_wrapper_function(name_ptr: [*c]const u8, return_type_ptr: [
             .name = name_copy,
             .return_type = return_type_copy,
             .parameters = parameters,
+            .is_wrapped = true,
         },
     };
 
