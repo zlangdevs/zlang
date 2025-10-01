@@ -19,10 +19,15 @@ pub const LoopContext = struct {
     continue_block: c.LLVMBasicBlockRef,
 };
 
+const ElementResult = struct {
+    element_ptr: c.LLVMValueRef,
+    element_type: c.LLVMTypeRef,
+};
+
 pub fn getStructTypeName(cg: *llvm.CodeGenerator, struct_type: c.LLVMTypeRef) ![]const u8 {
     const name_ptr = c.LLVMGetStructName(struct_type);
     if (name_ptr != null) {
-        return try cg.allocator.dupe(u8, std.mem.span(name_ptr));
+        return try cg.allocator.dupe(u8, std.mem.sliceTo(name_ptr, 0));
     }
     var it = cg.struct_types.iterator();
     while (it.next()) |entry| {
@@ -48,18 +53,36 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
             else
                 try cg.generateExpressionFromString(index_str);
             const var_type_kind = c.LLVMGetTypeKind(current_type);
-            if (var_type_kind != c.LLVMArrayTypeKind) return errors.CodegenError.TypeMismatch;
-            const element_type = c.LLVMGetElementType(current_type);
-            var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0), index_expr };
-            const element_ptr = c.LLVMBuildGEP2(cg.builder, current_type, current_value, &indices[0], 2, "array_element_ptr");
+            const result = blk: {
+                if (var_type_kind == c.LLVMArrayTypeKind) {
+                    const element_type = c.LLVMGetElementType(current_type);
+                    var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0), index_expr };
+                    const element_ptr = c.LLVMBuildGEP2(cg.builder, current_type, current_value, &indices[0], 2, "array_element_ptr");
+                    break :blk ElementResult{ .element_ptr = element_ptr, .element_type = element_type };
+                } else if (var_type_kind == c.LLVMPointerTypeKind) {
+                    // For pointer types, we need to dereference and then index
+                    const element_type = c.LLVMGetElementType(current_type);
+                    const loaded_ptr = c.LLVMBuildLoad2(cg.builder, current_type, current_value, "loaded_ptr");
+                    var indices = [_]c.LLVMValueRef{index_expr};
+                    const element_ptr = c.LLVMBuildGEP2(cg.builder, element_type, loaded_ptr, &indices[0], 1, "ptr_element_ptr");
+                    break :blk ElementResult{ .element_ptr = element_ptr, .element_type = element_type };
+                } else {
+                    return errors.CodegenError.TypeMismatch;
+                }
+            };
+            const element_ptr = result.element_ptr;
+            const element_type = result.element_type;
             current_value = element_ptr;
             current_type = element_type;
             const elem_type_kind = c.LLVMGetTypeKind(element_type);
             if (elem_type_kind == c.LLVMStructTypeKind) {
                 const name_ptr = c.LLVMGetStructName(element_type);
                 if (name_ptr != null) {
-                    current_type_name = std.mem.span(name_ptr);
+                    current_type_name = std.mem.sliceTo(name_ptr, 0);
                 }
+            } else if (var_type_kind == c.LLVMPointerTypeKind and std.mem.startsWith(u8, current_type_name, "ptr<")) {
+                // For pointer dereferencing, extract the inner type name
+                current_type_name = current_type_name[4 .. current_type_name.len - 1];
             }
             path = path[close_bracket_pos + 1 ..];
             if (std.mem.startsWith(u8, path, ".")) {
@@ -67,7 +90,15 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
             }
         } else {
             const dot_pos = std.mem.indexOfScalar(u8, path, '.');
-            const field_name_len = if (dot_pos) |pos| pos else path.len;
+            const bracket_pos = std.mem.indexOfScalar(u8, path, '[');
+            const field_name_len = if (dot_pos != null and bracket_pos != null)
+                @min(dot_pos.?, bracket_pos.?)
+            else if (dot_pos != null)
+                dot_pos.?
+            else if (bracket_pos != null)
+                bracket_pos.?
+            else
+                path.len;
             const field_name = path[0..field_name_len];
             const var_type_kind = c.LLVMGetTypeKind(current_type);
             if (var_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
@@ -80,15 +111,28 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
             }
             const field_ptr = try getStructFieldPointer(cg, struct_type, current_value, field_index);
             const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
-            if (dot_pos != null) {
+            if (field_name_len < path.len) {
+                // There's more path to process after this field
                 const field_type_kind = c.LLVMGetTypeKind(field_type);
-                if (field_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
-                current_value = field_ptr;
-                current_type = field_type;
-                const name_ptr = c.LLVMGetStructName(field_type);
-                if (name_ptr == null) return errors.CodegenError.TypeMismatch;
-                current_type_name = std.mem.span(name_ptr);
-                path = path[dot_pos.? + 1 ..];
+                if (field_type_kind == c.LLVMStructTypeKind) {
+                    current_value = field_ptr;
+                    current_type = field_type;
+                    const name_ptr = c.LLVMGetStructName(field_type);
+                    if (name_ptr == null) return errors.CodegenError.TypeMismatch;
+                    current_type_name = std.mem.sliceTo(name_ptr, 0);
+                } else if (field_type_kind == c.LLVMPointerTypeKind) {
+                    // For pointer fields followed by array access, load the pointer value
+                    const loaded_ptr = c.LLVMBuildLoad2(cg.builder, field_type, field_ptr, "loaded_field_ptr");
+                    current_value = loaded_ptr;
+                    current_type = field_type;
+                    // Get field type name from struct declaration
+                    const field_decl = cg.struct_declarations.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
+                    const field_info = field_decl.fields.items[field_index];
+                    current_type_name = field_info.type_name;
+                } else {
+                    return errors.CodegenError.TypeMismatch;
+                }
+                path = if (dot_pos) |pos| path[pos + 1 ..] else path[field_name_len..];
             } else {
                 try assignToField(cg, field_ptr, field_type, value_expr);
                 return;
@@ -160,18 +204,36 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
                 break :blk try cg.generateExpressionFromString(index_str);
             };
             const var_type_kind = c.LLVMGetTypeKind(current_type);
-            if (var_type_kind != c.LLVMArrayTypeKind) return errors.CodegenError.TypeMismatch;
-            const element_type = c.LLVMGetElementType(current_type);
-            var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0), index_expr };
-            const element_ptr = c.LLVMBuildGEP2(cg.builder, current_type, current_value, &indices[0], 2, "array_element_ptr");
+            const result = blk: {
+                if (var_type_kind == c.LLVMArrayTypeKind) {
+                    const element_type = c.LLVMGetElementType(current_type);
+                    var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0), index_expr };
+                    const element_ptr = c.LLVMBuildGEP2(cg.builder, current_type, current_value, &indices[0], 2, "array_element_ptr");
+                    break :blk ElementResult{ .element_ptr = element_ptr, .element_type = element_type };
+                } else if (var_type_kind == c.LLVMPointerTypeKind) {
+                    // For pointer types, we need to dereference and then index
+                    const element_type = c.LLVMGetElementType(current_type);
+                    const loaded_ptr = c.LLVMBuildLoad2(cg.builder, current_type, current_value, "loaded_ptr");
+                    var indices = [_]c.LLVMValueRef{index_expr};
+                    const element_ptr = c.LLVMBuildGEP2(cg.builder, element_type, loaded_ptr, &indices[0], 1, "ptr_element_ptr");
+                    break :blk ElementResult{ .element_ptr = element_ptr, .element_type = element_type };
+                } else {
+                    return errors.CodegenError.TypeMismatch;
+                }
+            };
+            const element_ptr = result.element_ptr;
+            const element_type = result.element_type;
             current_value = element_ptr;
             current_type = element_type;
             const elem_type_kind = c.LLVMGetTypeKind(element_type);
             if (elem_type_kind == c.LLVMStructTypeKind) {
                 const name_ptr = c.LLVMGetStructName(element_type);
                 if (name_ptr != null) {
-                    current_type_name = std.mem.span(name_ptr);
+                    current_type_name = std.mem.sliceTo(name_ptr, 0);
                 }
+            } else if (var_type_kind == c.LLVMPointerTypeKind and std.mem.startsWith(u8, current_type_name, "ptr<")) {
+                // For pointer dereferencing, extract the inner type name
+                current_type_name = current_type_name[4 .. current_type_name.len - 1];
             }
             path = path[close_bracket_pos + 1 ..];
             if (std.mem.startsWith(u8, path, ".")) {
@@ -201,7 +263,7 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
                 current_type = field_type;
                 const name_ptr = c.LLVMGetStructName(field_type);
                 if (name_ptr == null) return errors.CodegenError.TypeMismatch;
-                current_type_name = std.mem.span(name_ptr);
+                current_type_name = std.mem.sliceTo(name_ptr, 0);
                 path = path[dot_pos.? + 1 ..];
             } else {
                 const field_type_kind = c.LLVMGetTypeKind(field_type);
