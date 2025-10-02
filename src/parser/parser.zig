@@ -186,6 +186,31 @@ export fn zig_create_assignment(target_ptr: ?*anyopaque, value_ptr: ?*anyopaque)
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_compound_assignment(target_ptr: ?*anyopaque, value_ptr: ?*anyopaque, op: c_int) ?*anyopaque {
+    var target: ?*ast.Node = null;
+    if (target_ptr) |ptr| {
+        target = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
+    } else {
+        return null;
+    }
+    var value: ?*ast.Node = null;
+    if (value_ptr) |ptr| {
+        value = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
+    } else {
+        return null;
+    }
+    const compound_assignment_data = ast.NodeData{
+        .compound_assignment = ast.CompoundAssignment{
+            .target = target.?,
+            .value = value.?,
+            .op = @as(u8, @intCast(op)),
+        },
+    };
+    const node = ast.Node.create(global_allocator, compound_assignment_data) catch return null;
+    set_node_line(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_create_var_decl(type_name_ptr: [*c]const u8, name_ptr: [*c]const u8, initializer_ptr: ?*anyopaque) ?*anyopaque {
     const type_name = std.mem.span(type_name_ptr);
     const name = std.mem.span(name_ptr);
