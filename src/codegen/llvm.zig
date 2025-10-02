@@ -1227,6 +1227,11 @@ pub const CodeGenerator = struct {
                         const casted_value = try self.castWithRules(expr_value, vector_type, initializer);
                         _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                     },
+                    .method_call => {
+                        const expr_value = try self.generateExpressionWithContext(initializer, decl.type_name);
+                        const casted_value = try self.castWithRules(expr_value, vector_type, initializer);
+                        _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
+                    },
                     else => {
                         return errors.CodegenError.TypeMismatch;
                     },
