@@ -20,6 +20,7 @@ extern void* zig_create_return_stmt(void* expression);
 extern void* zig_create_binary_op(char op, void* lhs, void* rhs);
 extern void* zig_create_unary_op(char op, void* operand);
 extern void* zig_create_assignment(void* target, void* value);
+extern void* zig_create_compound_assignment(void* target, void* value, int op);
 extern void* zig_create_identifier(const char* name);
 extern void* zig_create_float_literal(const char* value);
 extern void* zig_create_number_literal(const char* value);
@@ -121,7 +122,7 @@ void* ast_root = NULL;
 %type <node> expression logical_or_expression logical_and_expression bitwise_or_expression bitwise_xor_expression bitwise_and_expression shift_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression postfix_expression argument_list arguments
 %type <node> cast_expression
 %type <node> comparison_expression simple_term c_for_statement for_increment
-%type <node> array_initializer array_assignment c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration wrap_statement
+%type <node> array_initializer c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration wrap_statement
 %type <node> enum_values enum_value_list struct_fields struct_field_list
 %type <node> struct_initializer struct_field_values struct_field_value_list initializer_expression ref_expression ref_base
 %type <string> type_name function_name string_literal complex_type_name module_path function_type_core function_type_param_list
@@ -343,7 +344,6 @@ statement_list:
 statement:
     var_declaration TOKEN_SEMICOLON { $$ = $1; }
    | assignment TOKEN_SEMICOLON { $$ = $1; }
-   | array_assignment TOKEN_SEMICOLON { $$ = $1; }
    | return_statement TOKEN_SEMICOLON { $$ = $1; }
    | brainfuck_statement TOKEN_SEMICOLON { $$ = $1; }
    | if_statement { $$ = $1; }
@@ -432,16 +432,8 @@ assignment:
     ref_expression TOKEN_ASSIGN initializer_expression {
         $$ = zig_create_assignment($1, $3);
     }
-  | TOKEN_IDENTIFIER TOKEN_REASSIGN expression {
-        void* target = zig_create_identifier($1);
-        void* read_id = zig_create_identifier($1);
-        $$ = zig_create_assignment(target, zig_create_binary_op((char)$2, read_id, $3));
-    }
-;
-
-array_assignment:
-    ref_expression TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_REASSIGN expression {
-        $$ = zig_create_array_compound_assignment($1, $3, $6, $5);
+  | ref_expression TOKEN_REASSIGN expression {
+        $$ = zig_create_compound_assignment($1, $3, $2);
     }
 ;
 

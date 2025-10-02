@@ -659,6 +659,182 @@ pub const CodeGenerator = struct {
                     }
                 }
             },
+            .compound_assignment => |cas| {
+                switch (cas.target.data) {
+                    .identifier => |ident| {
+                        const var_info = CodeGenerator.getVariable(self, ident.name) orelse return errors.CodegenError.UndefinedVariable;
+                        const current_value = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_current");
+                        const rhs_value = try self.generateExpressionWithContext(cas.value, var_info.type_name);
+                        const rhs_casted = try self.castWithSourceRules(rhs_value, @ptrCast(var_info.type_ref), cas.value);
+
+                        const is_float = std.mem.eql(u8, var_info.type_name, "f16") or
+                            std.mem.eql(u8, var_info.type_name, "f32") or
+                            std.mem.eql(u8, var_info.type_name, "f64");
+
+                        const new_value = switch (cas.op) {
+                            '+' => if (is_float)
+                                c.LLVMBuildFAdd(self.builder, current_value, rhs_casted, "fadd_compound")
+                            else
+                                c.LLVMBuildAdd(self.builder, current_value, rhs_casted, "add_compound"),
+                            '-' => if (is_float)
+                                c.LLVMBuildFSub(self.builder, current_value, rhs_casted, "fsub_compound")
+                            else
+                                c.LLVMBuildSub(self.builder, current_value, rhs_casted, "sub_compound"),
+                            '*' => if (is_float)
+                                c.LLVMBuildFMul(self.builder, current_value, rhs_casted, "fmul_compound")
+                            else
+                                c.LLVMBuildMul(self.builder, current_value, rhs_casted, "mul_compound"),
+                            '/' => if (is_float)
+                                c.LLVMBuildFDiv(self.builder, current_value, rhs_casted, "fdiv_compound")
+                            else
+                                c.LLVMBuildSDiv(self.builder, current_value, rhs_casted, "sdiv_compound"),
+                            '%' => if (is_float) blk: {
+                                self.uses_float_modulo = true;
+                                break :blk c.LLVMBuildFRem(self.builder, current_value, rhs_casted, "frem_compound");
+                            } else blk: {
+                                const is_unsigned = isUnsignedType(var_info.type_name);
+                                break :blk if (is_unsigned)
+                                    c.LLVMBuildURem(self.builder, current_value, rhs_casted, "urem_compound")
+                                else
+                                    c.LLVMBuildSRem(self.builder, current_value, rhs_casted, "srem_compound");
+                            },
+                            'A' => c.LLVMBuildAnd(self.builder, current_value, rhs_casted, "and_compound"),
+                            '$' => c.LLVMBuildOr(self.builder, current_value, rhs_casted, "or_compound"),
+                            '^' => c.LLVMBuildXor(self.builder, current_value, rhs_casted, "xor_compound"),
+                            '<' => c.LLVMBuildShl(self.builder, current_value, rhs_casted, "shl_compound"),
+                            '>' => c.LLVMBuildAShr(self.builder, current_value, rhs_casted, "ashr_compound"),
+                            else => return errors.CodegenError.UnsupportedOperation,
+                        };
+                        _ = c.LLVMBuildStore(self.builder, new_value, var_info.value);
+                    },
+                    .array_index => |arr_idx| {
+                        var collected_indices = std.ArrayList(c.LLVMValueRef){};
+                        defer collected_indices.deinit(self.allocator);
+                        const base_node = try self.collectArrayIndices(arr_idx.array, &collected_indices);
+                        var index_value = try self.generateExpression(arr_idx.index);
+                        index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
+                        try collected_indices.append(self.allocator, index_value);
+                        const array_name = try self.getBaseIdentifierName(base_node);
+                        defer self.allocator.free(array_name);
+                        const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
+
+                        var final_type = var_info.type_ref;
+                        for (0..collected_indices.items.len) |_| final_type = c.LLVMGetElementType(final_type);
+                        var all_indices = std.ArrayList(c.LLVMValueRef){};
+                        defer all_indices.deinit(self.allocator);
+                        try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
+                        var i = collected_indices.items.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try all_indices.append(self.allocator, collected_indices.items[i]);
+                        }
+                        const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
+                        const current_val = c.LLVMBuildLoad2(self.builder, final_type, element_ptr, "load_elem");
+                        const expected_ty_name = self.getTypeNameFromLLVMType(final_type);
+                        const rhs_raw = try self.generateExpressionWithContext(cas.value, expected_ty_name);
+                        const rhs_val = try self.castWithRules(rhs_raw, final_type, cas.value);
+
+                        const is_float = std.mem.eql(u8, expected_ty_name, "f16") or
+                            std.mem.eql(u8, expected_ty_name, "f32") or
+                            std.mem.eql(u8, expected_ty_name, "f64");
+
+                        const new_value = switch (cas.op) {
+                            '+' => if (is_float)
+                                c.LLVMBuildFAdd(self.builder, current_val, rhs_val, "fadd_array_compound")
+                            else
+                                c.LLVMBuildAdd(self.builder, current_val, rhs_val, "add_array_compound"),
+                            '-' => if (is_float)
+                                c.LLVMBuildFSub(self.builder, current_val, rhs_val, "fsub_array_compound")
+                            else
+                                c.LLVMBuildSub(self.builder, current_val, rhs_val, "sub_array_compound"),
+                            '*' => if (is_float)
+                                c.LLVMBuildFMul(self.builder, current_val, rhs_val, "fmul_array_compound")
+                            else
+                                c.LLVMBuildMul(self.builder, current_val, rhs_val, "mul_array_compound"),
+                            '/' => if (is_float)
+                                c.LLVMBuildFDiv(self.builder, current_val, rhs_val, "fdiv_array_compound")
+                            else
+                                c.LLVMBuildSDiv(self.builder, current_val, rhs_val, "sdiv_array_compound"),
+                            '%' => if (is_float) blk: {
+                                self.uses_float_modulo = true;
+                                break :blk c.LLVMBuildFRem(self.builder, current_val, rhs_val, "frem_array_compound");
+                            } else blk: {
+                                const is_unsigned = isUnsignedType(expected_ty_name);
+                                break :blk if (is_unsigned)
+                                    c.LLVMBuildURem(self.builder, current_val, rhs_val, "urem_array_compound")
+                                else
+                                    c.LLVMBuildSRem(self.builder, current_val, rhs_val, "srem_array_compound");
+                            },
+                            'A' => c.LLVMBuildAnd(self.builder, current_val, rhs_val, "and_array_compound"),
+                            '$' => c.LLVMBuildOr(self.builder, current_val, rhs_val, "or_array_compound"),
+                            '^' => c.LLVMBuildXor(self.builder, current_val, rhs_val, "xor_array_compound"),
+                            '<' => c.LLVMBuildShl(self.builder, current_val, rhs_val, "shl_array_compound"),
+                            '>' => c.LLVMBuildAShr(self.builder, current_val, rhs_val, "ashr_array_compound"),
+                            else => return errors.CodegenError.UnsupportedOperation,
+                        };
+                        _ = c.LLVMBuildStore(self.builder, new_value, element_ptr);
+                    },
+                    .qualified_identifier => |qident| {
+                        const base_name = try self.getBaseIdentifierName(cas.target);
+                        defer self.allocator.free(base_name);
+                        const var_info = CodeGenerator.getVariable(self, base_name) orelse return errors.CodegenError.UndefinedVariable;
+                        const struct_name = var_info.type_name;
+                        const field_map = self.struct_fields.get(struct_name) orelse return errors.CodegenError.TypeMismatch;
+                        const field_index = field_map.get(qident.field) orelse return errors.CodegenError.UndefinedVariable;
+                        const struct_type = self.struct_types.get(struct_name) orelse return errors.CodegenError.TypeMismatch;
+                        const field_ptr = try self.getStructFieldPointer(@ptrCast(struct_type), var_info.value, @intCast(field_index));
+                        const struct_decl = self.getStructDecl(struct_name) orelse return errors.CodegenError.TypeMismatch;
+                        const field_type_name = struct_decl.fields.items[field_index].type_name;
+                        const field_type = self.getLLVMType(field_type_name);
+                        const current_value = c.LLVMBuildLoad2(self.builder, field_type, field_ptr, "load_field");
+                        const rhs_value = try self.generateExpressionWithContext(cas.value, field_type_name);
+                        const rhs_casted = try self.castWithSourceRules(rhs_value, field_type, cas.value);
+
+                        const is_float = std.mem.eql(u8, field_type_name, "f16") or
+                            std.mem.eql(u8, field_type_name, "f32") or
+                            std.mem.eql(u8, field_type_name, "f64");
+
+                        const new_value = switch (cas.op) {
+                            '+' => if (is_float)
+                                c.LLVMBuildFAdd(self.builder, current_value, rhs_casted, "fadd_field_compound")
+                            else
+                                c.LLVMBuildAdd(self.builder, current_value, rhs_casted, "add_field_compound"),
+                            '-' => if (is_float)
+                                c.LLVMBuildFSub(self.builder, current_value, rhs_casted, "fsub_field_compound")
+                            else
+                                c.LLVMBuildSub(self.builder, current_value, rhs_casted, "sub_field_compound"),
+                            '*' => if (is_float)
+                                c.LLVMBuildFMul(self.builder, current_value, rhs_casted, "fmul_field_compound")
+                            else
+                                c.LLVMBuildMul(self.builder, current_value, rhs_casted, "mul_field_compound"),
+                            '/' => if (is_float)
+                                c.LLVMBuildFDiv(self.builder, current_value, rhs_casted, "fdiv_field_compound")
+                            else
+                                c.LLVMBuildSDiv(self.builder, current_value, rhs_casted, "sdiv_field_compound"),
+                            '%' => if (is_float) blk: {
+                                self.uses_float_modulo = true;
+                                break :blk c.LLVMBuildFRem(self.builder, current_value, rhs_casted, "frem_field_compound");
+                            } else blk: {
+                                const is_unsigned = isUnsignedType(field_type_name);
+                                break :blk if (is_unsigned)
+                                    c.LLVMBuildURem(self.builder, current_value, rhs_casted, "urem_field_compound")
+                                else
+                                    c.LLVMBuildSRem(self.builder, current_value, rhs_casted, "srem_field_compound");
+                            },
+                            'A' => c.LLVMBuildAnd(self.builder, current_value, rhs_casted, "and_field_compound"),
+                            '$' => c.LLVMBuildOr(self.builder, current_value, rhs_casted, "or_field_compound"),
+                            '^' => c.LLVMBuildXor(self.builder, current_value, rhs_casted, "xor_field_compound"),
+                            '<' => c.LLVMBuildShl(self.builder, current_value, rhs_casted, "shl_field_compound"),
+                            '>' => c.LLVMBuildAShr(self.builder, current_value, rhs_casted, "ashr_field_compound"),
+                            else => return errors.CodegenError.UnsupportedOperation,
+                        };
+                        _ = c.LLVMBuildStore(self.builder, new_value, field_ptr);
+                    },
+                    else => {
+                        return errors.CodegenError.UnsupportedOperation;
+                    },
+                }
+            },
             .function_call => {
                 _ = try self.generateExpression(stmt);
             },
