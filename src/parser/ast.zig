@@ -4,6 +4,7 @@ pub const NodeType = enum {
     program,
     function,
     assignment,
+    compound_assignment,
     var_decl,
     function_call,
     method_call,
@@ -86,6 +87,12 @@ pub const NullLiteral = struct {};
 pub const Assignment = struct {
     target: *Node,
     value: *Node,
+};
+
+pub const CompoundAssignment = struct {
+    target: *Node,
+    value: *Node,
+    op: u8,
 };
 
 pub const Comparison = struct {
@@ -266,6 +273,7 @@ pub const NodeData = union(NodeType) {
     program: Program,
     function: Function,
     assignment: Assignment,
+    compound_assignment: CompoundAssignment,
     var_decl: VarDecl,
     function_call: FunctionCall,
     method_call: MethodCall,
@@ -366,6 +374,10 @@ pub const Node = struct {
             .assignment => |as| {
                 as.target.destroy();
                 as.value.destroy();
+            },
+            .compound_assignment => |cas| {
+                cas.target.destroy();
+                cas.value.destroy();
             },
             .var_decl => |decl| {
                 if (decl.initializer) |init| {
@@ -561,6 +573,13 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             printIndent(indent + 1, true, false);
             std.debug.print("= \n", .{});
             printAST(as.value, indent + 2, true, false);
+        },
+        .compound_assignment => |cas| {
+            std.debug.print("🔄 Compound Assignment: \x1b[35m{c}= \x1b[0m\n", .{cas.op});
+            printAST(cas.target, indent + 1, false, false);
+            printIndent(indent + 1, true, false);
+            std.debug.print("\x1b[35m{c}= \x1b[0m\n", .{cas.op});
+            printAST(cas.value, indent + 2, true, false);
         },
         .var_decl => |decl| {
             if (decl.initializer) |init| {
