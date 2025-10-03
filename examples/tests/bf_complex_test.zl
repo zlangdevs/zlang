@@ -51,6 +51,38 @@ fun ctx_parse_test() >> i16 {
     return res;
 }
 
+fun simple_arr_test(a: arr<u8, 3>) >> void {
+    brainfuck{
+        ?load a 0?
+        >>[<<+>>-]<[<+>-]
+    };
+    @printf("(expected 6):%d\n", a[0]);
+}
+
+fun arr_split_test(a: arr<u16, 4>) >> void {
+    brainfuck {
+        ?load a 0?
+        >>>[<<+>>-]>>[<<<<+>>>>-]>>[<<<<<<+>>>>>>-]
+    };
+    @printf("(expected 10):%d\n", a[0]);
+}
+
+fun combine_test(a: arr<u8, 2>, b: arr<u8, 2>) >> void {
+    brainfuck {
+        ?load a 0?
+        ?load b 2?
+        >>>[<<<+>>>-]<[<<+>>-]<[<+>-]
+    };
+    @printf("(expected 20):%d\n", a[0]);
+}
+
+fun string_test(s: arr<u8, 5>) >> void {
+    brainfuck {
+        ?load s 0?
+        [.>]
+    };
+}
+
 fun main() >> i32 {
     @printf("i16 test (expected 255):%d\n", bf_i16());
     @printf("subzero test (expected 255):%d\n", bf_subzero());
@@ -59,5 +91,17 @@ fun main() >> i32 {
     @printf("brainfuck hello world:\n");
     bf_hello();
     @printf("ctx parse test (expected -1000):%d\n", ctx_parse_test());
+    @printf("===Testing array functionality===");
+    arr<u8, 3> arg1 = {1, 2, 3};
+    arr<u16, 4> arg2 = {1, 2, 3, 4};
+    arr<u8, 2> arg3 = {8, 2};
+    arr<u8, 2> arg4 = {4, 6};
+    simple_arr_test(arg1);
+    arr_split_test(arg2);
+    combine_test(arg3, arg4);
+    arr<u8, 5> str = {49, 51, 51, 55, 0};
+    arr<u8, 5> str2 = "1337";
+    @printf("(expected 1337):"); string_test(str);
+    @printf("\n(expected 1337):"); string_test(str2);
     return 0;
 }
