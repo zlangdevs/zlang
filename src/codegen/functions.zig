@@ -63,9 +63,16 @@ fn createGenericLibcFunction(cg: *llvm.CodeGenerator, func_name: []const u8) !c.
 pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.CodegenError!void {
     var param_types = std.ArrayList(c.LLVMTypeRef){};
     defer param_types.deinit(cg.allocator);
+
     for (func.parameters.items) |param| {
-        try param_types.append(cg.allocator, @ptrCast(cg.getLLVMType(param.type_name)));
+        const param_type = cg.getLLVMType(param.type_name);
+        if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind and utils.shouldUseByVal(cg, @ptrCast(param_type))) {
+            try param_types.append(cg.allocator, c.LLVMPointerType(@ptrCast(param_type), 0));
+        } else {
+            try param_types.append(cg.allocator, @ptrCast(param_type));
+        }
     }
+
     const return_type = cg.getLLVMType(func.return_type);
     const function_type = if (param_types.items.len > 0)
         c.LLVMFunctionType(@ptrCast(return_type), param_types.items.ptr, @intCast(param_types.items.len), 0)
@@ -76,6 +83,17 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
     defer cg.allocator.free(func_name_z);
 
     const llvm_func = c.LLVMAddFunction(@ptrCast(cg.module), func_name_z.ptr, function_type);
+
+    for (func.parameters.items, 0..) |param, i| {
+        const param_type = cg.getLLVMType(param.type_name);
+        if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind and utils.shouldUseByVal(cg, @ptrCast(param_type))) {
+            const byval_attr = c.LLVMCreateTypeAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("byval", 5), @ptrCast(param_type));
+            c.LLVMAddAttributeAtIndex(llvm_func, @intCast(i + 1), byval_attr);
+            const align_attr = c.LLVMCreateEnumAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("align", 5), cg.getAlignmentForType(@ptrCast(param_type)));
+            c.LLVMAddAttributeAtIndex(llvm_func, @intCast(i + 1), align_attr);
+        }
+    }
+
     try cg.functions.put(func.name, @ptrCast(llvm_func));
     try cg.regular_functions.put(func.name, true);
 }
@@ -95,13 +113,22 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
     for (func.parameters.items, 0..) |param, i| {
         const param_value = c.LLVMGetParam(@ptrCast(llvm_func), @intCast(i));
         const param_type = cg.getLLVMType(param.type_name);
-        const alloca = c.LLVMBuildAlloca(@ptrCast(cg.builder), @ptrCast(param_type), param.name.ptr);
-        _ = c.LLVMBuildStore(@ptrCast(cg.builder), @ptrCast(param_value), @ptrCast(alloca));
-        try variables.putVariable(cg, param.name, structs.VariableInfo{
-            .value = @ptrCast(alloca),
-            .type_ref = @ptrCast(param_type),
-            .type_name = param.type_name,
-        });
+
+        if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind and utils.shouldUseByVal(cg, @ptrCast(param_type))) {
+            try variables.putVariable(cg, param.name, structs.VariableInfo{
+                .value = @ptrCast(param_value),
+                .type_ref = @ptrCast(param_type),
+                .type_name = param.type_name,
+            });
+        } else {
+            const alloca = c.LLVMBuildAlloca(@ptrCast(cg.builder), @ptrCast(param_type), param.name.ptr);
+            _ = c.LLVMBuildStore(@ptrCast(cg.builder), @ptrCast(param_value), @ptrCast(alloca));
+            try variables.putVariable(cg, param.name, structs.VariableInfo{
+                .value = @ptrCast(alloca),
+                .type_ref = @ptrCast(param_type),
+                .type_name = param.type_name,
+            });
+        }
     }
 
     const valid_control_flow = try hasValidControlFlow(cg, func);
@@ -297,7 +324,6 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                 }
             }
         } else {
-            // Use the actual function that will be called for type checking
             const func_type = c.LLVMGlobalGetValueType(func);
             const param_count = c.LLVMCountParamTypes(func_type);
             if (i < @as(usize, @intCast(param_count))) {
@@ -306,7 +332,17 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                 try param_types.resize(cg.allocator, @as(usize, @intCast(param_count)));
                 c.LLVMGetParamTypes(func_type, param_types.items.ptr);
                 const expected_type = param_types.items[i];
-                arg_value = try cg.castWithRules(arg_value, expected_type, arg);
+
+                const arg_type = c.LLVMTypeOf(arg_value);
+                if (c.LLVMGetTypeKind(arg_type) == c.LLVMStructTypeKind and utils.shouldUseByVal(cg, arg_type)) {
+                    if (c.LLVMGetTypeKind(c.LLVMTypeOf(arg_value)) == c.LLVMStructTypeKind) {
+                        const temp_alloca = c.LLVMBuildAlloca(cg.builder, arg_type, "byval_temp");
+                        _ = c.LLVMBuildStore(cg.builder, arg_value, temp_alloca);
+                        arg_value = temp_alloca;
+                    }
+                } else {
+                    arg_value = try cg.castWithRules(arg_value, expected_type, arg);
+                }
             }
         }
 
