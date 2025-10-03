@@ -3,6 +3,7 @@ const utils = @import("utils.zig");
 const codegen = @import("llvm.zig").CodeGenerator;
 const ast = @import("../parser/ast.zig");
 const errors = @import("../errors.zig");
+const structs = @import("structs.zig");
 
 const c_bindings = @import("c_bindings.zig");
 const c = c_bindings.c;
@@ -10,6 +11,7 @@ const c = c_bindings.c;
 const BfLoadRequest = struct {
     var_name: []const u8,
     load_idx: i32,
+    array_index: ?u32 = null,
 };
 
 const BrainfuckContext = struct {
@@ -103,10 +105,12 @@ fn ParseBfContext(allocator: std.mem.Allocator, input: []const u8) BrainfuckCont
                     continue;
                 };
                 if (std.fmt.parseInt(i32, std.mem.trim(u8, load_idx_str, " \t"), 10)) |load_idx| {
-                    ctx.requests.append(allocator, .{
-                        .var_name = var_name,
-                        .load_idx = load_idx,
-                    }) catch {};
+                    if (try expandArrayLoad(allocator, &ctx, var_name, load_idx)) {} else {
+                        ctx.requests.append(allocator, .{
+                            .var_name = var_name,
+                            .load_idx = load_idx,
+                        }) catch {};
+                    }
                 } else |_| {}
             }
             line_pos = end_pos + 1;
@@ -115,9 +119,64 @@ fn ParseBfContext(allocator: std.mem.Allocator, input: []const u8) BrainfuckCont
     return ctx;
 }
 
+fn expandArrayLoad(allocator: std.mem.Allocator, ctx: *BrainfuckContext, var_name: []const u8, start_pos: i32) !bool {
+    _ = allocator;
+    _ = ctx;
+    _ = var_name;
+    _ = start_pos;
+    return false;
+}
+
+fn expandArrayLoads(cg: *codegen, ctx: *BrainfuckContext) !void {
+    var new_requests = std.ArrayList(BfLoadRequest){};
+    defer new_requests.deinit(cg.allocator);
+
+    for (ctx.requests.items) |req| {
+        const var_info = cg.getVariable(req.var_name) orelse {
+            try new_requests.append(cg.allocator, req);
+            continue;
+        };
+
+        const type_kind = c.LLVMGetTypeKind(var_info.type_ref);
+        if (type_kind == c.LLVMArrayTypeKind) {
+            const element_type = c.LLVMGetElementType(var_info.type_ref);
+            const array_length = c.LLVMGetArrayLength(var_info.type_ref);
+            const element_type_kind = c.LLVMGetTypeKind(element_type);
+
+            if (element_type_kind == c.LLVMIntegerTypeKind) {
+                const element_size_bits = c.LLVMGetIntTypeWidth(element_type);
+                const cells_per_element: i32 = @intCast((element_size_bits + @as(c_uint, @intCast(ctx.cell_size)) - 1) / @as(c_uint, @intCast(ctx.cell_size)));
+                var i: u32 = 0;
+                while (i < array_length) : (i += 1) {
+                    const element_pos = req.load_idx + @as(i32, @intCast(i)) * cells_per_element;
+
+                    try new_requests.append(cg.allocator, .{
+                        .var_name = req.var_name,
+                        .load_idx = element_pos,
+                        .array_index = i,
+                    });
+                }
+            } else {
+                try new_requests.append(cg.allocator, req);
+            }
+        } else {
+            try new_requests.append(cg.allocator, req);
+        }
+    }
+
+    ctx.requests.deinit(cg.allocator);
+    ctx.requests = new_requests;
+    new_requests = std.ArrayList(BfLoadRequest){};
+}
+
 pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
     var ctx = ParseBfContext(cg.allocator, bf.code);
-    defer ctx.requests.deinit(cg.allocator);
+    defer {
+        freeExpandedRequests(cg.allocator, ctx.requests.items);
+        ctx.requests.deinit(cg.allocator);
+    }
+
+    try expandArrayLoads(cg, &ctx);
 
     const current_function = cg.current_function orelse return errors.CodegenError.TypeMismatch;
 
@@ -149,7 +208,30 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
 
     // --- 2. Load variables into tape ---
     for (ctx.requests.items) |req| {
-        const var_info = cg.getVariable(req.var_name) orelse {
+        // Handle array element access using array_index field
+        const var_info = if (req.array_index) |index| blk: {
+            const array_var_info = cg.getVariable(req.var_name) orelse return errors.CodegenError.UndefinedVariable;
+            const array_type_kind = c.LLVMGetTypeKind(array_var_info.type_ref);
+            if (array_type_kind != c.LLVMArrayTypeKind) return errors.CodegenError.TypeMismatch;
+
+            const element_type = c.LLVMGetElementType(array_var_info.type_ref);
+            const array_length = c.LLVMGetArrayLength(array_var_info.type_ref);
+            if (index >= array_length) return errors.CodegenError.UndefinedVariable;
+
+            // Get pointer to the specific array element
+            const index_val = c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), @as(c_ulonglong, @intCast(index)), 0);
+            var gep_indices: [2]c.LLVMValueRef = .{
+                c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0),
+                index_val,
+            };
+            const element_ptr = c.LLVMBuildGEP2(cg.builder, array_var_info.type_ref, array_var_info.value, &gep_indices[0], 2, "array_element_ptr");
+
+            break :blk structs.VariableInfo{
+                .value = element_ptr,
+                .type_ref = element_type,
+                .type_name = array_var_info.type_name, // Use array's type name for now
+            };
+        } else cg.getVariable(req.var_name) orelse {
             return errors.CodegenError.UndefinedVariable;
         };
 
@@ -318,7 +400,30 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
 
     // --- 4. Sync variables back from tape ---
     for (ctx.requests.items) |req| {
-        const var_info = cg.getVariable(req.var_name) orelse continue;
+        // Handle array element access using array_index field for sync back
+        const var_info = if (req.array_index) |index| blk: {
+            const array_var_info = cg.getVariable(req.var_name) orelse continue;
+            const array_type_kind = c.LLVMGetTypeKind(array_var_info.type_ref);
+            if (array_type_kind != c.LLVMArrayTypeKind) continue;
+
+            const element_type = c.LLVMGetElementType(array_var_info.type_ref);
+            const array_length = c.LLVMGetArrayLength(array_var_info.type_ref);
+            if (index >= array_length) continue;
+
+            // Get pointer to the specific array element
+            const index_val = c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), @as(c_ulonglong, @intCast(index)), 0);
+            var gep_indices: [2]c.LLVMValueRef = .{
+                c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0),
+                index_val,
+            };
+            const element_ptr = c.LLVMBuildGEP2(cg.builder, array_var_info.type_ref, array_var_info.value, &gep_indices[0], 2, "array_element_ptr");
+
+            break :blk structs.VariableInfo{
+                .value = element_ptr,
+                .type_ref = element_type,
+                .type_name = array_var_info.type_name, // Use array's type name for now
+            };
+        } else cg.getVariable(req.var_name) orelse continue;
 
         const type_kind = c.LLVMGetTypeKind(var_info.type_ref);
         if (type_kind != c.LLVMIntegerTypeKind) {
@@ -384,4 +489,11 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
     }
 
     return c.LLVMConstInt(i32_type, 0, 0);
+}
+
+// Helper function to free allocated variable names in requests
+fn freeExpandedRequests(allocator: std.mem.Allocator, requests: []const BfLoadRequest) void {
+    // No longer need to free synthetic names since we don't create them
+    _ = allocator;
+    _ = requests;
 }
