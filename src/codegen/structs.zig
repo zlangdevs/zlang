@@ -12,6 +12,7 @@ pub const VariableInfo = struct {
     value: c.LLVMValueRef,
     type_ref: c.LLVMTypeRef,
     type_name: []const u8,
+    is_byval_param: bool = false,
 };
 
 pub const LoopContext = struct {
