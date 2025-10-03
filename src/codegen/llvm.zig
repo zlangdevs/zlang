@@ -22,6 +22,7 @@ pub const CodeGenerator = struct {
     external_c_functions: std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     c_function_declarations: std.HashMap([]const u8, bool, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     regular_functions: std.HashMap([]const u8, bool, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    sret_functions: std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     current_function: ?c.LLVMValueRef,
     current_function_return_type: []const u8,
     control_flow_analyzer: control_flow.ControlFlowAnalyzer,
@@ -61,6 +62,7 @@ pub const CodeGenerator = struct {
             .external_c_functions = std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .c_function_declarations = std.HashMap([]const u8, bool, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .regular_functions = std.HashMap([]const u8, bool, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .sret_functions = std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .current_function = null,
             .current_function_return_type = "",
             .control_flow_analyzer = control_flow_analyzer,
@@ -82,6 +84,7 @@ pub const CodeGenerator = struct {
         self.external_c_functions.deinit();
         self.c_function_declarations.deinit();
         self.regular_functions.deinit();
+        self.sret_functions.deinit();
         self.loop_context_stack.deinit(self.allocator);
         self.struct_types.deinit();
         var struct_fields_iter = self.struct_fields.iterator();
