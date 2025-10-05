@@ -159,7 +159,18 @@ pub fn assignToField(cg: *llvm.CodeGenerator, field_ptr: c.LLVMValueRef, field_t
         try assignStringLiteralToArrayField(cg, field_ptr, field_type, value_expr.data.string_literal);
         return;
     }
-    const value_raw = try cg.generateExpression(value_expr);
+    var value_raw = try cg.generateExpression(value_expr);
+
+    // If value_expr is a struct_initializer, generateExpression returns a pointer to the struct.
+    // We need to load the struct value from that pointer.
+    if (value_expr.data == .struct_initializer) {
+        const value_type = c.LLVMTypeOf(value_raw);
+        const value_type_kind = c.LLVMGetTypeKind(value_type);
+        if (value_type_kind == c.LLVMPointerTypeKind and field_type_kind == c.LLVMStructTypeKind) {
+            value_raw = c.LLVMBuildLoad2(cg.builder, field_type, value_raw, "load_struct_init");
+        }
+    }
+
     const final_val = try cg.castWithRules(value_raw, field_type, value_expr);
     const store_instr = c.LLVMBuildStore(cg.builder, final_val, field_ptr);
     const alignment = utils.getAlignmentForType(cg, field_type);
