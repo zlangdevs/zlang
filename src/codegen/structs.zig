@@ -160,9 +160,6 @@ pub fn assignToField(cg: *llvm.CodeGenerator, field_ptr: c.LLVMValueRef, field_t
         return;
     }
     var value_raw = try cg.generateExpression(value_expr);
-
-    // If value_expr is a struct_initializer, generateExpression returns a pointer to the struct.
-    // We need to load the struct value from that pointer.
     if (value_expr.data == .struct_initializer) {
         const value_type = c.LLVMTypeOf(value_raw);
         const value_type_kind = c.LLVMGetTypeKind(value_type);
