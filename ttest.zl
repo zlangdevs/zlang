@@ -1,0 +1,18 @@
+struct Vector3 {
+    x f32,
+    y f32,
+    z f32,
+}
+
+struct Camera {
+    position Vector3,
+    
+}
+
+fun main() >> i32 {
+    Camera c;
+    c.position = Vector3{x = 0.0, y = 0.0, z = 0.0}; ?? FIXED: Now works!
+    Vector3 v = Vector3{x = 0.0, y = 0.0, z = 0.0};
+    c.position = v;
+    return 0;
+}
