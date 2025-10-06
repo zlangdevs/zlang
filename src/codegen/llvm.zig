@@ -1648,11 +1648,16 @@ pub const CodeGenerator = struct {
             c.LLVMSetInitializer(global_var, enum_const);
             c.LLVMSetLinkage(global_var, c.LLVMExternalLinkage);
             c.LLVMSetGlobalConstant(global_var, 1);
-            try self.variables.put(try self.allocator.dupe(u8, enum_name_z), structs.VariableInfo{
+
+            const var_info = structs.VariableInfo{
                 .value = @ptrCast(global_var),
                 .type_ref = @ptrCast(c.LLVMInt32TypeInContext(@ptrCast(self.context))),
                 .type_name = "i32",
-            });
+                .is_const = true,
+            };
+            try self.variables.put(try self.allocator.dupe(u8, enum_name_z), var_info);
+            try self.variables.put(try self.allocator.dupe(u8, enum_value.name), var_info);
+
             current_value = value + 1;
         }
     }
