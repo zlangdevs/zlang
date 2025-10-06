@@ -1,19 +1,107 @@
-fun main() >> i32 {
-    i32 a = 100;
-    i8 b = 4;
+fun bf_i16() >> i16 {
+    i16 res = 256;
     brainfuck {
-        ?cell_size 8?
-        ?cell_signed false?
-        ?len 100?
+        ?load res 0?
+        ?cell_size 16?
+        ->+
+    };
+    return res;
+}
+
+fun bf_subzero() >> i16 {
+    i16 res = 0;
+    brainfuck{
+        ?load res 0?
+        >-
+    };
+    return res;
+}
+
+fun bf_sign() >> i8 {
+    i8 res = 0;
+    brainfuck {
+        ?load res 0?
+        ---
+    };
+    return res;
+}
+
+fun bf_hello() >> void {
+    brainfuck{>++++++++[<+++++++++>-]<.+++++++++++++++++++++++++++++.+++++++..+++.[-]>++++[<+++++++++++>-]<.------------.[-]>+++[<+++++++++++++++++++++++++++
+    ++>-]<.++++++++++++++++++++++++.+++.------.--------.[-]>+++[<+++++++++++>-]<.-----------------------.[-]};return;
+}
+
+fun bf_u32() >> u32 {
+    u32 res = 0;
+    brainfuck{
+        ?cell_size 32?
+        ?load res 0?
+        -
+    };
+    return res;
+}
+
+fun ctx_parse_test() >> i16 {
+    i16 a = -1000;
+    i16 res = 0;
+    brainfuck{
+        ?load a 0??load res 3??cell_size 16??cell_signed true?
+        [->>>+<<<]
+    };
+    return res;
+}
+
+fun simple_arr_test(a: arr<u8, 3>) >> void {
+    brainfuck{
         ?load a 0?
-        ?load b 4?
-        >>>>[-<->]<<+
+        >>[<<+>>-]<[<+>-]
     };
-    @printf("a after bf (expected 352):%d\n", a);
-    @printf("b after bf (expected 0):%d\n", b);
+    @printf("(expected 6):%d\n", a[0]);
+}
+
+fun arr_split_test(a: arr<u16, 4>) >> void {
     brainfuck {
-        ++++++[>++++++++<-]>.
-        <++++++++++.
+        ?load a 0?
+        >>>[<<+>>-]>>[<<<<+>>>>-]>>[<<<<<<+>>>>>>-]
     };
+    @printf("(expected 10):%d\n", a[0]);
+}
+
+fun combine_test(a: arr<u8, 2>, b: arr<u8, 2>) >> void {
+    brainfuck {
+        ?load a 0?
+        ?load b 2?
+        >>>[<<<+>>>-]<[<<+>>-]<[<+>-]
+    };
+    @printf("(expected 20):%d\n", a[0]);
+}
+
+fun string_test(s: arr<u8, 5>) >> void {
+    brainfuck {
+        ?load s 0?
+        [.>]
+    };
+}
+
+fun main() >> i32 {
+    @printf("i16 test (expected 255):%d\n", bf_i16());
+    @printf("subzero test (expected 255):%d\n", bf_subzero());
+    @printf("sign test (expected -3):%d\n", bf_sign());
+    @printf("u32 test (expected 4294967295):%u\n", bf_u32());
+    @printf("brainfuck hello world:\n");
+    bf_hello();
+    @printf("ctx parse test (expected -1000):%d\n", ctx_parse_test());
+    @printf("===Testing array functionality===");
+    arr<u8, 3> arg1 = {1, 2, 3};
+    arr<u16, 4> arg2 = {1, 2, 3, 4};
+    arr<u8, 2> arg3 = {8, 2};
+    arr<u8, 2> arg4 = {4, 6};
+    simple_arr_test(arg1);
+    arr_split_test(arg2);
+    combine_test(arg3, arg4);
+    arr<u8, 5> str = {49, 51, 51, 55, 0};
+    arr<u8, 5> str2 = "1337";
+    @printf("(expected 1337):"); string_test(str);
+    @printf("\n(expected 1337):"); string_test(str2);
     return 0;
 }
