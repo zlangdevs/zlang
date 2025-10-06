@@ -105,6 +105,7 @@ pub const VarDecl = struct {
     type_name: []const u8,
     name: []const u8,
     initializer: ?*Node,
+    is_const: bool = false,
 };
 
 pub const FunctionCall = struct {

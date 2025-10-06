@@ -391,6 +391,12 @@ pub const CodeGenerator = struct {
     fn generateRegularVariableAssignment(self: *CodeGenerator, as: ast.Assignment) errors.CodegenError!void {
         const ident = as.target.data.identifier;
         const var_info = CodeGenerator.getVariable(self, ident.name) orelse return errors.CodegenError.UndefinedVariable;
+
+        if (var_info.is_const) {
+            std.debug.print("Error: Cannot reassign const variable '{s}'\n", .{ident.name});
+            return errors.CodegenError.ConstReassignment;
+        }
+
         const var_type_kind = c.LLVMGetTypeKind(@ptrCast(var_info.type_ref));
         if (var_type_kind == c.LLVMArrayTypeKind) {
             try self.generateArrayReassignment(ident.name, as.value);
@@ -560,6 +566,7 @@ pub const CodeGenerator = struct {
                         .value = null,
                         .type_ref = @ptrCast(c.LLVMVoidTypeInContext(@ptrCast(self.context))),
                         .type_name = decl.type_name,
+                        .is_const = decl.is_const,
                     });
                     return;
                 }
@@ -575,6 +582,7 @@ pub const CodeGenerator = struct {
                         .value = @ptrCast(alloca),
                         .type_ref = @ptrCast(var_type),
                         .type_name = decl.type_name,
+                        .is_const = decl.is_const,
                     });
                     if (decl.initializer) |initializer| {
                         if (initializer.data == .struct_initializer) {
@@ -666,6 +674,12 @@ pub const CodeGenerator = struct {
                 switch (cas.target.data) {
                     .identifier => |ident| {
                         const var_info = CodeGenerator.getVariable(self, ident.name) orelse return errors.CodegenError.UndefinedVariable;
+
+                        if (var_info.is_const) {
+                            std.debug.print("Error: Cannot reassign const variable '{s}'\n", .{ident.name});
+                            return errors.CodegenError.ConstReassignment;
+                        }
+
                         const current_value = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_current");
                         const rhs_value = try self.generateExpressionWithContext(cas.value, var_info.type_name);
                         const rhs_casted = try self.castWithSourceRules(rhs_value, @ptrCast(var_info.type_ref), cas.value);
@@ -1214,6 +1228,11 @@ pub const CodeGenerator = struct {
         defer self.allocator.free(array_name);
         const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
 
+        if (var_info.is_const) {
+            std.debug.print("Error: Cannot modify element of const array '{s}'\n", .{array_name});
+            return errors.CodegenError.ConstReassignment;
+        }
+
         var final_type = var_info.type_ref;
         for (0..collected_indices.items.len) |_| {
             final_type = c.LLVMGetElementType(@ptrCast(final_type));
@@ -1312,6 +1331,7 @@ pub const CodeGenerator = struct {
                 .value = @ptrCast(alloca),
                 .type_ref = @ptrCast(array_type),
                 .type_name = decl.type_name,
+                .is_const = decl.is_const,
             });
             if (decl.initializer) |initializer| {
                 switch (initializer.data) {
@@ -1376,6 +1396,7 @@ pub const CodeGenerator = struct {
                 .value = @ptrCast(alloca),
                 .type_ref = @ptrCast(vector_type),
                 .type_name = decl.type_name,
+                .is_const = decl.is_const,
             });
             if (decl.initializer) |initializer| {
                 switch (initializer.data) {
@@ -1592,10 +1613,14 @@ pub const CodeGenerator = struct {
                 }
 
                 c.LLVMSetLinkage(global_var, c.LLVMExternalLinkage);
+                if (decl.is_const) {
+                    c.LLVMSetGlobalConstant(global_var, 1);
+                }
                 try self.variables.put(try self.allocator.dupe(u8, decl.name), structs.VariableInfo{
                     .value = @ptrCast(global_var),
                     .type_ref = @ptrCast(var_type),
                     .type_name = decl.type_name,
+                    .is_const = decl.is_const,
                 });
             },
             else => return errors.CodegenError.TypeMismatch,

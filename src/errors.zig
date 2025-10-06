@@ -44,6 +44,7 @@ pub const CodegenError = error{
     UnsupportedOperation,
     OutOfMemory,
     RedeclaredVariable,
+    ConstReassignment,
 };
 
 pub const CLIError = error{ NoInputPath, NoOutputPath, NoArch, InvalidArgument, NoHelp };

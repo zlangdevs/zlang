@@ -13,6 +13,7 @@ pub const VariableInfo = struct {
     type_ref: c.LLVMTypeRef,
     type_name: []const u8,
     is_byval_param: bool = false,
+    is_const: bool = false,
 };
 
 pub const LoopContext = struct {
@@ -145,6 +146,12 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
 
 pub fn generateStructFieldAssignment(cg: *llvm.CodeGenerator, struct_name: []const u8, field_path: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
     const struct_var_info = variables.getVariable(cg, struct_name) orelse return errors.CodegenError.UndefinedVariable;
+
+    if (struct_var_info.is_const) {
+        std.debug.print("Error: Cannot modify field of const variable '{s}'\n", .{struct_name});
+        return errors.CodegenError.ConstReassignment;
+    }
+
     return try generateRecursiveFieldAssignment(cg, struct_var_info.value, struct_var_info.type_ref, struct_var_info.type_name, field_path, value_expr);
 }
 
