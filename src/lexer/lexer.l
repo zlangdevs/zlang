@@ -41,6 +41,7 @@ FLOAT_DOT  \.{DIGIT_WITH_DELIM}{EXPONENT}?
 "for"       { return TOKEN_FOR; }
 "fun"       { return TOKEN_FUN; }
 "return"    { return TOKEN_RETURN; }
+"const"     { return TOKEN_CONST; }
 "break"     { return TOKEN_BREAK; }
 "continue"  { return TOKEN_CONTINUE; }
 "use"       { return TOKEN_USE; }

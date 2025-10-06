@@ -211,7 +211,7 @@ export fn zig_create_compound_assignment(target_ptr: ?*anyopaque, value_ptr: ?*a
     return @as(*anyopaque, @ptrCast(node));
 }
 
-export fn zig_create_var_decl(type_name_ptr: [*c]const u8, name_ptr: [*c]const u8, initializer_ptr: ?*anyopaque) ?*anyopaque {
+export fn zig_create_var_decl(type_name_ptr: [*c]const u8, name_ptr: [*c]const u8, initializer_ptr: ?*anyopaque, is_const: c_int) ?*anyopaque {
     const type_name = std.mem.span(type_name_ptr);
     const name = std.mem.span(name_ptr);
 
@@ -228,6 +228,7 @@ export fn zig_create_var_decl(type_name_ptr: [*c]const u8, name_ptr: [*c]const u
             .type_name = type_name_copy,
             .name = name_copy,
             .initializer = initializer,
+            .is_const = is_const != 0,
         },
     };
 
