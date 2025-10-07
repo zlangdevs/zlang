@@ -320,3 +320,19 @@ pub fn getStructSizeBytes(_: *codegen.CodeGenerator, struct_type: c.LLVMTypeRef)
 pub fn shouldUseByVal(cg: *codegen.CodeGenerator, struct_type: c.LLVMTypeRef) bool {
     return getStructSizeBytes(cg, struct_type) > 16;
 }
+
+pub fn shouldSplitAsVector(cg: *codegen.CodeGenerator, struct_type: c.LLVMTypeRef) bool {
+    const size = getStructSizeBytes(cg, struct_type);
+    if (size != 12) return false;
+    const num_elements = c.LLVMCountStructElementTypes(struct_type);
+    if (num_elements != 3) return false;
+    var element_types: [3]c.LLVMTypeRef = undefined;
+    c.LLVMGetStructElementTypes(struct_type, &element_types);
+    for (element_types) |elem_type| {
+        if (c.LLVMGetTypeKind(elem_type) != c.LLVMFloatTypeKind) {
+            return false;
+        }
+    }
+
+    return true;
+}
