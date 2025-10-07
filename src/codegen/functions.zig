@@ -191,8 +191,17 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
 
     for (c_func.parameters.items) |param| {
         const param_type = cg.getLLVMType(param.type_name);
-        if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind and utils.shouldUseByVal(cg, @ptrCast(param_type))) {
-            try param_types.append(cg.allocator, c.LLVMPointerType(@ptrCast(param_type), 0));
+        if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind) {
+            if (utils.shouldSplitAsVector(cg, @ptrCast(param_type))) {
+                const float_type = c.LLVMFloatTypeInContext(@ptrCast(cg.context));
+                const vec2_type = c.LLVMVectorType(float_type, 2);
+                try param_types.append(cg.allocator, vec2_type);
+                try param_types.append(cg.allocator, float_type);
+            } else if (utils.shouldUseByVal(cg, @ptrCast(param_type))) {
+                try param_types.append(cg.allocator, c.LLVMPointerType(@ptrCast(param_type), 0));
+            } else {
+                try param_types.append(cg.allocator, @ptrCast(param_type));
+            }
         } else {
             try param_types.append(cg.allocator, @ptrCast(param_type));
         }
@@ -217,13 +226,23 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
             attr_idx += 1;
         }
 
-        for (c_func.parameters.items, 0..) |param, i| {
+        var actual_param_idx: u32 = attr_idx;
+        for (c_func.parameters.items) |param| {
             const param_type = cg.getLLVMType(param.type_name);
-            if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind and utils.shouldUseByVal(cg, @ptrCast(param_type))) {
-                const byval_attr = c.LLVMCreateTypeAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("byval", 5), @ptrCast(param_type));
-                c.LLVMAddAttributeAtIndex(llvm_func, attr_idx + @as(u32, @intCast(i)), byval_attr);
-                const align_attr = c.LLVMCreateEnumAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("align", 5), cg.getAlignmentForType(@ptrCast(param_type)));
-                c.LLVMAddAttributeAtIndex(llvm_func, attr_idx + @as(u32, @intCast(i)), align_attr);
+            if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind) {
+                if (utils.shouldSplitAsVector(cg, @ptrCast(param_type))) {
+                    actual_param_idx += 2;
+                } else if (utils.shouldUseByVal(cg, @ptrCast(param_type))) {
+                    const byval_attr = c.LLVMCreateTypeAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("byval", 5), @ptrCast(param_type));
+                    c.LLVMAddAttributeAtIndex(llvm_func, actual_param_idx, byval_attr);
+                    const align_attr = c.LLVMCreateEnumAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("align", 5), cg.getAlignmentForType(@ptrCast(param_type)));
+                    c.LLVMAddAttributeAtIndex(llvm_func, actual_param_idx, align_attr);
+                    actual_param_idx += 1;
+                } else {
+                    actual_param_idx += 1;
+                }
+            } else {
+                actual_param_idx += 1;
             }
         }
 
@@ -374,9 +393,27 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
         }
     }
 
-    const param_offset: usize = if (uses_sret) 1 else 0;
+    var param_offset: usize = if (uses_sret) 1 else 0;
     for (call.args.items, 0..) |arg, i| {
-        const param_idx = i + param_offset;
+        const param_idx = param_offset;
+        const should_split_vector = blk: {
+            if (param_idx + 1 < @as(usize, @intCast(param_count))) {
+                const expected_type = func_param_types.items[param_idx];
+                const next_expected_type = func_param_types.items[param_idx + 1];
+                if (c.LLVMGetTypeKind(expected_type) == c.LLVMVectorTypeKind and
+                    c.LLVMGetTypeKind(next_expected_type) == c.LLVMFloatTypeKind)
+                {
+                    if (c.LLVMGetVectorSize(expected_type) == 2) {
+                        const vec_elem_type = c.LLVMGetElementType(expected_type);
+                        if (c.LLVMGetTypeKind(vec_elem_type) == c.LLVMFloatTypeKind) {
+                            break :blk true;
+                        }
+                    }
+                }
+            }
+            break :blk false;
+        };
+
         const should_pass_byval_direct = blk: {
             if (param_idx < @as(usize, @intCast(param_count))) {
                 const expected_type = func_param_types.items[param_idx];
@@ -403,6 +440,24 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
             }
         } else {
             arg_value = try cg.generateExpression(arg);
+        }
+
+        if (should_split_vector) {
+            const arg_type = c.LLVMTypeOf(arg_value);
+            if (c.LLVMGetTypeKind(arg_type) == c.LLVMStructTypeKind) {
+                const field0 = c.LLVMBuildExtractValue(cg.builder, arg_value, 0, "v3_x");
+                const field1 = c.LLVMBuildExtractValue(cg.builder, arg_value, 1, "v3_y");
+                const field2 = c.LLVMBuildExtractValue(cg.builder, arg_value, 2, "v3_z");
+                const float_type = c.LLVMFloatTypeInContext(cg.context);
+                const vec2_type = c.LLVMVectorType(float_type, 2);
+                const undef_vec = c.LLVMGetUndef(vec2_type);
+                const vec_with_x = c.LLVMBuildInsertElement(cg.builder, undef_vec, field0, c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0), "");
+                const vec2 = c.LLVMBuildInsertElement(cg.builder, vec_with_x, field1, c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 1, 0), "");
+                try args.append(cg.allocator, vec2);
+                try args.append(cg.allocator, field2);
+                param_offset += 2;
+                continue;
+            }
         }
 
         if (call.is_libc) {
@@ -439,6 +494,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
         }
 
         try args.append(cg.allocator, arg_value);
+        param_offset += 1;
     }
 
     const needs_result_name = !is_void_return or uses_sret;
