@@ -576,6 +576,18 @@ export fn zig_add_struct_field_value(list_ptr: ?*anyopaque, field_name_ptr: [*c]
     struct_field_value_list.items.append(global_allocator, struct_field_value) catch return;
 }
 
+export fn zig_add_struct_positional_value(list_ptr: ?*anyopaque, value_ptr: ?*anyopaque) void {
+    if (list_ptr == null or value_ptr == null) return;
+    const struct_field_value_list = @as(*StructFieldValueList, @ptrFromInt(@intFromPtr(list_ptr.?)));
+    const value = @as(*ast.Node, @ptrFromInt(@intFromPtr(value_ptr.?)));
+    const struct_field_value = ast.StructFieldValue{
+        .field_name = null,
+        .value = value,
+    };
+
+    struct_field_value_list.items.append(global_allocator, struct_field_value) catch return;
+}
+
 export fn zig_create_bool_literal(value: c_int) ?*anyopaque {
     const bool_data = ast.NodeData{
         .bool_literal = ast.BoolLiteral{

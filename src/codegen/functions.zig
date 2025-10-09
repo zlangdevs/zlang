@@ -482,6 +482,14 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                                 arg_value = temp_alloca;
                             }
                         }
+                    } else if (c.LLVMGetTypeKind(expected_type) == c.LLVMStructTypeKind) {
+                        if (c.LLVMGetTypeKind(arg_type) == c.LLVMPointerTypeKind) {
+                            if (arg.data == .struct_initializer) {
+                                arg_value = c.LLVMBuildLoad2(cg.builder, expected_type, arg_value, "load_struct");
+                            }
+                        } else {
+                            arg_value = try cg.castWithRules(arg_value, expected_type, arg);
+                        }
                     } else {
                         arg_value = try cg.castWithRules(arg_value, expected_type, arg);
                     }
