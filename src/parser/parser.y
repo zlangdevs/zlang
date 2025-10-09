@@ -54,6 +54,7 @@ extern void zig_add_struct_field_with_default(void* list, const char* name, cons
 extern void* zig_create_struct_initializer(const char* struct_name, void* field_values);
 extern void* zig_create_struct_field_value_list(void);
 extern void zig_add_struct_field_value(void* list, const char* field_name, void* value);
+extern void zig_add_struct_positional_value(void* list, void* value);
 extern void zig_add_to_program(void* program, void* function);
 extern void zig_add_global_to_program(void* program, void* global);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
@@ -491,12 +492,12 @@ argument_list:
 ;
 
 arguments:
-    expression {
+    initializer_expression {
         void* list = zig_create_arg_list();
         zig_add_to_arg_list(list, $1);
         $$ = list;
     }
-  | arguments TOKEN_COMMA expression {
+  | arguments TOKEN_COMMA initializer_expression {
         zig_add_to_arg_list($1, $3);
         $$ = $1;
     }
@@ -739,6 +740,14 @@ struct_field_value_list:
     | struct_field_value_list TOKEN_COMMA TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
         zig_add_struct_field_value($1, $3, $5);
         free($3);
+        $$ = $1;
+    }
+    | expression {
+        $$ = zig_create_struct_field_value_list();
+        zig_add_struct_positional_value($$, $1);
+    }
+    | struct_field_value_list TOKEN_COMMA expression {
+        zig_add_struct_positional_value($1, $3);
         $$ = $1;
     }
     | struct_field_value_list TOKEN_COMMA {

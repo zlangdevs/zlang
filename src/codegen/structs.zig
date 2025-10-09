@@ -338,8 +338,11 @@ pub fn generateStructInitializer(cg: *llvm.CodeGenerator, struct_init: ast.Struc
         }
     }
 
-    for (struct_init.field_values.items) |field_val| {
-        const field_index = field_map.get(field_val.field_name) orelse return errors.CodegenError.UndefinedVariable;
+    for (struct_init.field_values.items, 0..) |field_val, idx| {
+        const field_index = if (field_val.field_name) |field_name|
+            field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable
+        else
+            @as(c_uint, @intCast(idx));
         const field_ptr = try getStructFieldPointer(cg, struct_type, struct_ptr, field_index);
         const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
         const field_type_kind = c.LLVMGetTypeKind(field_type);

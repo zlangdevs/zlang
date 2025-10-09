@@ -255,7 +255,7 @@ pub const StructInitializer = struct {
 };
 
 pub const StructFieldValue = struct {
-    field_name: []const u8,
+    field_name: ?[]const u8,
     value: *Node,
 };
 
@@ -502,7 +502,9 @@ pub const Node = struct {
             .struct_initializer => |*struct_init| {
                 self.allocator.free(struct_init.struct_name);
                 for (struct_init.field_values.items) |*field_val| {
-                    self.allocator.free(field_val.field_name);
+                    if (field_val.field_name) |fname| {
+                        self.allocator.free(fname);
+                    }
                     field_val.value.destroy();
                 }
                 struct_init.field_values.deinit(self.allocator);
@@ -878,7 +880,11 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             for (struct_init.field_values.items, 0..) |field_val, i| {
                 const is_last_val = i == struct_init.field_values.items.len - 1;
                 printIndent(indent + 1, is_last_val, false);
-                std.debug.print("Field: \x1b[36m{s}\x1b[0m = \n", .{field_val.field_name});
+                if (field_val.field_name) |fname| {
+                    std.debug.print("Field: \x1b[36m{s}\x1b[0m = \n", .{fname});
+                } else {
+                    std.debug.print("Field[{d}] = \n", .{i});
+                }
                 printAST(field_val.value, indent + 2, true, false);
             }
         },
