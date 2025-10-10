@@ -1,0 +1,73 @@
+?? Comprehensive test for C-style pointer operations
+?? Tests: pointer indexing, increment/decrement, and compound assignments
+
+fun main() >> i32 {
+    ?? Test 1: Pointer indexing (read)
+    arr<i32, 5> numbers = {10, 20, 30, 40, 50};
+    ptr<i32> p = &numbers[0];
+    
+    @printf("(expected 10):%d\n", p[0]);
+    @printf("(expected 20):%d\n", p[1]);
+    @printf("(expected 30):%d\n", p[2]);
+    @printf("(expected 40):%d\n", p[3]);
+    @printf("(expected 50):%d\n", p[4]);
+    
+    ?? Test 2: Pointer indexing (write)
+    p[1] = 200;
+    p[3] = 400;
+    @printf("(expected 200):%d\n", p[1]);
+    @printf("(expected 400):%d\n", p[3]);
+    
+    ?? Test 3: Pointer increment
+    p++;
+    @printf("(expected 200):%d\n", p[0]);
+    p++;
+    @printf("(expected 30):%d\n", p[0]);
+    
+    ?? Test 4: Pointer decrement
+    p--;
+    @printf("(expected 200):%d\n", p[0]);
+    p--;
+    @printf("(expected 10):%d\n", p[0]);
+    
+    ?? Test 5: Compound assignment via pointer indexing
+    p[2] += 5;
+    @printf("(expected 35):%d\n", p[2]);
+    
+    p[3] *= 2;
+    @printf("(expected 800):%d\n", p[3]);
+    
+    ?? Test 6: Different pointer types
+    arr<i8, 3> bytes = {1, 2, 3};
+    ptr<i8> pb = &bytes[0];
+    @printf("(expected 1):%d\n", pb[0]);
+    @printf("(expected 2):%d\n", pb[1]);
+    pb[2] = 99;
+    @printf("(expected 99):%d\n", pb[2]);
+    
+    arr<i64, 3> longs = {100, 200, 300};
+    ptr<i64> pl = &longs[0];
+    @printf("(expected 100):%ld\n", pl[0]);
+    pl[1] += 50;
+    @printf("(expected 250):%ld\n", pl[1]);
+    
+    ?? Test 7: Pointer comparison
+    ptr<i32> p1 = &numbers[0];
+    ptr<i32> p2 = &numbers[0];
+    ptr<i32> p3 = &numbers[2];
+    
+    i32 eq_result = 0;
+    if p1 == p2 { eq_result = 1; }
+    @printf("(expected 1):%d\n", eq_result);
+    
+    i32 neq_result = 0;
+    if p1 != p3 { neq_result = 1; }
+    @printf("(expected 1):%d\n", neq_result);
+    
+    ptr<i32> null_ptr = null;
+    i32 null_check = 0;
+    if null_ptr == null { null_check = 1; }
+    @printf("(expected 1):%d\n", null_check);
+    
+    return 0;
+}
