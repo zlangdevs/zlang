@@ -741,6 +741,60 @@ pub const CodeGenerator = struct {
                         defer self.allocator.free(array_name);
                         const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
 
+                        if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
+                            const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_compound");
+                            const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
+                            const element_type = self.getLLVMType(element_type_name);
+                            const idx = collected_indices.items[collected_indices.items.len - 1];
+                            var indices = [_]c.LLVMValueRef{idx};
+                            const element_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_index_compound");
+                            const current_val = c.LLVMBuildLoad2(self.builder, element_type, element_ptr, "load_elem");
+                            const expected_ty_name = self.getTypeNameFromLLVMType(element_type);
+                            const rhs_raw = try self.generateExpressionWithContext(cas.value, expected_ty_name);
+                            const rhs_val = try self.castWithRules(rhs_raw, element_type, cas.value);
+
+                            const is_float = std.mem.eql(u8, expected_ty_name, "f16") or
+                                std.mem.eql(u8, expected_ty_name, "f32") or
+                                std.mem.eql(u8, expected_ty_name, "f64");
+
+                            const new_value = switch (cas.op) {
+                                '+' => if (is_float)
+                                    c.LLVMBuildFAdd(self.builder, current_val, rhs_val, "fadd_ptr_compound")
+                                else
+                                    c.LLVMBuildAdd(self.builder, current_val, rhs_val, "add_ptr_compound"),
+                                '-' => if (is_float)
+                                    c.LLVMBuildFSub(self.builder, current_val, rhs_val, "fsub_ptr_compound")
+                                else
+                                    c.LLVMBuildSub(self.builder, current_val, rhs_val, "sub_ptr_compound"),
+                                '*' => if (is_float)
+                                    c.LLVMBuildFMul(self.builder, current_val, rhs_val, "fmul_ptr_compound")
+                                else
+                                    c.LLVMBuildMul(self.builder, current_val, rhs_val, "mul_ptr_compound"),
+                                '/' => if (is_float)
+                                    c.LLVMBuildFDiv(self.builder, current_val, rhs_val, "fdiv_ptr_compound")
+                                else
+                                    c.LLVMBuildSDiv(self.builder, current_val, rhs_val, "sdiv_ptr_compound"),
+                                '%' => if (is_float) blk: {
+                                    self.uses_float_modulo = true;
+                                    break :blk c.LLVMBuildFRem(self.builder, current_val, rhs_val, "frem_ptr_compound");
+                                } else blk: {
+                                    const is_unsigned = isUnsignedType(expected_ty_name);
+                                    break :blk if (is_unsigned)
+                                        c.LLVMBuildURem(self.builder, current_val, rhs_val, "urem_ptr_compound")
+                                    else
+                                        c.LLVMBuildSRem(self.builder, current_val, rhs_val, "srem_ptr_compound");
+                                },
+                                'A' => c.LLVMBuildAnd(self.builder, current_val, rhs_val, "and_ptr_compound"),
+                                '$' => c.LLVMBuildOr(self.builder, current_val, rhs_val, "or_ptr_compound"),
+                                '^' => c.LLVMBuildXor(self.builder, current_val, rhs_val, "xor_ptr_compound"),
+                                '<' => c.LLVMBuildShl(self.builder, current_val, rhs_val, "shl_ptr_compound"),
+                                '>' => c.LLVMBuildAShr(self.builder, current_val, rhs_val, "ashr_ptr_compound"),
+                                else => return errors.CodegenError.UnsupportedOperation,
+                            };
+                            _ = c.LLVMBuildStore(self.builder, new_value, element_ptr);
+                            return;
+                        }
+
                         var final_type = var_info.type_ref;
                         for (0..collected_indices.items.len) |_| final_type = c.LLVMGetElementType(final_type);
                         var all_indices = std.ArrayList(c.LLVMValueRef){};
@@ -916,8 +970,7 @@ pub const CodeGenerator = struct {
                 var collected_indices = std.ArrayList(c.LLVMValueRef){};
                 defer collected_indices.deinit(self.allocator);
                 const base_node = try self.collectArrayIndices(arr_cass.array, &collected_indices);
-                var index_value = try self.generateExpression(arr_cass.index);
-                index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
+                const index_value = try self.generateExpression(arr_cass.index);
                 try collected_indices.append(self.allocator, index_value);
                 const array_name = try self.getBaseIdentifierName(base_node);
                 defer self.allocator.free(array_name);
@@ -955,6 +1008,51 @@ pub const CodeGenerator = struct {
                     } else return errors.CodegenError.UnsupportedOperation;
                     const updated_simd = c.LLVMBuildInsertElement(self.builder, current_simd, new_element, index_value, "simd_update");
                     _ = c.LLVMBuildStore(self.builder, updated_simd, var_info.value);
+                    return;
+                }
+
+                if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
+                    if (collected_indices.items.len == 0) {
+                        return errors.CodegenError.TypeMismatch;
+                    }
+
+                    const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_for_compound");
+                    const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
+                    const element_type = self.getLLVMType(element_type_name);
+                    const idx = collected_indices.items[collected_indices.items.len - 1];
+                    var indices = [_]c.LLVMValueRef{idx};
+                    const element_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_index_compound");
+                    const current_val = c.LLVMBuildLoad2(self.builder, element_type, element_ptr, "load_elem");
+                    const expected_ty_name = self.getTypeNameFromLLVMType(element_type);
+                    const rhs_raw = try self.generateExpressionWithContext(arr_cass.value, expected_ty_name);
+                    const rhs_val = try self.castWithRules(rhs_raw, element_type, arr_cass.value);
+                    const final_kind = c.LLVMGetTypeKind(element_type);
+                    const op = arr_cass.op;
+                    var new_val: c.LLVMValueRef = undefined;
+                    if (final_kind == c.LLVMFloatTypeKind or final_kind == c.LLVMDoubleTypeKind or final_kind == c.LLVMHalfTypeKind) {
+                        new_val = switch (op) {
+                            '+' => c.LLVMBuildFAdd(self.builder, current_val, rhs_val, "fadd"),
+                            '-' => c.LLVMBuildFSub(self.builder, current_val, rhs_val, "fsub"),
+                            '*' => c.LLVMBuildFMul(self.builder, current_val, rhs_val, "fmul"),
+                            '/' => c.LLVMBuildFDiv(self.builder, current_val, rhs_val, "fdiv"),
+                            else => return errors.CodegenError.UnsupportedOperation,
+                        };
+                    } else if (final_kind == c.LLVMIntegerTypeKind) {
+                        new_val = switch (op) {
+                            '+' => c.LLVMBuildAdd(self.builder, current_val, rhs_val, "add"),
+                            '-' => c.LLVMBuildSub(self.builder, current_val, rhs_val, "sub"),
+                            '*' => c.LLVMBuildMul(self.builder, current_val, rhs_val, "mul"),
+                            '/' => blk: {
+                                const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(element_type));
+                                break :blk if (is_unsigned)
+                                    c.LLVMBuildUDiv(self.builder, current_val, rhs_val, "udiv")
+                                else
+                                    c.LLVMBuildSDiv(self.builder, current_val, rhs_val, "sdiv");
+                            },
+                            else => return errors.CodegenError.UnsupportedOperation,
+                        };
+                    } else return errors.CodegenError.UnsupportedOperation;
+                    _ = c.LLVMBuildStore(self.builder, new_val, element_ptr);
                     return;
                 }
 
@@ -1237,6 +1335,20 @@ pub const CodeGenerator = struct {
         if (var_info.is_const) {
             std.debug.print("Error: Cannot modify element of const array '{s}'\n", .{array_name});
             return errors.CodegenError.ConstReassignment;
+        }
+
+        if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
+            const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_for_assign");
+            const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
+            const element_type = self.getLLVMType(element_type_name);
+            const idx = collected_indices.items[collected_indices.items.len - 1];
+            var indices = [_]c.LLVMValueRef{idx};
+            const element_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_index_assign");
+            const expected_ty_name = self.getTypeNameFromLLVMType(element_type);
+            const value_raw = try self.generateExpressionWithContext(arr_ass.value, expected_ty_name);
+            const final_val = try self.castWithRules(value_raw, element_type, arr_ass.value);
+            _ = c.LLVMBuildStore(self.builder, final_val, element_ptr);
+            return;
         }
 
         var final_type = var_info.type_ref;
@@ -2198,9 +2310,13 @@ pub const CodeGenerator = struct {
             .binary_op => |b| {
                 if (expected_type) |type_name| {
                     const target_ty = self.getLLVMType(type_name);
+                    const kind = c.LLVMGetTypeKind(target_ty);
+                    if (kind == c.LLVMPointerTypeKind) {
+                        return self.generateBinaryOp(b);
+                    }
+
                     const lhs_val = try self.generateExpressionWithContext(b.lhs, expected_type);
                     const rhs_val = try self.generateExpressionWithContext(b.rhs, expected_type);
-                    const kind = c.LLVMGetTypeKind(target_ty);
                     if (kind == c.LLVMFloatTypeKind or kind == c.LLVMDoubleTypeKind or kind == c.LLVMHalfTypeKind) {
                         const lhs_casted = try self.castWithRules(lhs_val, target_ty, b.lhs);
                         const rhs_casted = try self.castWithRules(rhs_val, target_ty, b.rhs);
@@ -2651,6 +2767,17 @@ pub const CodeGenerator = struct {
                             if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                                 const var_type_name = self.getTypeNameFromLLVMType(var_info.type_ref);
 
+                                if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
+                                    const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_for_dec");
+                                    const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
+                                    const element_type = self.getLLVMType(element_type_name);
+                                    const minus_one = c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), @bitCast(@as(i64, -1)), 1);
+                                    var indices = [_]c.LLVMValueRef{minus_one};
+                                    const new_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_dec");
+                                    _ = c.LLVMBuildStore(self.builder, new_ptr, var_info.value);
+                                    return new_ptr;
+                                }
+
                                 const allowed_types = [_][]const u8{ "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64" };
                                 var is_allowed = false;
                                 for (allowed_types) |allowed| {
@@ -2773,6 +2900,18 @@ pub const CodeGenerator = struct {
                             const ident = un.operand.data.identifier;
                             if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                                 const var_type_name = self.getTypeNameFromLLVMType(var_info.type_ref);
+
+                                if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
+                                    const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_for_inc");
+                                    const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
+                                    const element_type = self.getLLVMType(element_type_name);
+                                    const one = c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), 1, 0);
+                                    var indices = [_]c.LLVMValueRef{one};
+                                    const new_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_inc");
+                                    _ = c.LLVMBuildStore(self.builder, new_ptr, var_info.value);
+                                    return new_ptr;
+                                }
+
                                 const allowed_types = [_][]const u8{ "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64" };
                                 var is_allowed = false;
                                 for (allowed_types) |allowed| {
@@ -2931,6 +3070,16 @@ pub const CodeGenerator = struct {
                     var simd_index_value = collected_indices.items[collected_indices.items.len - 1];
                     simd_index_value = self.castToType(simd_index_value, c.LLVMInt32TypeInContext(self.context));
                     return c.LLVMBuildExtractElement(self.builder, simd_val, simd_index_value, "simd_extract");
+                }
+
+                if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
+                    const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr");
+                    const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
+                    const element_type = self.getLLVMType(element_type_name);
+                    const idx = collected_indices.items[collected_indices.items.len - 1];
+                    var indices = [_]c.LLVMValueRef{idx};
+                    const element_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_index");
+                    return c.LLVMBuildLoad2(self.builder, element_type, element_ptr, "ptr_element");
                 }
 
                 var final_type = var_info.type_ref;
@@ -3149,6 +3298,7 @@ pub const CodeGenerator = struct {
     fn generateBinaryOp(self: *CodeGenerator, bin_op: ast.BinaryOp) errors.CodegenError!c.LLVMValueRef {
         const lhs_value = try self.generateExpression(bin_op.lhs);
         const lhs_type = c.LLVMTypeOf(lhs_value);
+        const lhs_kind = c.LLVMGetTypeKind(lhs_type);
         if (c.LLVMGetTypeKind(lhs_type) == c.LLVMVectorTypeKind) {
             const rhs_value = try self.generateExpression(bin_op.rhs);
             const rhs_type = c.LLVMTypeOf(rhs_value);
@@ -3157,12 +3307,72 @@ pub const CodeGenerator = struct {
             }
         }
 
+        if (lhs_kind == c.LLVMPointerTypeKind and (bin_op.op == '+' or bin_op.op == '-')) {
+            const rhs_value = try self.generateExpression(bin_op.rhs);
+            const rhs_type = c.LLVMTypeOf(rhs_value);
+            const rhs_kind = c.LLVMGetTypeKind(rhs_type);
+
+            if (rhs_kind == c.LLVMIntegerTypeKind) {
+                var element_type: c.LLVMTypeRef = undefined;
+                if (bin_op.lhs.data == .identifier) {
+                    const var_info = CodeGenerator.getVariable(self, bin_op.lhs.data.identifier.name) orelse return errors.CodegenError.UndefinedVariable;
+                    if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
+                        const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
+                        element_type = self.getLLVMType(element_type_name);
+                    } else {
+                        return errors.CodegenError.TypeMismatch;
+                    }
+                } else {
+                    return errors.CodegenError.TypeMismatch;
+                }
+                const index = if (bin_op.op == '+') rhs_value else c.LLVMBuildNeg(self.builder, rhs_value, "neg_offset");
+                var indices = [_]c.LLVMValueRef{index};
+                return c.LLVMBuildGEP2(self.builder, element_type, lhs_value, &indices[0], 1, "ptr_arith");
+            } else if (rhs_kind == c.LLVMPointerTypeKind and bin_op.op == '-') {
+                var element_type: c.LLVMTypeRef = undefined;
+                if (bin_op.lhs.data == .identifier) {
+                    const var_info = CodeGenerator.getVariable(self, bin_op.lhs.data.identifier.name) orelse return errors.CodegenError.UndefinedVariable;
+                    if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
+                        const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
+                        element_type = self.getLLVMType(element_type_name);
+                    } else {
+                        return errors.CodegenError.TypeMismatch;
+                    }
+                } else {
+                    return errors.CodegenError.TypeMismatch;
+                }
+                const lhs_int = c.LLVMBuildPtrToInt(self.builder, lhs_value, c.LLVMInt64TypeInContext(self.context), "ptr_to_int_lhs");
+                const rhs_int = c.LLVMBuildPtrToInt(self.builder, rhs_value, c.LLVMInt64TypeInContext(self.context), "ptr_to_int_rhs");
+                const byte_diff = c.LLVMBuildSub(self.builder, lhs_int, rhs_int, "byte_diff");
+                const element_size = c.LLVMABISizeOfType(c.LLVMGetModuleDataLayout(self.module), element_type);
+                const size_val = c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), element_size, 0);
+                return c.LLVMBuildSDiv(self.builder, byte_diff, size_val, "ptr_diff");
+            }
+            return errors.CodegenError.TypeMismatch;
+        }
+
         const lhs_type_name = self.getTypeNameFromLLVMType(lhs_type);
         const rhs_value = try self.generateExpressionWithContext(bin_op.rhs, lhs_type_name);
 
-        const lhs_kind = c.LLVMGetTypeKind(lhs_type);
         const rhs_type = c.LLVMTypeOf(rhs_value);
         const rhs_kind = c.LLVMGetTypeKind(rhs_type);
+
+        if (lhs_kind == c.LLVMIntegerTypeKind and rhs_kind == c.LLVMPointerTypeKind and bin_op.op == '+') {
+            if (bin_op.rhs.data == .identifier) {
+                const var_info = CodeGenerator.getVariable(self, bin_op.rhs.data.identifier.name) orelse return errors.CodegenError.UndefinedVariable;
+                if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
+                    const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
+                    const element_type = self.getLLVMType(element_type_name);
+                    var indices = [_]c.LLVMValueRef{lhs_value};
+                    return c.LLVMBuildGEP2(self.builder, element_type, rhs_value, &indices[0], 1, "ptr_arith");
+                }
+            }
+            return errors.CodegenError.TypeMismatch;
+        }
+
+        if (lhs_kind == c.LLVMPointerTypeKind or rhs_kind == c.LLVMPointerTypeKind) {
+            return errors.CodegenError.TypeMismatch;
+        }
         if (bin_op.op != '&' and bin_op.op != '|') {
             if (lhs_kind == c.LLVMIntegerTypeKind and c.LLVMGetIntTypeWidth(lhs_type) == 1) {
                 return errors.CodegenError.TypeMismatch;
