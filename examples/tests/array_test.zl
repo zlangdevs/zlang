@@ -12,6 +12,11 @@ fun main() >> i32 {
     arr<f32, 2> f32_arr = {.1, .2};
     arr<f64, 2> f64_arr = {.1, .2};
     
+    ?? Test array length inference with _ placeholder
+    arr<i32, _> inferred_int = {10, 20, 30, 40};
+    arr<u8, _> inferred_str = "zlang";
+    arr<f32, _> inferred_float = {1.5, 2.5, 3.5};
+    
     i16 a = 100;
     i16 b = 200;
     i32 c = 300;
@@ -28,6 +33,11 @@ fun main() >> i32 {
     
     myarr[4] = myarr[2] * 5 + 3;
     @printf("myarr[2] (expected 8):%d\n", myarr[4]);
+    
+    ?? Test inferred array access
+    @printf("inferred_int[2] (expected 30):%d\n", inferred_int[2]);
+    @printf("inferred_str (expected zlang):%s\n", &inferred_str);
+    @printf("inferred_float[1] (expected 2.5):%.1f\n", inferred_float[1]);
     
     u32 sum = 0;
     arr<arr<arr<arr<i32, 5>, 5>, 5>, 5> field;
