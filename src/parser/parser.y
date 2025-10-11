@@ -271,6 +271,12 @@ complex_type_name:
         free($3);
         $$ = result;
     }
+  | TOKEN_IDENTIFIER TOKEN_LESS type_name TOKEN_COMMA TOKEN_UNDERSCORE TOKEN_GREATER %prec TOKEN_LESS {
+        char* result = malloc(strlen($1) + strlen($3) + 6);
+        sprintf(result, "%s<%s, _>", $1, $3);
+        free($3);
+        $$ = result;
+    }
   | TOKEN_IDENTIFIER TOKEN_LESS type_name TOKEN_GREATER %prec TOKEN_LESS {
         char* result = malloc(strlen($1) + strlen($3) + 5);
         sprintf(result, "%s<%s>", $1, $3);

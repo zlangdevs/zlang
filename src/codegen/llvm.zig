@@ -1438,9 +1438,31 @@ pub const CodeGenerator = struct {
             const element_type_name = std.mem.trim(u8, element_type_part, " \t");
             const size_part = inner[pos + 1 ..];
             const size_str = std.mem.trim(u8, size_part, " \t");
-            const array_size = std.fmt.parseInt(usize, size_str, 10) catch {
-                return errors.CodegenError.TypeMismatch;
-            };
+            var array_size: usize = 0;
+            if (std.mem.eql(u8, size_str, "_")) {
+                if (decl.initializer) |initializer| {
+                    switch (initializer.data) {
+                        .array_initializer => |init_list| {
+                            array_size = init_list.elements.items.len;
+                        },
+                        .string_literal => |str_lit| {
+                            const parsed_str = try self.parse_escape(str_lit.value);
+                            defer self.allocator.free(parsed_str);
+                            array_size = parsed_str.len;
+                        },
+                        else => {
+                            return errors.CodegenError.TypeMismatch;
+                        },
+                    }
+                } else {
+                    return errors.CodegenError.TypeMismatch;
+                }
+            } else {
+                array_size = std.fmt.parseInt(usize, size_str, 10) catch {
+                    return errors.CodegenError.TypeMismatch;
+                };
+            }
+
             const element_type = self.getLLVMType(element_type_name);
             const array_type = c.LLVMArrayType(@ptrCast(element_type), @intCast(array_size));
             const alloca = c.LLVMBuildAlloca(self.builder, array_type, decl.name.ptr);
