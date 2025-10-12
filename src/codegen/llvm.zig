@@ -2167,7 +2167,7 @@ pub const CodeGenerator = struct {
         return arg_value;
     }
 
-    fn generateExpressionWithContext(self: *CodeGenerator, expr: *ast.Node, expected_type: ?[]const u8) errors.CodegenError!c.LLVMValueRef {
+    pub fn generateExpressionWithContext(self: *CodeGenerator, expr: *ast.Node, expected_type: ?[]const u8) errors.CodegenError!c.LLVMValueRef {
         switch (expr.data) {
             .cast => |cst| {
                 if (cst.auto) {
@@ -2479,7 +2479,7 @@ pub const CodeGenerator = struct {
     pub fn generateExpression(self: *CodeGenerator, expr: *ast.Node) errors.CodegenError!c.LLVMValueRef {
         switch (expr.data) {
             .cast => |cst| {
-                if (cst.auto) return errors.CodegenError.TypeMismatch;
+                if (cst.auto) return try self.generateExpression(cst.expr);
                 if (cst.type_name) |tn| {
                     const target_ty = self.getLLVMType(tn);
                     const inner = try self.generateExpression(cst.expr);
