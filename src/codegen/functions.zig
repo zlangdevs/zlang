@@ -344,6 +344,13 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                     defer args.deinit(cg.allocator);
                     for (call.args.items, 0..) |arg, i| {
                         var v = try cg.generateExpression(arg);
+                        if (arg.data == .cast and arg.data.cast.auto) {
+                            if (i < param_types.items.len) {
+                                const expected_type = param_types.items[i];
+                                v = cg.castToType(v, expected_type);
+                            }
+                        }
+
                         if (i < param_types.items.len) {
                             v = try cg.castWithRules(v, param_types.items[i], arg);
                         }
@@ -440,6 +447,12 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
             }
         } else {
             arg_value = try cg.generateExpression(arg);
+            if (arg.data == .cast and arg.data.cast.auto) {
+                if (param_idx < @as(usize, @intCast(param_count))) {
+                    const expected_type = func_param_types.items[param_idx];
+                    arg_value = cg.castToType(arg_value, expected_type);
+                }
+            }
         }
 
         if (should_split_vector) {

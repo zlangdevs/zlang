@@ -116,9 +116,104 @@ fun main() >> i32 {
     @printf("Function result f64 to i32: %.6f -> %d\n", precise_result, rounded_result);
 
     @printf("\n=== Cast Test Complete ===\n");
+    
+    ?? Auto Cast Tests
+    @printf("\n12. Auto Cast (as _) Tests:\n");
+    i32 int_val1 = 100;
+    f32 float_result1 = int_val1 as _;
+    @printf("i32 to f32 (as _): %d -> (expected 100.0):%.1f\n", int_val1, float_result1);
+    
+    i64 long_val2 = 987654321;
+    f64 double_val2 = long_val2 as _;
+    @printf("i64 to f64 (as _): %lld -> (expected 987654321.0):%.1f\n", long_val2, double_val2);
+    
+    f32 reassign_test = 0.0;
+    i32 reassign_src = 25;
+    reassign_test = reassign_src as _;
+    @printf("Reassign i32 to f32 (as _): %d -> (expected 25.0):%.1f\n", reassign_src, reassign_test);
+    
+    @printf("\n13. Auto Cast in Function Arguments:\n");
+    i32 arg_i32 = 42;
+    f32 result_f32 = accept_f32_param(arg_i32 as _);
+    @printf("Pass i32 as f32 (as _): %d -> (expected 42.0):%.1f\n", arg_i32, result_f32);
+    
+    i32 arg_i32_2 = 555;
+    i64 result_i64 = accept_i64_param(arg_i32_2 as _);
+    @printf("Pass i32 as i64 (as _): %d -> (expected 555):%lld\n", arg_i32_2, result_i64);
+    
+    f32 arg_f32 = 7.25;
+    f64 result_f64 = accept_f64_param(arg_f32 as _);
+    @printf("Pass f32 as f64 (as _): %.2f -> (expected 7.25):%.2f\n", arg_f32, result_f64);
+    
+    @printf("\n14. Auto Cast with Multiple Function Arguments:\n");
+    i32 multi_a = 5;
+    f32 multi_b = 3.5;
+    i32 multi_c = 2;
+    f64 multi_result = accept_multiple_params(multi_a as _, multi_b as _, multi_c as _);
+    @printf("Multiple auto cast args: i32(%d) + f32(%.1f) + i32(%d) = (expected 10.5):%.1f\n", 
+            multi_a, multi_b, multi_c, multi_result);
+    
+    @printf("\n15. Auto Cast in Return Statements:\n");
+    f32 ret_from_i32 = return_i32_as_f32();
+    @printf("Return i32 as f32 (as _): (expected 123.0):%.1f\n", ret_from_i32);
+    
+    f64 ret_from_i64 = return_i64_as_f64();
+    @printf("Return i64 as f64 (as _): (expected 999888777.0):%.1f\n", ret_from_i64);
+    
+    f64 ret_from_f32 = return_f32_as_f64();
+    @printf("Return f32 as f64 (as _): (expected 2.5):%.1f\n", ret_from_f32);
+    
+    f64 ret_from_expr = return_expression_as_autocast();
+    @printf("Return expression as autocast: 10 + 20 = (expected 30.0):%.1f\n", ret_from_expr);
+    
+    @printf("\n16. Chained Auto Cast (Argument -> Return):\n");
+    i32 chain_input = 77;
+    f32 chain_step = accept_f32_param(chain_input as _);
+    f64 chain_output = accept_f64_param(chain_step as _);
+    @printf("Chain i32 -> f32 -> f64: %d -> (expected 77.0):%.1f\n", chain_input, chain_output);
+    
+    @printf("\n=== ALL TESTS COMPLETE ===\n");
     return 0;
 }
 
 fun calculate_precise_value() >> f64 {
     return 3.141592653589793;
+}
+
+?? Helper functions for testing auto cast in arguments and returns
+fun accept_f32_param(val: f32) >> f32 {
+    return val;
+}
+
+fun accept_f64_param(val: f64) >> f64 {
+    return val;
+}
+
+fun accept_i64_param(val: i64) >> i64 {
+    return val;
+}
+
+fun accept_multiple_params(a: f32, b: f64, c: i64) >> f64 {
+    return a as f64 + b + c as f64;
+}
+
+fun return_i32_as_f32() >> f32 {
+    i32 value = 123;
+    return value as _;
+}
+
+fun return_i64_as_f64() >> f64 {
+    i64 value = 999888777;
+    return value as _;
+}
+
+fun return_f32_as_f64() >> f64 {
+    f32 value = 2.5;
+    return value as _;
+}
+
+fun return_expression_as_autocast() >> f64 {
+    i32 a = 10;
+    i32 b = 20;
+    return (a + b) as _;
 }
