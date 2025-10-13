@@ -4,6 +4,7 @@ Complete language reference and advanced usage guide.
 
 ## Table of Contents
 
+- [Compiler Usage](#compiler-usage)
 - [Language Specification](#language-specification)
 - [Type System](#type-system)
 - [Functions](#functions)
@@ -11,6 +12,146 @@ Complete language reference and advanced usage guide.
 - [Advanced Features](#advanced-features)
 - [C Interoperability](#c-interoperability)
 - [Compiler Internals](#compiler-internals)
+
+---
+
+## Compiler Usage
+
+### Basic Compilation
+
+```bash
+zlang <input.zl>
+```
+
+Compiles a ZLang source file to an executable named `output` (default).
+
+### Compiler Flags
+
+**Output Control**
+
+- `-o <name>` - Specify output executable name
+  ```bash
+  zlang main.zl -o myprogram
+  ```
+
+- `-keepll` - Keep the generated LLVM IR file (`output.ll`)
+  ```bash
+  zlang main.zl -keepll
+  ```
+
+**Optimization**
+
+- `-optimize` - Enable LLVM optimization passes (O2 level)
+  ```bash
+  zlang main.zl -optimize -o fast_program
+  ```
+
+**Debugging & Inspection**
+
+- `-dast` - Display the Abstract Syntax Tree
+  ```bash
+  zlang main.zl -dast
+  ```
+
+- `-verbose` - Verbose output (shows AST and compilation messages)
+  ```bash
+  zlang main.zl -verbose
+  ```
+
+**Linking**
+
+- `-link <file.o>` - Link additional object files
+  ```bash
+  zlang main.zl -link utils.o -o program
+  ```
+
+- `-l<library>` or `-l <library>` - Link against a library
+  ```bash
+  zlang main.zl -lm              # Link math library
+  zlang main.zl -lGL -lGLU      # Link OpenGL
+  ```
+
+- `-L<path>` or `-L <path>` - Add library search path
+  ```bash
+  zlang main.zl -L/usr/local/lib -lraylib
+  ```
+
+- `-c` - Compile only, don't link (produces `output.o`)
+  ```bash
+  zlang module.zl -c -o module.o
+  ```
+
+- `-Wl,<options>` - Pass options directly to the linker
+  ```bash
+  zlang main.zl -Wl,-rpath,/usr/local/lib
+  ```
+
+**Target Architecture**
+
+- `-arch <target>` - Specify target architecture
+  ```bash
+  zlang main.zl -arch x86_64-linux-gnu
+  ```
+
+### Multi-File Compilation
+
+Compile multiple `.zl` files together:
+
+```bash
+zlang main.zl utils.zl helpers.zl -o program
+```
+
+Or pass a directory to compile all `.zl` files in it:
+
+```bash
+zlang src/ -o program
+```
+
+### C Header Wrapper Generation
+
+Generate ZLang bindings from C headers:
+
+```bash
+zlang wrap <header.h> -o <output.zl>
+```
+
+Example:
+```bash
+zlang wrap /usr/include/GL/gl.h -o gl_bindings.zl
+```
+
+This automatically generates `wrap` statements for C functions.
+
+### Complete Examples
+
+**Basic compilation with optimization:**
+```bash
+zlang main.zl -optimize -o myapp
+```
+
+**Keep IR for debugging:**
+```bash
+zlang main.zl -keepll -dast
+cat output.ll  # Inspect generated LLVM IR
+```
+
+**Link with raylib:**
+```bash
+zlang game.zl -lraylib -lm -o game
+```
+
+**Compile with custom library path:**
+```bash
+zlang app.zl -L/opt/lib -lcustomlib -o app
+```
+
+**Multi-file project with optimization:**
+```bash
+zlang src/main.zl src/renderer.zl src/physics.zl \
+  -lGL -lGLU -lm \
+  -optimize \
+  -o game
+```
 
 ---
 
@@ -533,18 +674,6 @@ fun add(a: i32, b: i32) >> i32 {
     return a + b;
 }
 ```
-
-LLVM IR:
-```llvm
-define i32 @add(i32 %a, i32 %b) {
-entry:
-  %add = add i32 %a, %b
-  ret i32 %add
-}
-```
-
-### Type Mapping
-
 | ZLang Type | LLVM Type |
 |------------|-----------|
 | `i8` | `i8` |
