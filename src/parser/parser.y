@@ -71,7 +71,7 @@ extern void* current_scanner;
 void* ast_root = NULL;
 %}
 
-%expect 4
+%expect 3
 %expect-rr 0
 
 %define parse.error verbose
@@ -122,7 +122,7 @@ void* ast_root = NULL;
 %type <node> var_declaration global_variable_declaration function_call return_statement assignment brainfuck_statement
 %type <node> expression logical_or_expression logical_and_expression bitwise_or_expression bitwise_xor_expression bitwise_and_expression shift_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression postfix_expression argument_list arguments
 %type <node> cast_expression
-%type <node> comparison_expression simple_term c_for_statement for_increment
+%type <node> c_for_statement for_increment
 %type <node> array_initializer c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration wrap_statement
 %type <node> enum_values enum_value_list struct_fields struct_field_list
 %type <node> struct_initializer struct_field_values struct_field_value_list initializer_expression ref_expression ref_base
@@ -381,8 +381,11 @@ for_statement:
     TOKEN_FOR TOKEN_LBRACE statement_list TOKEN_RBRACE {
         $$ = zig_create_for_stmt(NULL, $3);
     }
-  | TOKEN_FOR comparison_expression TOKEN_LBRACE statement_list TOKEN_RBRACE {
-        $$ = zig_create_for_stmt($2, $4);
+  | TOKEN_FOR TOKEN_LPAREN expression TOKEN_RPAREN TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        $$ = zig_create_for_stmt($3, $6);
+    }
+  | TOKEN_FOR TOKEN_IDENTIFIER TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        $$ = zig_create_for_stmt(zig_create_identifier($2), $4);
     }
 ;
 
@@ -507,22 +510,6 @@ arguments:
         zig_add_to_arg_list($1, $3);
         $$ = $1;
     }
-;
-
-comparison_expression:
-    simple_term TOKEN_EQUAL simple_term { $$ = zig_create_comparison('=', $1, $3); }
-  | simple_term TOKEN_NON_EQUAL simple_term { $$ = zig_create_comparison('!', $1, $3); }
-  | simple_term TOKEN_LESS simple_term { $$ = zig_create_comparison('<', $1, $3); }
-  | simple_term TOKEN_GREATER simple_term { $$ = zig_create_comparison('>', $1, $3); }
-  | simple_term TOKEN_EQ_LESS simple_term { $$ = zig_create_comparison('L', $1, $3); }
-  | simple_term TOKEN_EQ_GREATER simple_term { $$ = zig_create_comparison('G', $1, $3); }
-;
-
-simple_term:
-    TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
-  | TOKEN_FLOAT { $$ = zig_create_float_literal($1); }
-  | TOKEN_NUMBER { $$ = zig_create_number_literal($1); }
-  | TOKEN_LPAREN simple_term TOKEN_RPAREN { $$ = $2; }
 ;
 
 expression:
@@ -778,6 +765,8 @@ int yylex(void) {
 }
 
 void yyerror(const char* s) {
-    int line = zlang_get_lineno(current_scanner);
+    /* int line = zlang_get_lineno(current_scanner);
     fprintf(stderr, "Parse error at line %d: %s\n", line, s);
+    Suppress GLR parser warnings - errors are reported by Zig code if parse fails */
+    (void)s;
 }
