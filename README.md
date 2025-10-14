@@ -35,11 +35,8 @@ zig build
 # Compile a ZLang program
 ./zig-out/bin/zlang examples/hello_world.zl
 
-# Compile with optimizations and specify output name
-./zig-out/bin/zlang myprogram.zl -o myprogram -optimize
-
 # Compile with optimizations and specify output name, keep LLVM IR
-./zig-out/bin/zlang myprogram.zl -keepll -o myprogram -optimize
+./zig-out/bin/zlang myprogram.zl -o myprogram -optimize -keepll
 ```
 
 ### Hello World
