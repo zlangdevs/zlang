@@ -163,6 +163,12 @@ zlang src/main.zl src/renderer.zl src/physics.zl \
 ```zl
 ?? Single-line comment
 ?? Comments start with ?? (double question marks)
+...
+multiline comments
+start
+and end with
+three dots
+...
 ```
 
 **Identifiers**
