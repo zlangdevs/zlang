@@ -775,6 +775,42 @@ export fn zig_create_continue_stmt() ?*anyopaque {
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_goto_stmt(label_ptr: [*c]const u8) ?*anyopaque {
+    const label = std.mem.span(label_ptr);
+    const label_copy = global_allocator.dupe(u8, label) catch return null;
+
+    const goto_data = ast.NodeData{
+        .goto_stmt = ast.GotoStmt{
+            .label = label_copy,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, goto_data) catch {
+        global_allocator.free(label_copy);
+        return null;
+    };
+    set_node_line(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_label_stmt(label_ptr: [*c]const u8) ?*anyopaque {
+    const label = std.mem.span(label_ptr);
+    const label_copy = global_allocator.dupe(u8, label) catch return null;
+
+    const label_data = ast.NodeData{
+        .label_stmt = ast.LabelStmt{
+            .label = label_copy,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, label_data) catch {
+        global_allocator.free(label_copy);
+        return null;
+    };
+    set_node_line(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_create_array_initializer(elements_ptr: ?*anyopaque) ?*anyopaque {
     var elements = std.ArrayList(*ast.Node){};
     if (elements_ptr) |ptr| {

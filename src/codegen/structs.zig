@@ -21,6 +21,11 @@ pub const LoopContext = struct {
     continue_block: c.LLVMBasicBlockRef,
 };
 
+pub const PendingGoto = struct {
+    label: []const u8,
+    goto_block: c.LLVMBasicBlockRef,
+};
+
 const ElementResult = struct {
     element_ptr: c.LLVMValueRef,
     element_type: c.LLVMTypeRef,

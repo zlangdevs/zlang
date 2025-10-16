@@ -24,6 +24,8 @@ pub const NodeType = enum {
     for_stmt,
     break_stmt,
     continue_stmt,
+    goto_stmt,
+    label_stmt,
     c_for_stmt,
     array_initializer,
     array_index,
@@ -167,6 +169,14 @@ pub const BreakStmt = struct {};
 
 pub const ContinueStmt = struct {};
 
+pub const GotoStmt = struct {
+    label: []const u8,
+};
+
+pub const LabelStmt = struct {
+    label: []const u8,
+};
+
 pub const ArrayInitializer = struct {
     elements: std.ArrayList(*Node),
 };
@@ -294,6 +304,8 @@ pub const NodeData = union(NodeType) {
     for_stmt: ForStmt,
     break_stmt: BreakStmt,
     continue_stmt: ContinueStmt,
+    goto_stmt: GotoStmt,
+    label_stmt: LabelStmt,
     c_for_stmt: CForStmt,
     array_initializer: ArrayInitializer,
     array_index: ArrayIndex,
@@ -516,6 +528,12 @@ pub const Node = struct {
             .cast => |c| {
                 c.expr.destroy();
                 if (c.type_name) |tn| self.allocator.free(tn);
+            },
+            .goto_stmt => |goto_stmt| {
+                self.allocator.free(goto_stmt.label);
+            },
+            .label_stmt => |label_stmt| {
+                self.allocator.free(label_stmt.label);
             },
             else => {},
         }
@@ -749,6 +767,12 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         },
         .continue_stmt => {
             std.debug.print("➡️  Continue Statement\n", .{});
+        },
+        .goto_stmt => |goto_stmt| {
+            std.debug.print("🎯 Goto: \x1b[36m{s}\x1b[0m\n", .{goto_stmt.label});
+        },
+        .label_stmt => |label_stmt| {
+            std.debug.print("🏷️  Label: \x1b[36m{s}\x1b[0m\n", .{label_stmt.label});
         },
         .array_initializer => |arr_init| {
             std.debug.print("🔢 Array Initializer ({} elements)\n", .{arr_init.elements.items.len});
