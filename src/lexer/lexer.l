@@ -44,6 +44,7 @@ FLOAT_DOT  \.{DIGIT_WITH_DELIM}{EXPONENT}?
 "const"     { return TOKEN_CONST; }
 "break"     { return TOKEN_BREAK; }
 "continue"  { return TOKEN_CONTINUE; }
+"goto"      { return TOKEN_GOTO; }
 "use"       { return TOKEN_USE; }
 "wrap"      { return TOKEN_WRAP; }
 "enum"      { return TOKEN_ENUM; }

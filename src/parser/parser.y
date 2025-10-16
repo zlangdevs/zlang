@@ -36,6 +36,8 @@ extern void* zig_create_for_stmt(void* condition, void* body);
 extern void* zig_create_c_for_stmt(void* init, void* condition, void* increment, void* body);
 extern void* zig_create_break_stmt(void);
 extern void* zig_create_continue_stmt(void);
+extern void* zig_create_goto_stmt(const char* label);
+extern void* zig_create_label_stmt(const char* label);
 extern void* zig_create_array_initializer(void* elements);
 extern void* zig_create_array_index(void* array, void* index);
 extern void* zig_create_array_assignment(void* array, void* index, void* value);
@@ -88,7 +90,7 @@ void* ast_root = NULL;
 %token <number> TOKEN_CHAR
 %token <number> TOKEN_REASSIGN
 
-%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_DOT TOKEN_NULL TOKEN_CONST
+%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_GOTO TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_DOT TOKEN_NULL TOKEN_CONST
 %token TOKEN_AS TOKEN_UNDERSCORE
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
@@ -99,6 +101,8 @@ void* ast_root = NULL;
 %type <node> for_statement
 %type <node> break_statement
 %type <node> continue_statement
+%type <node> goto_statement
+%type <node> label_statement
 
 %left TOKEN_OR
 %left TOKEN_AND
@@ -358,6 +362,8 @@ statement:
    | c_for_statement { $$ = $1; }
    | break_statement TOKEN_SEMICOLON { $$ = $1; }
    | continue_statement TOKEN_SEMICOLON { $$ = $1; }
+   | goto_statement TOKEN_SEMICOLON { $$ = $1; }
+   | label_statement { $$ = $1; }
    | c_function_decl TOKEN_SEMICOLON { $$ = $1; }
    | use_statement { $$ = $1; }
    | expression TOKEN_SEMICOLON { $$ = $1; }
@@ -412,6 +418,20 @@ break_statement:
 continue_statement:
     TOKEN_CONTINUE {
         $$ = zig_create_continue_stmt();
+    }
+;
+
+goto_statement:
+    TOKEN_GOTO TOKEN_IDENTIFIER {
+        $$ = zig_create_goto_stmt($2);
+        free($2);
+    }
+;
+
+label_statement:
+    TOKEN_IDENTIFIER TOKEN_COLON {
+        $$ = zig_create_label_stmt($1);
+        free($1);
     }
 ;
 

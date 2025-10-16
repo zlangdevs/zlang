@@ -105,6 +105,12 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
     cg.current_function_return_type = func.return_type;
     const entry_block = c.LLVMAppendBasicBlockInContext(@ptrCast(cg.context), @ptrCast(llvm_func), "entry");
     c.LLVMPositionBuilderAtEnd(@ptrCast(cg.builder), entry_block);
+    cg.label_blocks.clearRetainingCapacity();
+    for (cg.pending_gotos.items) |pending| {
+        cg.allocator.free(pending.label);
+    }
+    cg.pending_gotos.clearRetainingCapacity();
+
     // Reset scopes for new function (keep global scope)
     variables.clearCurrentFunctionScopes(cg);
     // Create a new function-level scope for this function
