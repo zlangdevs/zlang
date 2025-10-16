@@ -1,0 +1,61 @@
+?? Comprehensive goto statement tests for ZLang
+
+?? Test 1: Basic goto forward jump
+fun testBasicForward() >> i32 {
+    i32 x = 10;
+    goto skip;
+    x = 20;
+    skip:
+    return x;
+}
+
+?? Test 2: Goto in conditional
+fun testConditional(n: i32) >> i32 {
+    if n > 0 {
+        goto positive;
+    }
+    return 0;
+    positive:
+    return 1;
+}
+
+?? Test 3: Multiple gotos to same label
+fun testMultipleGotos(n: i32) >> i32 {
+    if n == 1 {
+        goto result;
+    }
+    if n == 2 {
+        goto result;
+    }
+    return 0;
+    result:
+    return 42;
+}
+
+fun main() >> i32 {
+    @printf("=== ZLang Goto Statement Tests ===\n");
+    
+    i32 test1 = testBasicForward();
+    @printf("Test 1 - Basic forward: (expected 10):%d\n", test1);
+    
+    i32 test2a = testConditional(5);
+    i32 test2b = testConditional(-5);
+    @printf("Test 2 - Conditional: (expected 1):%d\n(expected 0):%d\n", test2a, test2b);
+    
+    i32 test3a = testMultipleGotos(1);
+    i32 test3b = testMultipleGotos(2);
+    i32 test3c = testMultipleGotos(3);
+    @printf("Test 3 - Multiple gotos: (expected 42):%d\n(expected 42):%d\n(expected 0):%d\n", test3a, test3b, test3c);
+    
+    ?? Test with backward goto in main
+    i32 count = 0;
+    start:
+    count = count + 1;
+    if count < 5 {
+        goto start;
+    }
+    @printf("Test 4 - Backward goto: (expected 5):%d\n", count);
+    
+    @printf("\n=== All goto tests completed successfully ===\n");
+    return 0;
+}

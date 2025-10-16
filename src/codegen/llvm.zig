@@ -35,6 +35,8 @@ pub const CodeGenerator = struct {
     function_to_module: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     module_dependencies: std.HashMap([]const u8, std.ArrayList([]const u8), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     current_module_name: []const u8,
+    label_blocks: std.HashMap([]const u8, c.LLVMBasicBlockRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    pending_gotos: std.ArrayList(structs.PendingGoto),
 
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
         _ = c.LLVMInitializeNativeTarget();
@@ -75,6 +77,8 @@ pub const CodeGenerator = struct {
             .function_to_module = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .module_dependencies = std.HashMap([]const u8, std.ArrayList([]const u8), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .current_module_name = "",
+            .label_blocks = std.HashMap([]const u8, c.LLVMBasicBlockRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .pending_gotos = std.ArrayList(structs.PendingGoto){},
         };
     }
 
@@ -86,6 +90,8 @@ pub const CodeGenerator = struct {
         self.regular_functions.deinit();
         self.sret_functions.deinit();
         self.loop_context_stack.deinit(self.allocator);
+        self.label_blocks.deinit();
+        self.pending_gotos.deinit(self.allocator);
         self.struct_types.deinit();
         var struct_fields_iter = self.struct_fields.iterator();
         while (struct_fields_iter.next()) |entry| {
@@ -947,6 +953,12 @@ pub const CodeGenerator = struct {
             .continue_stmt => {
                 try self.generateContinueStatement();
             },
+            .goto_stmt => |goto_stmt| {
+                try self.generateGotoStatement(goto_stmt);
+            },
+            .label_stmt => |label_stmt| {
+                try self.generateLabelStatement(label_stmt);
+            },
             .array_assignment => |arr_ass| {
                 const array_name = try self.getBaseIdentifierName(arr_ass.array);
                 defer self.allocator.free(array_name);
@@ -1693,6 +1705,62 @@ pub const CodeGenerator = struct {
         const loop_context = self.loop_context_stack.items[self.loop_context_stack.items.len - 1];
         const break_block = loop_context.break_block;
         _ = c.LLVMBuildBr(self.builder, break_block);
+    }
+
+    fn generateGotoStatement(self: *CodeGenerator, goto_stmt: ast.GotoStmt) errors.CodegenError!void {
+        const current_function = self.current_function orelse return errors.CodegenError.TypeMismatch;
+        if (self.label_blocks.get(goto_stmt.label)) |label_block| {
+            _ = c.LLVMBuildBr(self.builder, label_block);
+        } else {
+            const goto_block = c.LLVMAppendBasicBlockInContext(self.context, current_function, "goto_pending");
+            const label_copy = try self.allocator.dupe(u8, goto_stmt.label);
+            try self.pending_gotos.append(self.allocator, structs.PendingGoto{
+                .label = label_copy,
+                .goto_block = goto_block,
+            });
+            _ = c.LLVMBuildBr(self.builder, goto_block);
+        }
+        const unreachable_block = c.LLVMAppendBasicBlockInContext(self.context, current_function, "after_goto");
+        c.LLVMPositionBuilderAtEnd(self.builder, unreachable_block);
+    }
+
+    fn generateLabelStatement(self: *CodeGenerator, label_stmt: ast.LabelStmt) errors.CodegenError!void {
+        const current_function = self.current_function orelse return errors.CodegenError.TypeMismatch;
+        const label_block = c.LLVMAppendBasicBlockInContext(self.context, current_function, "label");
+        const label_copy = try self.allocator.dupe(u8, label_stmt.label);
+        try self.label_blocks.put(label_copy, label_block);
+        const saved_block = c.LLVMGetInsertBlock(self.builder);
+        var i: usize = 0;
+        while (i < self.pending_gotos.items.len) {
+            const pending = self.pending_gotos.items[i];
+            if (std.mem.eql(u8, pending.label, label_stmt.label)) {
+                c.LLVMPositionBuilderAtEnd(self.builder, pending.goto_block);
+                _ = c.LLVMBuildBr(self.builder, label_block);
+                self.allocator.free(pending.label);
+                _ = self.pending_gotos.orderedRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        c.LLVMPositionBuilderAtEnd(self.builder, saved_block);
+        const current_block = c.LLVMGetInsertBlock(self.builder);
+        const terminator = c.LLVMGetBasicBlockTerminator(current_block);
+        if (terminator == null) {
+            const block_name_ptr = c.LLVMGetBasicBlockName(current_block);
+            const is_after_goto = if (block_name_ptr != null)
+                std.mem.startsWith(u8, std.mem.span(block_name_ptr), "after_goto")
+            else
+                false;
+
+            if (is_after_goto) {
+                _ = c.LLVMBuildUnreachable(self.builder);
+            } else {
+                _ = c.LLVMBuildBr(self.builder, label_block);
+            }
+        }
+
+        c.LLVMPositionBuilderAtEnd(self.builder, label_block);
     }
 
     fn processGlobalEnums(self: *CodeGenerator, func_node: *ast.Node) errors.CodegenError!void {
