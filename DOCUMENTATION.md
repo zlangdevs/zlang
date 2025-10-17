@@ -179,7 +179,7 @@ three dots
 **Keywords**
 ```
 fun     if      else    for     return  break   continue
-const   struct  enum    wrap    use     null    as
+const   struct  enum    wrap    use     null    as      goto
 ```
 
 ### Operators
@@ -548,6 +548,109 @@ for i32 i = 0; i < 10; i++ {
             break;    ?? Breaks inner loop only
         }
     }
+}
+```
+
+### Goto Statements
+
+**Basic Goto**
+
+Goto statements allow unconditional jumps to labeled positions in code. Labels are defined with an identifier followed by a colon.
+
+```zl
+fun example() >> i32 {
+    i32 x = 10;
+    goto skip;
+    x = 20;           ?? This code is skipped
+    skip:
+    return x;         ?? Returns 10
+}
+```
+
+**Forward Jumps**
+
+Jump ahead to skip code sections:
+
+```zl
+fun check_value(n: i32) >> i32 {
+    if n > 0 {
+        goto positive;
+    }
+    return 0;
+    
+    positive:
+    return 1;
+}
+```
+
+**Backward Jumps (Loops)**
+
+Create loops by jumping backward:
+
+```zl
+fun count_to_five() >> i32 {
+    i32 count = 0;
+    start:
+    count = count + 1;
+    if count < 5 {
+        goto start;
+    }
+    return count;     ?? Returns 5
+}
+```
+
+**Multiple Gotos to Same Label**
+
+Multiple goto statements can target the same label:
+
+```zl
+fun find_special(n: i32) >> i32 {
+    if n == 1 {
+        goto found;
+    }
+    if n == 2 {
+        goto found;
+    }
+    if n == 3 {
+        goto found;
+    }
+    return 0;
+    
+    found:
+    return 42;
+}
+```
+
+**Usage Notes**
+- Labels must be unique within a function
+- Goto can jump forward or backward within the same function
+- Cannot jump into or out of functions
+- Useful for error handling and cleanup patterns
+- Compatible with C-style control flow
+
+**Example: Error Handling Pattern**
+
+```zl
+fun process_file(filename: ptr<u8>) >> i32 {
+    ptr<void> file = @fopen(filename, "r");
+    if file == null {
+        goto error;
+    }
+    
+    ptr<void> buffer = @malloc(1024);
+    if buffer == null {
+        goto cleanup_file;
+    }
+    
+    ?? Process file...
+    
+    @free(buffer as ptr<void>);
+    cleanup_file:
+    @fclose(file);
+    return 0;
+    
+    error:
+    return -1;
 }
 ```
 
