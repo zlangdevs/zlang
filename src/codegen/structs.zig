@@ -34,15 +34,15 @@ const ElementResult = struct {
 pub fn getStructTypeName(cg: *llvm.CodeGenerator, struct_type: c.LLVMTypeRef) ![]const u8 {
     const name_ptr = c.LLVMGetStructName(struct_type);
     if (name_ptr != null) {
-        return try cg.allocator.dupe(u8, std.mem.sliceTo(name_ptr, 0));
+        return utils.dupe(u8, cg.allocator, std.mem.sliceTo(name_ptr, 0));
     }
     var it = cg.struct_types.iterator();
     while (it.next()) |entry| {
         if (@intFromPtr(entry.value_ptr.*) == @intFromPtr(struct_type)) {
-            return cg.allocator.dupe(u8, entry.key_ptr.*);
+            return utils.dupe(u8, cg.allocator, entry.key_ptr.*);
         }
     }
-    return try cg.allocator.dupe(u8, "anonymous_struct");
+    return utils.dupe(u8, cg.allocator, "anonymous_struct");
 }
 
 pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.LLVMValueRef, base_type: c.LLVMTypeRef, base_type_name: []const u8, field_path: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
@@ -314,7 +314,7 @@ pub fn generateStructType(cg: *llvm.CodeGenerator, struct_decl: ast.StructDecl) 
         try field_types.append(cg.allocator, @ptrCast(field_type));
         try field_map.put(field.name, @intCast(i));
     }
-    const struct_name_z = try cg.allocator.dupeZ(u8, struct_decl.name);
+    const struct_name_z = utils.dupeZ(cg.allocator, struct_decl.name);
     defer cg.allocator.free(struct_name_z);
     const struct_type = c.LLVMStructCreateNamed(@ptrCast(cg.context), struct_name_z.ptr);
     c.LLVMStructSetBody(struct_type, field_types.items.ptr, @intCast(field_types.items.len), 0);

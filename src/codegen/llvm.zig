@@ -118,13 +118,13 @@ pub const CodeGenerator = struct {
     pub fn registerModule(self: *CodeGenerator, module_name: []const u8, deps: []const []const u8) !void {
         var list = std.ArrayList([]const u8){};
         for (deps) |d| {
-            try list.append(self.allocator, try self.allocator.dupe(u8, d));
+            try list.append(self.allocator, utils.dupe(u8, self.allocator, d));
         }
-        try self.module_dependencies.put(try self.allocator.dupe(u8, module_name), list);
+        try self.module_dependencies.put(utils.dupe(u8, self.allocator, module_name), list);
     }
 
     pub fn registerFunctionModule(self: *CodeGenerator, func_name: []const u8, module_name: []const u8) !void {
-        try self.function_to_module.put(try self.allocator.dupe(u8, func_name), try self.allocator.dupe(u8, module_name));
+        try self.function_to_module.put(utils.dupe(u8, self.allocator, func_name), utils.dupe(u8, self.allocator, module_name));
     }
 
     pub fn setCurrentModuleByFunction(self: *CodeGenerator, func_name: []const u8) void {
@@ -148,7 +148,7 @@ pub const CodeGenerator = struct {
     fn buildQualifiedName(self: *CodeGenerator, node: *ast.Node) ![]const u8 {
         switch (node.data) {
             .identifier => |ident| {
-                return try self.allocator.dupe(u8, ident.name);
+                return utils.dupe(u8, self.allocator, ident.name);
             },
             .qualified_identifier => |qual_id| {
                 const base_name = try self.buildQualifiedName(qual_id.base);
@@ -164,7 +164,7 @@ pub const CodeGenerator = struct {
 
     fn getBaseIdentifierName(self: *CodeGenerator, node: *ast.Node) ![]const u8 {
         switch (node.data) {
-            .identifier => |ident| return try self.allocator.dupe(u8, ident.name),
+            .identifier => |ident| return utils.dupe(u8, self.allocator, ident.name),
             .qualified_identifier => |qual_id| return try self.getBaseIdentifierName(qual_id.base),
             .array_index => |arr_idx| return try self.getBaseIdentifierName(arr_idx.array),
             else => return errors.CodegenError.TypeMismatch,
@@ -538,7 +538,7 @@ pub const CodeGenerator = struct {
                             defer self.allocator.free(full_name);
                             const array_name = try self.getBaseIdentifierName(as.target);
                             defer self.allocator.free(array_name);
-                            const field_path = try self.allocator.dupe(u8, full_name[array_name.len + 1 ..]);
+                            const field_path = utils.dupe(u8, self.allocator, full_name[array_name.len + 1 ..]);
                             defer self.allocator.free(field_path);
                             const array_index = try self.extractArrayIndex(qual_id.base);
                             try self.generateArrayElementFieldAssignment(array_index, field_path, as.value);
@@ -547,7 +547,7 @@ pub const CodeGenerator = struct {
                             defer self.allocator.free(struct_name);
                             const full_name = try self.buildQualifiedName(as.target);
                             defer self.allocator.free(full_name);
-                            const field_path = try self.allocator.dupe(u8, full_name[struct_name.len + 1 ..]);
+                            const field_path = utils.dupe(u8, self.allocator, full_name[struct_name.len + 1 ..]);
                             defer self.allocator.free(field_path);
 
                             try self.generateStructFieldAssignment(struct_name, field_path, as.value);
@@ -1713,7 +1713,7 @@ pub const CodeGenerator = struct {
             _ = c.LLVMBuildBr(self.builder, label_block);
         } else {
             const goto_block = c.LLVMAppendBasicBlockInContext(self.context, current_function, "goto_pending");
-            const label_copy = try self.allocator.dupe(u8, goto_stmt.label);
+            const label_copy = utils.dupe(u8, self.allocator, goto_stmt.label);
             try self.pending_gotos.append(self.allocator, structs.PendingGoto{
                 .label = label_copy,
                 .goto_block = goto_block,
@@ -1727,7 +1727,7 @@ pub const CodeGenerator = struct {
     fn generateLabelStatement(self: *CodeGenerator, label_stmt: ast.LabelStmt) errors.CodegenError!void {
         const current_function = self.current_function orelse return errors.CodegenError.TypeMismatch;
         const label_block = c.LLVMAppendBasicBlockInContext(self.context, current_function, "label");
-        const label_copy = try self.allocator.dupe(u8, label_stmt.label);
+        const label_copy = utils.dupe(u8, self.allocator, label_stmt.label);
         try self.label_blocks.put(label_copy, label_block);
         const saved_block = c.LLVMGetInsertBlock(self.builder);
         var i: usize = 0;
@@ -1807,7 +1807,7 @@ pub const CodeGenerator = struct {
         switch (global_node.data) {
             .var_decl => |decl| {
                 const var_type = self.getLLVMType(decl.type_name);
-                const var_name_z = self.allocator.dupeZ(u8, decl.name) catch return errors.CodegenError.OutOfMemory;
+                const var_name_z = utils.dupeZ(self.allocator, decl.name);
                 defer self.allocator.free(var_name_z);
                 const global_var = c.LLVMAddGlobal(self.module, @ptrCast(var_type), var_name_z.ptr);
 
@@ -1824,7 +1824,7 @@ pub const CodeGenerator = struct {
                 if (decl.is_const) {
                     c.LLVMSetGlobalConstant(global_var, 1);
                 }
-                try self.variables.put(try self.allocator.dupe(u8, decl.name), structs.VariableInfo{
+                try self.variables.put(utils.dupe(u8, self.allocator, decl.name), structs.VariableInfo{
                     .value = @ptrCast(global_var),
                     .type_ref = @ptrCast(var_type),
                     .type_name = decl.type_name,
@@ -1850,7 +1850,7 @@ pub const CodeGenerator = struct {
             const enum_const = c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
             const enum_name_z = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ enum_decl.name, enum_value.name });
             defer self.allocator.free(enum_name_z);
-            const enum_name_z_null = try self.allocator.dupeZ(u8, enum_name_z);
+            const enum_name_z_null = utils.dupeZ(self.allocator, enum_name_z);
             defer self.allocator.free(enum_name_z_null);
             const global_var = c.LLVMAddGlobal(self.module, c.LLVMInt32TypeInContext(self.context), enum_name_z_null.ptr);
             c.LLVMSetInitializer(global_var, enum_const);
@@ -1863,8 +1863,8 @@ pub const CodeGenerator = struct {
                 .type_name = "i32",
                 .is_const = true,
             };
-            try self.variables.put(try self.allocator.dupe(u8, enum_name_z), var_info);
-            try self.variables.put(try self.allocator.dupe(u8, enum_value.name), var_info);
+            try self.variables.put(utils.dupe(u8, self.allocator, enum_name_z), var_info);
+            try self.variables.put(utils.dupe(u8, self.allocator, enum_value.name), var_info);
 
             current_value = value + 1;
         }
@@ -3658,7 +3658,7 @@ pub const CodeGenerator = struct {
     pub const generateBrainfuck = bfck.generateBrainfuck;
 
     pub fn writeToFile(self: *CodeGenerator, filename: []const u8) !void {
-        const filename_z = try self.allocator.dupeZ(u8, filename);
+        const filename_z = utils.dupeZ(self.allocator, filename);
         defer self.allocator.free(filename_z);
 
         var error_msg: [*c]u8 = null;

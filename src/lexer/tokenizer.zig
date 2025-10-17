@@ -1,5 +1,6 @@
 const std = @import("std");
 const errors = @import("errors.zig");
+const utils = @import("../codegen/utils.zig");
 extern fn zlang_lex_init(scanner: *?*anyopaque) c_int;
 extern fn zlang_lex_destroy(scanner: ?*anyopaque) c_int;
 extern fn zlang_lex(scanner: ?*anyopaque) c_int;
@@ -115,7 +116,7 @@ pub fn tokenize(allocator: std.mem.Allocator, input: []const u8) errors.Tokenize
         return errors.TokenizeError.LexerInitFailed;
     }
     defer _ = zlang_lex_destroy(scanner);
-    const null_terminated_input = try allocator.dupeZ(u8, input);
+    const null_terminated_input = utils.dupeZ(allocator, input);
     defer allocator.free(null_terminated_input);
     const file = fmemopen(null_terminated_input.ptr, input.len, "r");
     if (file == null) {
@@ -129,7 +130,7 @@ pub fn tokenize(allocator: std.mem.Allocator, input: []const u8) errors.Tokenize
         if (token_type == .eof) break;
         const text_ptr = zlang_get_text(scanner);
         const lexeme = std.mem.span(text_ptr);
-        const lexeme_copy = try allocator.dupe(u8, lexeme);
+        const lexeme_copy = utils.dupe(u8, allocator, lexeme);
 
         try tokens.append(Token{
             .type = token_type,

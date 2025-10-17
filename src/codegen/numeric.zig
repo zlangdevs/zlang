@@ -1,4 +1,5 @@
 const std = @import("std");
+const utils = @import("utils.zig");
 
 pub fn parseNumericLiteral(literal: []const u8) !i64 {
     if (literal.len == 0) return error.InvalidLiteral;
@@ -49,7 +50,7 @@ pub fn parseFloatLiteral(literal: []const u8) !f64 {
 }
 
 fn removeDelimiters(allocator: std.mem.Allocator, literal: []const u8) ![]u8 {
-    var result = try allocator.alloc(u8, literal.len);
+    var result = utils.alloc(u8, allocator, literal.len);
     defer allocator.free(result);
     var i: usize = 0;
     for (literal) |c| {
@@ -58,7 +59,7 @@ fn removeDelimiters(allocator: std.mem.Allocator, literal: []const u8) ![]u8 {
             i += 1;
         }
     }
-    return try allocator.dupe(u8, result[0..i]);
+    return utils.dupe(u8, allocator, result[0..i]);
 }
 
 pub fn isNumericLiteral(literal: []const u8) bool {
