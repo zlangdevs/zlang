@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const errors = @import("../errors.zig");
+const utils = @import("../codegen/utils.zig");
 
 var global_allocator: std.mem.Allocator = undefined;
 // Track last parse error location for diagnostics
@@ -68,10 +69,10 @@ export fn zig_create_parameter(name_ptr: [*c]const u8, type_ptr: [*c]const u8) ?
     const name = std.mem.span(name_ptr);
     const type_name = std.mem.span(type_ptr);
 
-    const name_copy = global_allocator.dupe(u8, name) catch return null;
-    const type_copy = global_allocator.dupe(u8, type_name) catch return null;
+    const name_copy = utils.dupe(u8, global_allocator, name);
+    const type_copy = utils.dupe(u8, global_allocator, type_name);
 
-    const param = global_allocator.create(ast.Parameter) catch return null;
+    const param = utils.create(ast.Parameter, global_allocator);
     param.* = ast.Parameter{
         .name = name_copy,
         .type_name = type_copy,
@@ -81,7 +82,7 @@ export fn zig_create_parameter(name_ptr: [*c]const u8, type_ptr: [*c]const u8) ?
 }
 
 export fn zig_create_param_list() ?*anyopaque {
-    const param_list = global_allocator.create(ParameterList) catch return null;
+    const param_list = utils.create(ParameterList, global_allocator);
     param_list.* = ParameterList.init();
     return @as(*anyopaque, @ptrCast(param_list));
 }
@@ -99,8 +100,8 @@ export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const
     const name = std.mem.span(name_ptr);
     const return_type = std.mem.span(return_type_ptr);
 
-    const name_copy = global_allocator.dupe(u8, name) catch return null;
-    const return_type_copy = global_allocator.dupe(u8, return_type) catch return null;
+    const name_copy = utils.dupe(u8, global_allocator, name);
+    const return_type_copy = utils.dupe(u8, global_allocator, return_type);
 
     var parameters = std.ArrayList(ast.Parameter){};
     if (params_ptr) |ptr| {
@@ -215,8 +216,8 @@ export fn zig_create_var_decl(type_name_ptr: [*c]const u8, name_ptr: [*c]const u
     const type_name = std.mem.span(type_name_ptr);
     const name = std.mem.span(name_ptr);
 
-    const type_name_copy = global_allocator.dupe(u8, type_name) catch return null;
-    const name_copy = global_allocator.dupe(u8, name) catch return null;
+    const type_name_copy = utils.dupe(u8, global_allocator, type_name);
+    const name_copy = utils.dupe(u8, global_allocator, name);
 
     var initializer: ?*ast.Node = null;
     if (initializer_ptr) |ptr| {
@@ -239,7 +240,7 @@ export fn zig_create_var_decl(type_name_ptr: [*c]const u8, name_ptr: [*c]const u
 
 export fn zig_create_function_call(name_ptr: [*c]const u8, is_libc: c_int, args_ptr: ?*anyopaque) ?*anyopaque {
     const name = std.mem.span(name_ptr);
-    const name_copy = global_allocator.dupe(u8, name) catch return null;
+    const name_copy = utils.dupe(u8, global_allocator, name);
 
     var args = std.ArrayList(*ast.Node){};
     if (args_ptr) |ptr| {
@@ -279,7 +280,7 @@ export fn zig_create_return_stmt(expression_ptr: ?*anyopaque) ?*anyopaque {
 
 export fn zig_create_identifier(name_ptr: [*c]const u8) ?*anyopaque {
     const name = std.mem.span(name_ptr);
-    const name_copy = global_allocator.dupe(u8, name) catch return null;
+    const name_copy = utils.dupe(u8, global_allocator, name);
 
     const identifier_data = ast.NodeData{
         .identifier = ast.Identifier{
@@ -300,7 +301,7 @@ export fn zig_create_qualified_identifier(base_ptr: ?*anyopaque, field_ptr: [*c]
         return null;
     }
     const field = std.mem.span(field_ptr);
-    const field_copy = global_allocator.dupe(u8, field) catch return null;
+    const field_copy = utils.dupe(u8, global_allocator, field);
 
     const qualified_identifier_data = ast.NodeData{
         .qualified_identifier = ast.QualifiedIdentifier{
@@ -336,7 +337,7 @@ export fn zig_create_unary_op(op: u8, operand_ptr: ?*anyopaque) ?*anyopaque {
 
 export fn zig_create_float_literal(value_ptr: [*c]const u8) ?*anyopaque {
     const value = std.mem.span(value_ptr);
-    const value_copy = global_allocator.dupe(u8, value) catch return null;
+    const value_copy = utils.dupe(u8, global_allocator, value);
 
     const float_data = ast.NodeData{
         .float_literal = ast.FloatLiteral{
@@ -351,7 +352,7 @@ export fn zig_create_float_literal(value_ptr: [*c]const u8) ?*anyopaque {
 
 export fn zig_create_number_literal(value_ptr: [*c]const u8) ?*anyopaque {
     const value = std.mem.span(value_ptr);
-    const value_copy = global_allocator.dupe(u8, value) catch return null;
+    const value_copy = utils.dupe(u8, global_allocator, value);
 
     const number_data = ast.NodeData{
         .number_literal = ast.NumberLiteral{
@@ -378,7 +379,7 @@ export fn zig_create_char_literal(value: c_int) ?*anyopaque {
 
 export fn zig_create_string_literal(value_ptr: [*c]const u8) ?*anyopaque {
     const value = std.mem.span(value_ptr);
-    const value_copy = global_allocator.dupe(u8, value) catch return null;
+    const value_copy = utils.dupe(u8, global_allocator, value);
 
     const string_data = ast.NodeData{
         .string_literal = ast.StringLiteral{
@@ -422,7 +423,7 @@ const StructFieldValueList = struct {
 };
 
 export fn zig_create_enum_value_list() ?*anyopaque {
-    const enum_value_list = global_allocator.create(EnumValueList) catch return null;
+    const enum_value_list = utils.create(EnumValueList, global_allocator);
     enum_value_list.* = EnumValueList.init();
     return @as(*anyopaque, @ptrCast(enum_value_list));
 }
@@ -431,7 +432,7 @@ export fn zig_add_enum_value(list_ptr: ?*anyopaque, name_ptr: [*c]const u8, valu
     if (list_ptr == null) return;
     const enum_value_list = @as(*EnumValueList, @ptrFromInt(@intFromPtr(list_ptr.?)));
     const name = std.mem.span(name_ptr);
-    const name_copy = global_allocator.dupe(u8, name) catch return;
+    const name_copy = utils.dupe(u8, global_allocator, name);
     var value: ?*ast.Node = null;
     if (value_ptr) |ptr| {
         value = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
@@ -446,7 +447,7 @@ export fn zig_add_enum_value(list_ptr: ?*anyopaque, name_ptr: [*c]const u8, valu
 
 export fn zig_create_enum_decl(name_ptr: [*c]const u8, values_ptr: ?*anyopaque) ?*anyopaque {
     const name = std.mem.span(name_ptr);
-    const name_copy = global_allocator.dupe(u8, name) catch return null;
+    const name_copy = utils.dupe(u8, global_allocator, name);
     var values = std.ArrayList(ast.EnumValue){};
     if (values_ptr) |ptr| {
         const enum_value_list = @as(*EnumValueList, @ptrFromInt(@intFromPtr(ptr)));
@@ -466,7 +467,7 @@ export fn zig_create_enum_decl(name_ptr: [*c]const u8, values_ptr: ?*anyopaque) 
 }
 
 export fn zig_create_struct_field_list() ?*anyopaque {
-    const struct_field_list = global_allocator.create(StructFieldList) catch return null;
+    const struct_field_list = utils.create(StructFieldList, global_allocator);
     struct_field_list.* = StructFieldList.init();
     return @as(*anyopaque, @ptrCast(struct_field_list));
 }
@@ -476,11 +477,8 @@ export fn zig_add_struct_field(list_ptr: ?*anyopaque, name_ptr: [*c]const u8, ty
     const struct_field_list = @as(*StructFieldList, @ptrFromInt(@intFromPtr(list_ptr.?)));
     const name = std.mem.span(name_ptr);
     const type_name = std.mem.span(type_name_ptr);
-    const name_copy = global_allocator.dupe(u8, name) catch return;
-    const type_name_copy = global_allocator.dupe(u8, type_name) catch {
-        global_allocator.free(name_copy);
-        return;
-    };
+    const name_copy = utils.dupe(u8, global_allocator, name);
+    const type_name_copy = utils.dupe(u8, global_allocator, type_name);
     const struct_field = ast.StructField{
         .name = name_copy,
         .type_name = type_name_copy,
@@ -495,11 +493,8 @@ export fn zig_add_struct_field_with_default(list_ptr: ?*anyopaque, name_ptr: [*c
     const struct_field_list = @as(*StructFieldList, @ptrFromInt(@intFromPtr(list_ptr.?)));
     const name = std.mem.span(name_ptr);
     const type_name = std.mem.span(type_name_ptr);
-    const name_copy = global_allocator.dupe(u8, name) catch return;
-    const type_name_copy = global_allocator.dupe(u8, type_name) catch {
-        global_allocator.free(name_copy);
-        return;
-    };
+    const name_copy = utils.dupe(u8, global_allocator, name);
+    const type_name_copy = utils.dupe(u8, global_allocator, type_name);
     var default_value: ?*ast.Node = null;
     if (default_value_ptr) |ptr| {
         default_value = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
@@ -515,7 +510,7 @@ export fn zig_add_struct_field_with_default(list_ptr: ?*anyopaque, name_ptr: [*c
 
 export fn zig_create_struct_decl(name_ptr: [*c]const u8, fields_ptr: ?*anyopaque) ?*anyopaque {
     const name = std.mem.span(name_ptr);
-    const name_copy = global_allocator.dupe(u8, name) catch return null;
+    const name_copy = utils.dupe(u8, global_allocator, name);
     var fields = std.ArrayList(ast.StructField){};
     if (fields_ptr) |ptr| {
         const struct_field_list = @as(*StructFieldList, @ptrFromInt(@intFromPtr(ptr)));
@@ -536,7 +531,7 @@ export fn zig_create_struct_decl(name_ptr: [*c]const u8, fields_ptr: ?*anyopaque
 
 export fn zig_create_struct_initializer(struct_name_ptr: [*c]const u8, field_values_ptr: ?*anyopaque) ?*anyopaque {
     const struct_name = std.mem.span(struct_name_ptr);
-    const struct_name_copy = global_allocator.dupe(u8, struct_name) catch return null;
+    const struct_name_copy = utils.dupe(u8, global_allocator, struct_name);
     var field_values = std.ArrayList(ast.StructFieldValue){};
     if (field_values_ptr) |ptr| {
         const struct_field_value_list = @as(*StructFieldValueList, @ptrFromInt(@intFromPtr(ptr)));
@@ -557,7 +552,7 @@ export fn zig_create_struct_initializer(struct_name_ptr: [*c]const u8, field_val
 }
 
 export fn zig_create_struct_field_value_list() ?*anyopaque {
-    const struct_field_value_list = global_allocator.create(StructFieldValueList) catch return null;
+    const struct_field_value_list = utils.create(StructFieldValueList, global_allocator);
     struct_field_value_list.* = StructFieldValueList.init();
     return @as(*anyopaque, @ptrCast(struct_field_value_list));
 }
@@ -566,7 +561,7 @@ export fn zig_add_struct_field_value(list_ptr: ?*anyopaque, field_name_ptr: [*c]
     if (list_ptr == null or field_name_ptr == null or value_ptr == null) return;
     const struct_field_value_list = @as(*StructFieldValueList, @ptrFromInt(@intFromPtr(list_ptr.?)));
     const field_name = std.mem.span(field_name_ptr);
-    const field_name_copy = global_allocator.dupe(u8, field_name) catch return;
+    const field_name_copy = utils.dupe(u8, global_allocator, field_name);
     const value = @as(*ast.Node, @ptrFromInt(@intFromPtr(value_ptr.?)));
     const struct_field_value = ast.StructFieldValue{
         .field_name = field_name_copy,
@@ -609,13 +604,13 @@ export fn zig_create_null_literal() ?*anyopaque {
 }
 
 export fn zig_create_stmt_list() ?*anyopaque {
-    const node_list = global_allocator.create(NodeList) catch return null;
+    const node_list = utils.create(NodeList, global_allocator);
     node_list.* = NodeList.init();
     return @as(*anyopaque, @ptrCast(node_list));
 }
 
 export fn zig_create_arg_list() ?*anyopaque {
-    const node_list = global_allocator.create(NodeList) catch return null;
+    const node_list = utils.create(NodeList, global_allocator);
     node_list.* = NodeList.init();
     return @as(*anyopaque, @ptrCast(node_list));
 }
@@ -668,7 +663,7 @@ export fn zig_add_to_arg_list(list_ptr: ?*anyopaque, arg_ptr: ?*anyopaque) void 
 
 export fn zig_create_brainfuck(code_ptr: [*c]const u8) ?*anyopaque {
     const code = std.mem.span(code_ptr);
-    const code_copy = global_allocator.dupe(u8, code) catch return null;
+    const code_copy = utils.dupe(u8, global_allocator, code);
     const brainfuck_data = ast.NodeData{
         .brainfuck = ast.Brainfuck{
             .code = code_copy,
@@ -777,7 +772,7 @@ export fn zig_create_continue_stmt() ?*anyopaque {
 
 export fn zig_create_goto_stmt(label_ptr: [*c]const u8) ?*anyopaque {
     const label = std.mem.span(label_ptr);
-    const label_copy = global_allocator.dupe(u8, label) catch return null;
+    const label_copy = utils.dupe(u8, global_allocator, label);
 
     const goto_data = ast.NodeData{
         .goto_stmt = ast.GotoStmt{
@@ -795,7 +790,7 @@ export fn zig_create_goto_stmt(label_ptr: [*c]const u8) ?*anyopaque {
 
 export fn zig_create_label_stmt(label_ptr: [*c]const u8) ?*anyopaque {
     const label = std.mem.span(label_ptr);
-    const label_copy = global_allocator.dupe(u8, label) catch return null;
+    const label_copy = utils.dupe(u8, global_allocator, label);
 
     const label_data = ast.NodeData{
         .label_stmt = ast.LabelStmt{
@@ -953,7 +948,7 @@ export fn zig_create_simd_method_call(simd_ptr: ?*anyopaque, method_name_ptr: [*
     if (simd_ptr == null or method_name_ptr == null) return null;
     const simd = @as(*ast.Node, @ptrFromInt(@intFromPtr(simd_ptr.?)));
     const method_name = std.mem.span(method_name_ptr);
-    const method_name_copy = global_allocator.dupe(u8, method_name) catch return null;
+    const method_name_copy = utils.dupe(u8, global_allocator, method_name);
     var args = std.ArrayList(*ast.Node){};
     if (args_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
@@ -976,7 +971,7 @@ export fn zig_create_method_call(object_ptr: ?*anyopaque, method_name_ptr: [*c]c
 
     const object = @as(*ast.Node, @ptrFromInt(@intFromPtr(object_ptr.?)));
     const method_name = std.mem.span(method_name_ptr);
-    const method_name_copy = global_allocator.dupe(u8, method_name) catch return null;
+    const method_name_copy = utils.dupe(u8, global_allocator, method_name);
 
     var args = std.ArrayList(*ast.Node){};
     if (args_ptr) |ptr| {
@@ -1001,8 +996,8 @@ export fn zig_create_c_function_decl(name_ptr: [*c]const u8, return_type_ptr: [*
     const name = std.mem.span(name_ptr);
     const return_type = std.mem.span(return_type_ptr);
 
-    const name_copy = global_allocator.dupe(u8, name) catch return null;
-    const return_type_copy = global_allocator.dupe(u8, return_type) catch return null;
+    const name_copy = utils.dupe(u8, global_allocator, name);
+    const return_type_copy = utils.dupe(u8, global_allocator, return_type);
 
     var parameters = std.ArrayList(ast.Parameter){};
     if (params_ptr) |ptr| {
@@ -1028,8 +1023,8 @@ export fn zig_create_wrapper_function(name_ptr: [*c]const u8, return_type_ptr: [
     const name = std.mem.span(name_ptr);
     const return_type = std.mem.span(return_type_ptr);
 
-    const name_copy = global_allocator.dupe(u8, name) catch return null;
-    const return_type_copy = global_allocator.dupe(u8, return_type) catch return null;
+    const name_copy = utils.dupe(u8, global_allocator, name);
+    const return_type_copy = utils.dupe(u8, global_allocator, return_type);
 
     var parameters = std.ArrayList(ast.Parameter){};
     if (params_ptr) |ptr| {
@@ -1052,7 +1047,7 @@ export fn zig_create_wrapper_function(name_ptr: [*c]const u8, return_type_ptr: [
 }
 export fn zig_create_use_stmt(module_path_ptr: [*c]const u8) ?*anyopaque {
     const module_path = std.mem.span(module_path_ptr);
-    const module_path_copy = global_allocator.dupe(u8, module_path) catch return null;
+    const module_path_copy = utils.dupe(u8, global_allocator, module_path);
 
     const use_stmt_data = ast.NodeData{
         .use_stmt = ast.UseStmt{
@@ -1075,7 +1070,7 @@ export fn zig_create_cast(expr_ptr: ?*anyopaque, type_name_ptr: [*c]const u8, au
     if (!auto_cast) {
         const tn = std.mem.span(type_name_ptr);
         if (tn.len > 0) {
-            type_copy = global_allocator.dupe(u8, tn) catch return null;
+            type_copy = utils.dupe(u8, global_allocator, tn);
         }
     }
     const cast_data = ast.NodeData{

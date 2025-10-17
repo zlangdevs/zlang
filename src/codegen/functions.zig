@@ -14,11 +14,11 @@ pub fn declareLibcFunction(cg: *llvm.CodeGenerator, func_name: []const u8) !c.LL
     }
     if (utils.LIBC_FUNCTIONS.get(func_name)) |signature| {
         const func = try createFunctionFromSignature(cg, func_name, signature);
-        try cg.functions.put(try cg.allocator.dupe(u8, func_name), @ptrCast(func));
+        try cg.functions.put(utils.dupe(u8, cg.allocator, func_name), @ptrCast(func));
         return func;
     }
     const func = try createGenericLibcFunction(cg, func_name);
-    try cg.functions.put(try cg.allocator.dupe(u8, func_name), @ptrCast(func));
+    try cg.functions.put(utils.dupe(u8, cg.allocator, func_name), @ptrCast(func));
     return func;
 }
 
@@ -37,11 +37,11 @@ fn createFunctionFromSignature(cg: *llvm.CodeGenerator, func_name: []const u8, s
     else
         c.LLVMFunctionType(return_type, null, 0, if (signature.is_varargs) 1 else 0);
 
-    const func_name_z = try cg.allocator.dupeZ(u8, func_name);
+    const func_name_z = utils.dupeZ(cg.allocator, func_name);
     defer cg.allocator.free(func_name_z);
 
     const llvm_func = c.LLVMAddFunction(@ptrCast(cg.module), func_name_z.ptr, function_type);
-    try cg.functions.put(try cg.allocator.dupe(u8, func_name), @ptrCast(llvm_func));
+    try cg.functions.put(utils.dupe(u8, cg.allocator, func_name), @ptrCast(llvm_func));
 
     return llvm_func;
 }
@@ -51,11 +51,11 @@ fn createGenericLibcFunction(cg: *llvm.CodeGenerator, func_name: []const u8) !c.
     var generic_args = [_]c.LLVMTypeRef{i8_ptr_type};
     const function_type = c.LLVMFunctionType(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), &generic_args[0], 1, 1);
 
-    const func_name_z = try cg.allocator.dupeZ(u8, func_name);
+    const func_name_z = utils.dupeZ(cg.allocator, func_name);
     defer cg.allocator.free(func_name_z);
 
     const llvm_func = c.LLVMAddFunction(@ptrCast(cg.module), func_name_z.ptr, function_type);
-    try cg.functions.put(try cg.allocator.dupe(u8, func_name), @ptrCast(llvm_func));
+    try cg.functions.put(utils.dupe(u8, cg.allocator, func_name), @ptrCast(llvm_func));
 
     return llvm_func;
 }
@@ -79,7 +79,7 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
     else
         c.LLVMFunctionType(@ptrCast(return_type), null, 0, 0);
 
-    const func_name_z = cg.allocator.dupeZ(u8, func.name) catch return errors.CodegenError.OutOfMemory;
+    const func_name_z = utils.dupeZ(cg.allocator, func.name);
     defer cg.allocator.free(func_name_z);
 
     const llvm_func = c.LLVMAddFunction(@ptrCast(cg.module), func_name_z.ptr, function_type);
@@ -179,10 +179,10 @@ fn hasValidControlFlow(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
 }
 
 pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFunctionDecl) errors.CodegenError!void {
-    const func_name_z = try cg.allocator.dupeZ(u8, c_func.name);
+    const func_name_z = utils.dupeZ(cg.allocator, c_func.name);
     defer cg.allocator.free(func_name_z);
     if (c.LLVMGetNamedFunction(@ptrCast(cg.module), func_name_z.ptr)) |existing_func| {
-        try cg.functions.put(try cg.allocator.dupe(u8, c_func.name), @ptrCast(existing_func));
+        try cg.functions.put(utils.dupe(u8, cg.allocator, c_func.name), @ptrCast(existing_func));
         return;
     }
 
@@ -228,7 +228,7 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
             c.LLVMAddAttributeAtIndex(llvm_func, attr_idx, sret_attr);
             const align_attr = c.LLVMCreateEnumAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("align", 5), cg.getAlignmentForType(@ptrCast(return_type)));
             c.LLVMAddAttributeAtIndex(llvm_func, attr_idx, align_attr);
-            try cg.sret_functions.put(try cg.allocator.dupe(u8, c_func.name), @ptrCast(return_type));
+            try cg.sret_functions.put(utils.dupe(u8, cg.allocator, c_func.name), @ptrCast(return_type));
             attr_idx += 1;
         }
 
@@ -252,10 +252,10 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
             }
         }
 
-        try cg.functions.put(try cg.allocator.dupe(u8, c_func.name), @ptrCast(llvm_func));
+        try cg.functions.put(utils.dupe(u8, cg.allocator, c_func.name), @ptrCast(llvm_func));
         c.LLVMSetLinkage(llvm_func, c.LLVMExternalLinkage);
     }
-    try cg.c_function_declarations.put(try cg.allocator.dupe(u8, c_func.name), c_func.is_wrapped);
+    try cg.c_function_declarations.put(utils.dupe(u8, cg.allocator, c_func.name), c_func.is_wrapped);
 }
 
 pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) errors.CodegenError!c.LLVMValueRef {
@@ -526,7 +526,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
 
     const needs_result_name = !is_void_return or uses_sret;
     const call_name = if (needs_result_name) call.name else "";
-    const call_name_z = cg.allocator.dupeZ(u8, call_name) catch return errors.CodegenError.OutOfMemory;
+    const call_name_z = utils.dupeZ(cg.allocator, call_name);
     defer cg.allocator.free(call_name_z);
 
     const call_result = if (args.items.len > 0)

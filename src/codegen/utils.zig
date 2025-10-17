@@ -6,6 +6,38 @@ const errors = @import("../errors.zig");
 const c_bindings = @import("c_bindings.zig");
 const c = c_bindings.c;
 
+pub fn alloc(comptime T: type, allocator: std.mem.Allocator, n: usize) []T {
+    return allocator.alloc(T, n) catch |err| {
+        std.debug.print("Fatal: Memory allocation failed for {d} items of type {s}\n", .{ n, @typeName(T) });
+        std.debug.print("Error: {any}\n", .{err});
+        @panic("Out of memory");
+    };
+}
+
+pub fn dupe(comptime T: type, allocator: std.mem.Allocator, slice: []const T) []T {
+    return allocator.dupe(T, slice) catch |err| {
+        std.debug.print("Fatal: Memory duplication failed for {d} items of type {s}\n", .{ slice.len, @typeName(T) });
+        std.debug.print("Error: {any}\n", .{err});
+        @panic("Out of memory");
+    };
+}
+
+pub fn dupeZ(allocator: std.mem.Allocator, slice: []const u8) [:0]u8 {
+    return allocator.dupeZ(u8, slice) catch |err| {
+        std.debug.print("Fatal: Memory duplication failed for null-terminated string of length {d}\n", .{slice.len});
+        std.debug.print("Error: {any}\n", .{err});
+        @panic("Out of memory");
+    };
+}
+
+pub fn create(comptime T: type, allocator: std.mem.Allocator) *T {
+    return allocator.create(T) catch |err| {
+        std.debug.print("Fatal: Memory allocation failed for single item of type {s}\n", .{@typeName(T)});
+        std.debug.print("Error: {any}\n", .{err});
+        @panic("Out of memory");
+    };
+}
+
 pub const LibcType = enum {
     void_type,
     int_type,
@@ -136,7 +168,7 @@ pub fn getDefaultValueForType(cg: *codegen.CodeGenerator, type_name: []const u8)
 
             if (std.fmt.parseInt(u32, size_str, 10) catch null) |vector_size| {
                 const element_default = getDefaultValueForType(cg, element_type_name);
-                const elements = cg.allocator.alloc(c.LLVMValueRef, vector_size) catch return c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0);
+                const elements = alloc(c.LLVMValueRef, cg.allocator, vector_size);
                 defer cg.allocator.free(elements);
                 for (elements) |*element| {
                     element.* = element_default;
