@@ -221,6 +221,7 @@ const   struct  enum    wrap    use     null    as      goto
 - `u64` - 64-bit unsigned (0 to 18,446,744,073,709,551,615)
 
 **Floating Point**
+- `f16` - 16-bit IEEE 754 half precision
 - `f32` - 32-bit IEEE 754 single precision
 - `f64` - 64-bit IEEE 754 double precision
 
@@ -469,7 +470,7 @@ v[2] = 100.0;
 
 **Supported Vector Sizes**
 - 2, 4, 8, 16, 32 elements
-- Types: i8, i16, i32, i64, u8, u16, u32, u64, f32, f64
+- Types: i8, i16, i32, i64, u8, u16, u32, u64, f16, f32, f64
 
 ### Embedded Brainfuck
 
@@ -788,6 +789,7 @@ fun add(a: i32, b: i32) >> i32 {
 | `i8` | `i8` |
 | `i32` | `i32` |
 | `i64` | `i64` |
+| `f16` | `half` |
 | `f32` | `float` |
 | `f64` | `double` |
 | `bool` | `i1` |
