@@ -71,7 +71,7 @@ fun main() >> i32 {
 ```zl
 i32 count = 42;              ?? Signed integers: i8, i16, i32, i64
 u64 big_num = 1000000;       ?? Unsigned: u8, u16, u32, u64
-f32 temperature = 98.6;      ?? Floats: f32, f64
+f32 temperature = 98.6;      ?? Floats: f16, f32, f64
 bool is_active = true;       ?? Booleans
 ptr<i32> my_ptr = &count;    ?? Pointers
 arr<i32, 100> numbers;       ?? Fixed-size arrays
