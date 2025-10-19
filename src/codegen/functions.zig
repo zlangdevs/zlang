@@ -65,7 +65,7 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
     defer param_types.deinit(cg.allocator);
 
     for (func.parameters.items) |param| {
-        const param_type = cg.getLLVMType(param.type_name);
+        const param_type = try cg.getLLVMType(param.type_name);
         if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind and utils.shouldUseByVal(cg, @ptrCast(param_type))) {
             try param_types.append(cg.allocator, c.LLVMPointerType(@ptrCast(param_type), 0));
         } else {
@@ -73,7 +73,7 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
         }
     }
 
-    const return_type = cg.getLLVMType(func.return_type);
+    const return_type = try cg.getLLVMType(func.return_type);
     const function_type = if (param_types.items.len > 0)
         c.LLVMFunctionType(@ptrCast(return_type), param_types.items.ptr, @intCast(param_types.items.len), 0)
     else
@@ -85,7 +85,7 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
     const llvm_func = c.LLVMAddFunction(@ptrCast(cg.module), func_name_z.ptr, function_type);
 
     for (func.parameters.items, 0..) |param, i| {
-        const param_type = cg.getLLVMType(param.type_name);
+        const param_type = try cg.getLLVMType(param.type_name);
         if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind and utils.shouldUseByVal(cg, @ptrCast(param_type))) {
             const byval_attr = c.LLVMCreateTypeAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("byval", 5), @ptrCast(param_type));
             c.LLVMAddAttributeAtIndex(llvm_func, @intCast(i + 1), byval_attr);
@@ -118,7 +118,7 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
     // Add parameters to the function-level scope
     for (func.parameters.items, 0..) |param, i| {
         const param_value = c.LLVMGetParam(@ptrCast(llvm_func), @intCast(i));
-        const param_type = cg.getLLVMType(param.type_name);
+        const param_type = try cg.getLLVMType(param.type_name);
 
         if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind and utils.shouldUseByVal(cg, @ptrCast(param_type))) {
             try variables.putVariable(cg, param.name, structs.VariableInfo{
@@ -188,7 +188,7 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
 
     var param_types = std.ArrayList(c.LLVMTypeRef){};
     defer param_types.deinit(cg.allocator);
-    const return_type = cg.getLLVMType(c_func.return_type);
+    const return_type = try cg.getLLVMType(c_func.return_type);
     const uses_sret = c.LLVMGetTypeKind(@ptrCast(return_type)) == c.LLVMStructTypeKind and utils.shouldUseByVal(cg, @ptrCast(return_type));
 
     if (uses_sret) {
@@ -196,7 +196,7 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
     }
 
     for (c_func.parameters.items) |param| {
-        const param_type = cg.getLLVMType(param.type_name);
+        const param_type = try cg.getLLVMType(param.type_name);
         if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind) {
             if (utils.shouldSplitAsVector(cg, @ptrCast(param_type))) {
                 const float_type = c.LLVMFloatTypeInContext(@ptrCast(cg.context));
@@ -234,7 +234,7 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
 
         var actual_param_idx: u32 = attr_idx;
         for (c_func.parameters.items) |param| {
-            const param_type = cg.getLLVMType(param.type_name);
+            const param_type = try cg.getLLVMType(param.type_name);
             if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind) {
                 if (utils.shouldSplitAsVector(cg, @ptrCast(param_type))) {
                     actual_param_idx += 2;
@@ -333,10 +333,10 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                                     while (it.next()) |arg_raw| {
                                         const arg_trim = std.mem.trim(u8, arg_raw, " \t");
                                         if (arg_trim.len == 0) continue;
-                                        const aty = cg.getLLVMType(arg_trim);
+                                        const aty = try cg.getLLVMType(arg_trim);
                                         param_types.append(cg.allocator, aty) catch unreachable;
                                     }
-                                    const ret_ty = cg.getLLVMType(ret_part);
+                                    const ret_ty = try cg.getLLVMType(ret_part);
                                     fn_ty = if (param_types.items.len > 0)
                                         c.LLVMFunctionType(@ptrCast(ret_ty), param_types.items.ptr, @intCast(param_types.items.len), 0)
                                     else
