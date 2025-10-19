@@ -310,7 +310,7 @@ pub fn generateStructType(cg: *llvm.CodeGenerator, struct_decl: ast.StructDecl) 
     defer field_types.deinit(cg.allocator);
     var field_map = std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(cg.allocator);
     for (struct_decl.fields.items, 0..) |field, i| {
-        const field_type = utils.getLLVMType(cg, field.type_name);
+        const field_type = try utils.getLLVMType(cg, field.type_name);
         try field_types.append(cg.allocator, @ptrCast(field_type));
         try field_map.put(field.name, @intCast(i));
     }
@@ -331,7 +331,7 @@ pub fn generateStructInitializer(cg: *llvm.CodeGenerator, struct_init: ast.Struc
     for (struct_decl.fields.items, 0..) |field, i| {
         if (field.default_value) |default_val| {
             const field_ptr = try getStructFieldPointer(cg, struct_type, struct_ptr, @intCast(i));
-            const field_type = utils.getLLVMType(cg, field.type_name);
+            const field_type = try utils.getLLVMType(cg, field.type_name);
             const field_type_kind = c.LLVMGetTypeKind(field_type);
             if (default_val.data == .string_literal and field_type_kind == c.LLVMArrayTypeKind) {
                 try assignStringLiteralToArrayField(cg, field_ptr, field_type, default_val.data.string_literal);
