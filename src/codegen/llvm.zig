@@ -498,7 +498,7 @@ pub const CodeGenerator = struct {
                             for (struct_decl.fields.items, 0..) |field, i| {
                                 if (field.default_value) |default_val| {
                                     const field_ptr = try self.getStructFieldPointer(@ptrCast(struct_type), var_info.value, @intCast(i));
-                                    const field_type = self.getLLVMType(field.type_name);
+                                    const field_type = try self.getLLVMType(field.type_name);
                                     const field_type_kind = c.LLVMGetTypeKind(@ptrCast(field_type));
                                     if (default_val.data == .string_literal and field_type_kind == c.LLVMArrayTypeKind) {
                                         try self.assignStringLiteralToArrayField(field_ptr, @ptrCast(field_type), default_val.data.string_literal);
@@ -585,7 +585,7 @@ pub const CodeGenerator = struct {
                 } else if (std.mem.startsWith(u8, decl.type_name, "simd<") and std.mem.endsWith(u8, decl.type_name, ">")) {
                     try self.generateSimdDeclaration(decl);
                 } else {
-                    const var_type = self.getLLVMType(decl.type_name);
+                    const var_type = try self.getLLVMType(decl.type_name);
                     const alloca = c.LLVMBuildAlloca(@ptrCast(self.builder), @ptrCast(var_type), decl.name.ptr);
                     try CodeGenerator.putVariable(self, decl.name, structs.VariableInfo{
                         .value = @ptrCast(alloca),
@@ -602,7 +602,7 @@ pub const CodeGenerator = struct {
                             for (struct_decl.fields.items, 0..) |field, i| {
                                 if (field.default_value) |default_val| {
                                     const field_ptr = try self.getStructFieldPointer(@ptrCast(struct_type), @ptrCast(alloca), @intCast(i));
-                                    const field_type = self.getLLVMType(field.type_name);
+                                    const field_type = try self.getLLVMType(field.type_name);
                                     const field_type_kind = c.LLVMGetTypeKind(field_type);
                                     if (default_val.data == .string_literal and field_type_kind == c.LLVMArrayTypeKind) {
                                         try self.assignStringLiteralToArrayField(field_ptr, field_type, default_val.data.string_literal);
@@ -645,7 +645,7 @@ pub const CodeGenerator = struct {
                                 if (field.default_value) |default_val| {
                                     const field_ptr = try self.getStructFieldPointer(var_type, alloca, @intCast(i));
                                     const value = try self.generateExpression(default_val);
-                                    const casted_value = try self.castWithRules(value, self.getLLVMType(field.type_name), default_val);
+                                    const casted_value = try self.castWithRules(value, try self.getLLVMType(field.type_name), default_val);
                                     _ = c.LLVMBuildStore(self.builder, casted_value, field_ptr);
                                 }
                             }
@@ -668,7 +668,7 @@ pub const CodeGenerator = struct {
                         for (struct_decl.fields.items, 0..) |field, i| {
                             if (field.default_value) |default_val| {
                                 const field_ptr = try self.getStructFieldPointer(var_type, alloca, @intCast(i));
-                                const field_type = self.getLLVMType(field.type_name);
+                                const field_type = try self.getLLVMType(field.type_name);
                                 const field_type_kind = c.LLVMGetTypeKind(field_type);
                                 if (default_val.data == .string_literal and field_type_kind == c.LLVMArrayTypeKind) {
                                     try self.assignStringLiteralToArrayField(field_ptr, field_type, default_val.data.string_literal);
@@ -750,7 +750,7 @@ pub const CodeGenerator = struct {
                         if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
                             const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_compound");
                             const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                            const element_type = self.getLLVMType(element_type_name);
+                            const element_type = try self.getLLVMType(element_type_name);
                             const idx = collected_indices.items[collected_indices.items.len - 1];
                             var indices = [_]c.LLVMValueRef{idx};
                             const element_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_index_compound");
@@ -868,7 +868,7 @@ pub const CodeGenerator = struct {
                         const field_ptr = try self.getStructFieldPointer(@ptrCast(struct_type), var_info.value, @intCast(field_index));
                         const struct_decl = self.getStructDecl(struct_name) orelse return errors.CodegenError.TypeMismatch;
                         const field_type_name = struct_decl.fields.items[field_index].type_name;
-                        const field_type = self.getLLVMType(field_type_name);
+                        const field_type = try self.getLLVMType(field_type_name);
                         const current_value = c.LLVMBuildLoad2(self.builder, field_type, field_ptr, "load_field");
                         const rhs_value = try self.generateExpressionWithContext(cas.value, field_type_name);
                         const rhs_casted = try self.castWithSourceRules(rhs_value, field_type, cas.value);
@@ -928,7 +928,7 @@ pub const CodeGenerator = struct {
                 if (ret.expression) |expr| {
                     const target_ty_name = self.current_function_return_type;
                     const ret_raw = try self.generateExpressionWithContext(expr, target_ty_name);
-                    const target_ty = self.getLLVMType(target_ty_name);
+                    const target_ty = try self.getLLVMType(target_ty_name);
                     const final_ret = try self.castWithRules(ret_raw, target_ty, expr);
                     _ = c.LLVMBuildRet(self.builder, final_ret);
                 } else {
@@ -1030,7 +1030,7 @@ pub const CodeGenerator = struct {
 
                     const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_for_compound");
                     const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                    const element_type = self.getLLVMType(element_type_name);
+                    const element_type = try self.getLLVMType(element_type_name);
                     const idx = collected_indices.items[collected_indices.items.len - 1];
                     var indices = [_]c.LLVMValueRef{idx};
                     const element_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_index_compound");
@@ -1352,7 +1352,7 @@ pub const CodeGenerator = struct {
         if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
             const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_for_assign");
             const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-            const element_type = self.getLLVMType(element_type_name);
+            const element_type = try self.getLLVMType(element_type_name);
             const idx = collected_indices.items[collected_indices.items.len - 1];
             var indices = [_]c.LLVMValueRef{idx};
             const element_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_index_assign");
@@ -1475,7 +1475,7 @@ pub const CodeGenerator = struct {
                 };
             }
 
-            const element_type = self.getLLVMType(element_type_name);
+            const element_type = try self.getLLVMType(element_type_name);
             const array_type = c.LLVMArrayType(@ptrCast(element_type), @intCast(array_size));
             const alloca = c.LLVMBuildAlloca(self.builder, array_type, decl.name.ptr);
 
@@ -1541,7 +1541,7 @@ pub const CodeGenerator = struct {
             const vector_size = std.fmt.parseInt(u32, size_str, 10) catch {
                 return errors.CodegenError.TypeMismatch;
             };
-            const element_type = self.getLLVMType(element_type_name);
+            const element_type = try self.getLLVMType(element_type_name);
             const vector_type = c.LLVMVectorType(@ptrCast(element_type), vector_size);
             const alloca = c.LLVMBuildAlloca(self.builder, vector_type, decl.name.ptr);
             try CodeGenerator.putVariable(self, decl.name, structs.VariableInfo{
@@ -1806,7 +1806,7 @@ pub const CodeGenerator = struct {
     fn generateGlobalDeclaration(self: *CodeGenerator, global_node: *ast.Node) errors.CodegenError!void {
         switch (global_node.data) {
             .var_decl => |decl| {
-                const var_type = self.getLLVMType(decl.type_name);
+                const var_type = try self.getLLVMType(decl.type_name);
                 const var_name_z = utils.dupeZ(self.allocator, decl.name);
                 defer self.allocator.free(var_name_z);
                 const global_var = c.LLVMAddGlobal(self.module, @ptrCast(var_type), var_name_z.ptr);
@@ -1956,7 +1956,7 @@ pub const CodeGenerator = struct {
                 if (cst.auto) {
                     return self.castToTypeWithSourceInfo(val, target_type, source_type_name);
                 } else if (cst.type_name) |tn| {
-                    const named_ty = self.getLLVMType(tn);
+                    const named_ty = try self.getLLVMType(tn);
                     val = self.castToTypeWithSourceInfo(val, @ptrCast(named_ty), source_type_name);
                     from_ty = @ptrCast(named_ty);
                 }
@@ -2087,7 +2087,7 @@ pub const CodeGenerator = struct {
                 if (cst.auto) {
                     return self.castToType(val, target_type);
                 } else if (cst.type_name) |tn| {
-                    const named_ty = self.getLLVMType(tn);
+                    const named_ty = try self.getLLVMType(tn);
                     val = self.castToType(val, @ptrCast(named_ty));
                     from_ty = @ptrCast(named_ty);
                 }
@@ -2240,7 +2240,7 @@ pub const CodeGenerator = struct {
             .cast => |cst| {
                 if (cst.auto) {
                     if (expected_type) |type_name| {
-                        const target_ty = self.getLLVMType(type_name);
+                        const target_ty = try self.getLLVMType(type_name);
                         const inner = try self.generateExpression(cst.expr);
                         var source_type_name: ?[]const u8 = null;
                         if (cst.expr.data == .identifier) {
@@ -2273,7 +2273,7 @@ pub const CodeGenerator = struct {
                         return errors.CodegenError.TypeMismatch;
                     }
                 } else if (cst.type_name) |tn| {
-                    const target_ty = self.getLLVMType(tn);
+                    const target_ty = try self.getLLVMType(tn);
                     const inner = try self.generateExpression(cst.expr);
                     var source_type_name: ?[]const u8 = null;
                     if (cst.expr.data == .identifier) {
@@ -2330,7 +2330,7 @@ pub const CodeGenerator = struct {
                                 return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), fval);
                             }
                         }
-                        const llvm_type = self.getLLVMType(type_name);
+                        const llvm_type = try self.getLLVMType(type_name);
                         if (std.mem.startsWith(u8, type_name, "u")) {
                             if (std.mem.startsWith(u8, num.value, "-")) {
                                 const sval = numeric.parseNumericLiteral(num.value) catch {
@@ -2387,7 +2387,7 @@ pub const CodeGenerator = struct {
             .null_literal => {
                 if (expected_type) |type_name| {
                     if (std.mem.startsWith(u8, type_name, "ptr<")) {
-                        const llvm_type = self.getLLVMType(type_name);
+                        const llvm_type = try self.getLLVMType(type_name);
                         return c.LLVMConstNull(llvm_type);
                     } else {
                         return errors.CodegenError.NullNotAllowedInNonPointerType;
@@ -2399,7 +2399,7 @@ pub const CodeGenerator = struct {
             },
             .binary_op => |b| {
                 if (expected_type) |type_name| {
-                    const target_ty = self.getLLVMType(type_name);
+                    const target_ty = try self.getLLVMType(type_name);
                     const kind = c.LLVMGetTypeKind(target_ty);
                     if (kind == c.LLVMPointerTypeKind) {
                         return self.generateBinaryOp(b);
@@ -2487,7 +2487,7 @@ pub const CodeGenerator = struct {
                         const ptr_ty = c.LLVMTypeOf(ptr_val);
                         if (c.LLVMGetTypeKind(ptr_ty) != c.LLVMPointerTypeKind) return errors.CodegenError.TypeMismatch;
                         if (expected_type) |tn2| {
-                            const load_ty = self.getLLVMType(tn2);
+                            const load_ty = try self.getLLVMType(tn2);
                             if (c.LLVMGetTypeKind(load_ty) == c.LLVMFunctionTypeKind) return ptr_val;
                             return c.LLVMBuildLoad2(self.builder, @ptrCast(load_ty), ptr_val, "deref_ctx");
                         }
@@ -2501,7 +2501,7 @@ pub const CodeGenerator = struct {
             .array_initializer => |init_list| {
                 if (expected_type) |type_name| {
                     if (std.mem.startsWith(u8, type_name, "simd<")) {
-                        const vector_type = self.getLLVMType(type_name);
+                        const vector_type = try self.getLLVMType(type_name);
                         const element_type = c.LLVMGetElementType(vector_type);
 
                         if (init_list.elements.items.len == 0) {
@@ -2523,7 +2523,7 @@ pub const CodeGenerator = struct {
             .simd_initializer => |simd_init| {
                 if (expected_type) |type_name| {
                     if (std.mem.startsWith(u8, type_name, "simd<")) {
-                        const vector_type = self.getLLVMType(type_name);
+                        const vector_type = try self.getLLVMType(type_name);
                         const element_type = c.LLVMGetElementType(vector_type);
                         if (simd_init.elements.items.len == 0) {
                             return errors.CodegenError.TypeMismatch;
@@ -2549,7 +2549,7 @@ pub const CodeGenerator = struct {
             .cast => |cst| {
                 if (cst.auto) return try self.generateExpression(cst.expr);
                 if (cst.type_name) |tn| {
-                    const target_ty = self.getLLVMType(tn);
+                    const target_ty = try self.getLLVMType(tn);
                     const inner = try self.generateExpression(cst.expr);
                     var source_type_name: ?[]const u8 = null;
                     if (cst.expr.data == .identifier) {
@@ -2860,7 +2860,7 @@ pub const CodeGenerator = struct {
                                 if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
                                     const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_for_dec");
                                     const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                                    const element_type = self.getLLVMType(element_type_name);
+                                    const element_type = try self.getLLVMType(element_type_name);
                                     const minus_one = c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), @bitCast(@as(i64, -1)), 1);
                                     var indices = [_]c.LLVMValueRef{minus_one};
                                     const new_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_dec");
@@ -2994,7 +2994,7 @@ pub const CodeGenerator = struct {
                                 if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
                                     const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_for_inc");
                                     const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                                    const element_type = self.getLLVMType(element_type_name);
+                                    const element_type = try self.getLLVMType(element_type_name);
                                     const one = c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), 1, 0);
                                     var indices = [_]c.LLVMValueRef{one};
                                     const new_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_inc");
@@ -3165,7 +3165,7 @@ pub const CodeGenerator = struct {
                 if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
                     const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr");
                     const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                    const element_type = self.getLLVMType(element_type_name);
+                    const element_type = try self.getLLVMType(element_type_name);
                     const idx = collected_indices.items[collected_indices.items.len - 1];
                     var indices = [_]c.LLVMValueRef{idx};
                     const element_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_index");
@@ -3408,7 +3408,7 @@ pub const CodeGenerator = struct {
                     const var_info = CodeGenerator.getVariable(self, bin_op.lhs.data.identifier.name) orelse return errors.CodegenError.UndefinedVariable;
                     if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
                         const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                        element_type = self.getLLVMType(element_type_name);
+                        element_type = try self.getLLVMType(element_type_name);
                     } else {
                         return errors.CodegenError.TypeMismatch;
                     }
@@ -3424,7 +3424,7 @@ pub const CodeGenerator = struct {
                     const var_info = CodeGenerator.getVariable(self, bin_op.lhs.data.identifier.name) orelse return errors.CodegenError.UndefinedVariable;
                     if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
                         const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                        element_type = self.getLLVMType(element_type_name);
+                        element_type = try self.getLLVMType(element_type_name);
                     } else {
                         return errors.CodegenError.TypeMismatch;
                     }
@@ -3452,7 +3452,7 @@ pub const CodeGenerator = struct {
                 const var_info = CodeGenerator.getVariable(self, bin_op.rhs.data.identifier.name) orelse return errors.CodegenError.UndefinedVariable;
                 if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
                     const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                    const element_type = self.getLLVMType(element_type_name);
+                    const element_type = try self.getLLVMType(element_type_name);
                     var indices = [_]c.LLVMValueRef{lhs_value};
                     return c.LLVMBuildGEP2(self.builder, element_type, rhs_value, &indices[0], 1, "ptr_arith");
                 }
