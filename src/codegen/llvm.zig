@@ -37,6 +37,7 @@ pub const CodeGenerator = struct {
     current_module_name: []const u8,
     label_blocks: std.HashMap([]const u8, c.LLVMBasicBlockRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     pending_gotos: std.ArrayList(structs.PendingGoto),
+    current_line: usize,
 
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
         _ = c.LLVMInitializeNativeTarget();
@@ -79,6 +80,7 @@ pub const CodeGenerator = struct {
             .current_module_name = "",
             .label_blocks = std.HashMap([]const u8, c.LLVMBasicBlockRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .pending_gotos = std.ArrayList(structs.PendingGoto){},
+            .current_line = 0,
         };
     }
 
@@ -399,7 +401,11 @@ pub const CodeGenerator = struct {
         const var_info = CodeGenerator.getVariable(self, ident.name) orelse return errors.CodegenError.UndefinedVariable;
 
         if (var_info.is_const) {
-            std.debug.print("Error: Cannot reassign const variable '{s}'\n", .{ident.name});
+            if (self.current_line > 0) {
+                std.debug.print("Error at line {d}: Cannot reassign const variable '{s}'\n", .{ self.current_line, ident.name });
+            } else {
+                std.debug.print("Error: Cannot reassign const variable '{s}'\n", .{ident.name});
+            }
             return errors.CodegenError.ConstReassignment;
         }
 
@@ -484,6 +490,7 @@ pub const CodeGenerator = struct {
     }
 
     pub fn generateStatement(self: *CodeGenerator, stmt: *ast.Node) errors.CodegenError!void {
+        self.current_line = stmt.line;
         switch (stmt.data) {
             .assignment => |as| {
                 switch (as.target.data) {
@@ -688,7 +695,11 @@ pub const CodeGenerator = struct {
                         const var_info = CodeGenerator.getVariable(self, ident.name) orelse return errors.CodegenError.UndefinedVariable;
 
                         if (var_info.is_const) {
-                            std.debug.print("Error: Cannot reassign const variable '{s}'\n", .{ident.name});
+                            if (self.current_line > 0) {
+                                std.debug.print("Error at line {d}: Cannot reassign const variable '{s}'\n", .{ self.current_line, ident.name });
+                            } else {
+                                std.debug.print("Error: Cannot reassign const variable '{s}'\n", .{ident.name});
+                            }
                             return errors.CodegenError.ConstReassignment;
                         }
 
@@ -1345,7 +1356,11 @@ pub const CodeGenerator = struct {
         const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
 
         if (var_info.is_const) {
-            std.debug.print("Error: Cannot modify element of const array '{s}'\n", .{array_name});
+            if (self.current_line > 0) {
+                std.debug.print("Error at line {d}: Cannot modify element of const array '{s}'\n", .{ self.current_line, array_name });
+            } else {
+                std.debug.print("Error: Cannot modify element of const array '{s}'\n", .{array_name});
+            }
             return errors.CodegenError.ConstReassignment;
         }
 

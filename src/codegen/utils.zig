@@ -229,7 +229,11 @@ pub fn getLLVMType(self: *codegen.CodeGenerator, type_name: []const u8) errors.C
                 return c.LLVMArrayType(element_type, array_size);
             } else |_| {}
         } else {}
-        std.debug.print("Error: Invalid array type syntax: {s}\n", .{type_name});
+        if (self.current_line > 0) {
+            std.debug.print("Error at line {d}: Invalid array type syntax: {s}\n", .{ self.current_line, type_name });
+        } else {
+            std.debug.print("Error: Invalid array type syntax: {s}\n", .{type_name});
+        }
         return error.UnknownType;
     } else if (std.mem.startsWith(u8, type_name, "simd<") and std.mem.endsWith(u8, type_name, ">")) {
         const inner = type_name[5 .. type_name.len - 1];
@@ -253,7 +257,11 @@ pub fn getLLVMType(self: *codegen.CodeGenerator, type_name: []const u8) errors.C
                 return c.LLVMVectorType(element_type, vector_size);
             } else |_| {}
         } else {}
-        std.debug.print("Error: Invalid SIMD type syntax: {s}\n", .{type_name});
+        if (self.current_line > 0) {
+            std.debug.print("Error at line {d}: Invalid SIMD type syntax: {s}\n", .{ self.current_line, type_name });
+        } else {
+            std.debug.print("Error: Invalid SIMD type syntax: {s}\n", .{type_name});
+        }
         return error.UnknownType;
     } else if (std.mem.eql(u8, type_name, "i8")) {
         return c.LLVMInt8TypeInContext(@ptrCast(self.context));
@@ -286,7 +294,11 @@ pub fn getLLVMType(self: *codegen.CodeGenerator, type_name: []const u8) errors.C
             return @ptrCast(struct_type);
         }
     }
-    std.debug.print("Error: Unknown type '{s}'\n", .{type_name});
+    if (self.current_line > 0) {
+        std.debug.print("Error at line {d}: Unknown type '{s}'\n", .{ self.current_line, type_name });
+    } else {
+        std.debug.print("Error: Unknown type '{s}'\n", .{type_name});
+    }
     return error.UnknownType;
 }
 
