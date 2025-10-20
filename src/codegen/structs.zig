@@ -153,7 +153,11 @@ pub fn generateStructFieldAssignment(cg: *llvm.CodeGenerator, struct_name: []con
     const struct_var_info = variables.getVariable(cg, struct_name) orelse return errors.CodegenError.UndefinedVariable;
 
     if (struct_var_info.is_const) {
-        std.debug.print("Error: Cannot modify field of const variable '{s}'\n", .{struct_name});
+        if (cg.current_line > 0) {
+            std.debug.print("Error at line {d}: Cannot modify field of const variable '{s}'\n", .{ cg.current_line, struct_name });
+        } else {
+            std.debug.print("Error: Cannot modify field of const variable '{s}'\n", .{struct_name});
+        }
         return errors.CodegenError.ConstReassignment;
     }
 
