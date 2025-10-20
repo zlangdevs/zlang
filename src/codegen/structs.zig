@@ -310,6 +310,16 @@ pub fn generateStructFieldAccess(cg: *llvm.CodeGenerator, struct_var_info: Varia
 }
 
 pub fn generateStructType(cg: *llvm.CodeGenerator, struct_decl: ast.StructDecl) errors.CodegenError!void {
+    // Create the named struct type first (opaque)
+    const struct_name_z = utils.dupeZ(cg.allocator, struct_decl.name);
+    defer cg.allocator.free(struct_name_z);
+    const struct_type = c.LLVMStructCreateNamed(@ptrCast(cg.context), struct_name_z.ptr);
+    
+    // Register the struct type BEFORE resolving field types (allows self-referential structs)
+    try cg.struct_types.put(struct_decl.name, @ptrCast(struct_type));
+    try cg.struct_declarations.put(struct_decl.name, struct_decl);
+    
+    // Now resolve field types (can reference the struct itself)
     var field_types = std.ArrayList(c.LLVMTypeRef){};
     defer field_types.deinit(cg.allocator);
     var field_map = std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(cg.allocator);
@@ -318,13 +328,10 @@ pub fn generateStructType(cg: *llvm.CodeGenerator, struct_decl: ast.StructDecl) 
         try field_types.append(cg.allocator, @ptrCast(field_type));
         try field_map.put(field.name, @intCast(i));
     }
-    const struct_name_z = utils.dupeZ(cg.allocator, struct_decl.name);
-    defer cg.allocator.free(struct_name_z);
-    const struct_type = c.LLVMStructCreateNamed(@ptrCast(cg.context), struct_name_z.ptr);
+    
+    // Set the struct body with resolved field types
     c.LLVMStructSetBody(struct_type, field_types.items.ptr, @intCast(field_types.items.len), 0);
-    try cg.struct_types.put(struct_decl.name, @ptrCast(struct_type));
     try cg.struct_fields.put(struct_decl.name, field_map);
-    try cg.struct_declarations.put(struct_decl.name, struct_decl);
 }
 
 pub fn generateStructInitializer(cg: *llvm.CodeGenerator, struct_init: ast.StructInitializer) errors.CodegenError!c.LLVMValueRef {
