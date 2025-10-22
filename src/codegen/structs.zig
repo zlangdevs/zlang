@@ -108,8 +108,22 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
                 path.len;
             const field_name = path[0..field_name_len];
             const var_type_kind = c.LLVMGetTypeKind(current_type);
-            if (var_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
-            const struct_type = cg.struct_types.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
+            if (var_type_kind != c.LLVMStructTypeKind) {
+                if (cg.current_line > 0) {
+                    std.debug.print("Error at line {d}: Cannot access field on non-struct type\n", .{cg.current_line});
+                } else {
+                    std.debug.print("Error: Cannot access field on non-struct type\n", .{});
+                }
+                return errors.CodegenError.TypeMismatch;
+            }
+            const struct_type = cg.struct_types.get(current_type_name) orelse {
+                if (cg.current_line > 0) {
+                    std.debug.print("Error at line {d}: Unknown struct type '{s}'\n", .{ cg.current_line, current_type_name });
+                } else {
+                    std.debug.print("Error: Unknown struct type '{s}'\n", .{current_type_name});
+                }
+                return errors.CodegenError.TypeMismatch;
+            };
             const field_map = cg.struct_fields.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
             const field_index = field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable;
             const field_count = c.LLVMCountStructElementTypes(struct_type);
@@ -269,8 +283,20 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
             const field_name_len = if (dot_pos) |pos| pos else path.len;
             const field_name = path[0..field_name_len];
             const var_type_kind = c.LLVMGetTypeKind(current_type);
-            if (var_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
+            if (var_type_kind != c.LLVMStructTypeKind) {
+                if (cg.current_line > 0) {
+                    std.debug.print("Error at line {d}: Cannot access field on non-struct type\n", .{cg.current_line});
+                } else {
+                    std.debug.print("Error: Cannot access field on non-struct type\n", .{});
+                }
+                return errors.CodegenError.TypeMismatch;
+            }
             const struct_type = cg.struct_types.get(current_type_name) orelse {
+                if (cg.current_line > 0) {
+                    std.debug.print("Error at line {d}: Unknown struct type '{s}'\n", .{ cg.current_line, current_type_name });
+                } else {
+                    std.debug.print("Error: Unknown struct type '{s}'\n", .{current_type_name});
+                }
                 return errors.CodegenError.TypeMismatch;
             };
             const field_map = cg.struct_fields.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
@@ -335,7 +361,14 @@ pub fn generateStructType(cg: *llvm.CodeGenerator, struct_decl: ast.StructDecl) 
 }
 
 pub fn generateStructInitializer(cg: *llvm.CodeGenerator, struct_init: ast.StructInitializer) errors.CodegenError!c.LLVMValueRef {
-    const struct_type = cg.struct_types.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
+    const struct_type = cg.struct_types.get(struct_init.struct_name) orelse {
+        if (cg.current_line > 0) {
+            std.debug.print("Error at line {d}: Unknown struct type '{s}'\n", .{ cg.current_line, struct_init.struct_name });
+        } else {
+            std.debug.print("Error: Unknown struct type '{s}'\n", .{struct_init.struct_name});
+        }
+        return errors.CodegenError.TypeMismatch;
+    };
     const field_map = cg.struct_fields.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
     const struct_ptr = c.LLVMBuildAlloca(cg.builder, struct_type, "struct_init");
     const struct_decl = getStructDecl(cg, struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
