@@ -499,7 +499,14 @@ pub const CodeGenerator = struct {
                             const ident = as.target.data.identifier;
                             const var_info = CodeGenerator.getVariable(self, ident.name) orelse return errors.CodegenError.UndefinedVariable;
                             const struct_init = as.value.data.struct_initializer;
-                            const struct_type = self.struct_types.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
+                            const struct_type = self.struct_types.get(struct_init.struct_name) orelse {
+                                if (self.current_line > 0) {
+                                    std.debug.print("Error at line {d}: Unknown struct type '{s}'\n", .{ self.current_line, struct_init.struct_name });
+                                } else {
+                                    std.debug.print("Error: Unknown struct type '{s}'\n", .{struct_init.struct_name});
+                                }
+                                return errors.CodegenError.TypeMismatch;
+                            };
                             const field_map = self.struct_fields.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
                             const struct_decl = self.getStructDecl(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
                             for (struct_decl.fields.items, 0..) |field, i| {
@@ -576,6 +583,11 @@ pub const CodeGenerator = struct {
             .var_decl => |decl| {
                 if (std.mem.eql(u8, decl.type_name, "void")) {
                     if (decl.initializer != null) {
+                        if (self.current_line > 0) {
+                            std.debug.print("Error at line {d}: Cannot initialize void variable\n", .{self.current_line});
+                        } else {
+                            std.debug.print("Error: Cannot initialize void variable\n", .{});
+                        }
                         return errors.CodegenError.TypeMismatch;
                     }
                     try CodeGenerator.putVariable(self, decl.name, structs.VariableInfo{
@@ -603,7 +615,14 @@ pub const CodeGenerator = struct {
                     if (decl.initializer) |initializer| {
                         if (initializer.data == .struct_initializer) {
                             const struct_init = initializer.data.struct_initializer;
-                            const struct_type = self.struct_types.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
+                            const struct_type = self.struct_types.get(struct_init.struct_name) orelse {
+                                if (self.current_line > 0) {
+                                    std.debug.print("Error at line {d}: Unknown struct type '{s}'\n", .{ self.current_line, struct_init.struct_name });
+                                } else {
+                                    std.debug.print("Error: Unknown struct type '{s}'\n", .{struct_init.struct_name});
+                                }
+                                return errors.CodegenError.TypeMismatch;
+                            };
                             const field_map = self.struct_fields.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
                             const struct_decl = self.getStructDecl(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
                             for (struct_decl.fields.items, 0..) |field, i| {
