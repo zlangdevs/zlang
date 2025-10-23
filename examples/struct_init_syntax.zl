@@ -1,0 +1,39 @@
+struct Point {
+    x i32,
+    y i32
+}
+
+struct Color {
+    r i32,
+    g i32,
+    b i32,
+    a i32
+}
+
+struct Person {
+    name arr<u8, 20> = "Unknown",
+    age i32,
+    height f32
+}
+
+fun main() >> i32 {
+    Point p1 = Point{10, 20};
+    @printf("p1: (%d, %d)\n", p1.x, p1.y);
+    
+    Point p2 = Point{x = 5, y = 15};
+    @printf("p2: (%d, %d)\n", p2.x, p2.y);
+    
+    Color red = Color{255, 0, 0, 255};
+    @printf("Red: rgba(%d, %d, %d, %d)\n", red.r, red.g, red.b, red.a);
+    
+    Color green = Color{r = 0, g = 255, b = 0, a = 255};
+    @printf("Green: rgba(%d, %d, %d, %d)\n", green.r, green.g, green.b, green.a);
+    
+    Person alice = Person{age = 25, height = 1.65};
+    @printf("Alice: %s, age %d, height %.2f\n", alice.name, alice.age, alice.height);
+    
+    Person bob = Person{name = "Bob", age = 30, height = 1.80};
+    @printf("Bob: %s, age %d, height %.2f\n", bob.name, bob.age, bob.height);
+    
+    return 0;
+}
