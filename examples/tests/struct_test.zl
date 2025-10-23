@@ -68,15 +68,9 @@ fun scale(self: Rectangle, factor: i32) >> Rectangle {
 }
 
 fun gen_line(x1: i32, y1: i32, x2: i32, y2: i32) >> Line {
-    Point lstart;
-    lstart.x = x1;
-    lstart.y = y1;
-    Point lend;
-    lend.x = x2;
-    lend.y = y2;
-    Line res;
-    res.start = lstart;
-    res.end = lend;
+    Point lstart = Point{x1, y1};
+    Point lend = Point{x2, y2};
+    Line res = Line{lstart, lend};
     return res;
 } 
 
@@ -121,8 +115,7 @@ fun main() >> i32 {
         is_male = true
     };
     
-    origin.x = 10;
-    origin.y = 20;
+    origin = Point{10, 20};
 
     @printf("Name: %s\n", alex.name);
     @printf("Age: (expected 25):%d\n", alex.age);
@@ -151,9 +144,7 @@ fun main() >> i32 {
     }
     @printf("(expected 10):%d\n", sum);
     
-    Point p1;
-    p1.x = 3;
-    p1.y = 4;
+    Point p1 = Point{3, 4};
 
     @printf("Original point: ");
     p1.print_point();
@@ -173,9 +164,7 @@ fun main() >> i32 {
     p3.print_point();
 
     ?? Test Rectangle methods
-    Rectangle rect;
-    rect.width = 5;
-    rect.height = 8;
+    Rectangle rect = Rectangle{5, 8};
 
     @printf("Original rectangle: ");
     rect.print_rect();
@@ -190,10 +179,7 @@ fun main() >> i32 {
     i32 big_area = big_rect.area();
     @printf("Scaled area: (expected 360):%d\n", big_area);
     
-    MathOps ops;
-    ops.bin = add;
-    ops.other = mul;
-    ops.transform = idp;
+    MathOps ops = MathOps{add, mul, idp};
 
     i32 x = 6;
     i32 y = 7;
