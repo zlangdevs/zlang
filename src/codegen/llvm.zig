@@ -494,6 +494,34 @@ pub const CodeGenerator = struct {
         switch (stmt.data) {
             .assignment => |as| {
                 switch (as.target.data) {
+                    .unary_op => |un| {
+                        if (un.op == '*') {
+                            const ptr_val = try self.generateExpression(un.operand);
+                            const ptr_type = c.LLVMTypeOf(ptr_val);
+                            if (c.LLVMGetTypeKind(ptr_type) != c.LLVMPointerTypeKind) {
+                                return errors.CodegenError.TypeMismatch;
+                            }
+
+                            if (un.operand.data == .identifier) {
+                                const ptr_name = un.operand.data.identifier.name;
+                                if (CodeGenerator.getVariable(self, ptr_name)) |var_info| {
+                                    if (var_info.is_const) {
+                                        if (self.current_line > 0) {
+                                            std.debug.print("Error at line {d}: Cannot modify value through const pointer '{s}'\n", .{ self.current_line, ptr_name });
+                                        } else {
+                                            std.debug.print("Error: Cannot modify value through const pointer '{s}'\n", .{ptr_name});
+                                        }
+                                        return errors.CodegenError.ConstReassignment;
+                                    }
+                                }
+                            }
+
+                            const value_raw = try self.generateExpression(as.value);
+                            _ = c.LLVMBuildStore(self.builder, value_raw, ptr_val);
+                        } else {
+                            return errors.CodegenError.TypeMismatch;
+                        }
+                    },
                     .identifier => {
                         if (as.value.data == .struct_initializer) {
                             const ident = as.target.data.identifier;
@@ -710,6 +738,61 @@ pub const CodeGenerator = struct {
             },
             .compound_assignment => |cas| {
                 switch (cas.target.data) {
+                    .unary_op => |un| {
+                        if (un.op == '*') {
+                            const ptr_val = try self.generateExpression(un.operand);
+                            const ptr_type = c.LLVMTypeOf(ptr_val);
+                            if (c.LLVMGetTypeKind(ptr_type) != c.LLVMPointerTypeKind) {
+                                return errors.CodegenError.TypeMismatch;
+                            }
+
+                            if (un.operand.data == .identifier) {
+                                const ptr_name = un.operand.data.identifier.name;
+                                if (CodeGenerator.getVariable(self, ptr_name)) |var_info| {
+                                    if (var_info.is_const) {
+                                        if (self.current_line > 0) {
+                                            std.debug.print("Error at line {d}: Cannot modify value through const pointer '{s}'\n", .{ self.current_line, ptr_name });
+                                        } else {
+                                            std.debug.print("Error: Cannot modify value through const pointer '{s}'\n", .{ptr_name});
+                                        }
+                                        return errors.CodegenError.ConstReassignment;
+                                    }
+                                }
+                            }
+
+                            const elem_type = c.LLVMGetElementType(ptr_type);
+                            const current_value = c.LLVMBuildLoad2(self.builder, elem_type, ptr_val, "deref_compound");
+                            const rhs_value = try self.generateExpression(cas.value);
+
+                            const current_type_kind = c.LLVMGetTypeKind(elem_type);
+                            const is_float = current_type_kind == c.LLVMFloatTypeKind or
+                                current_type_kind == c.LLVMDoubleTypeKind or
+                                current_type_kind == c.LLVMHalfTypeKind;
+
+                            const new_value = switch (cas.op) {
+                                '+' => if (is_float)
+                                    c.LLVMBuildFAdd(self.builder, current_value, rhs_value, "fadd_compound")
+                                else
+                                    c.LLVMBuildAdd(self.builder, current_value, rhs_value, "add_compound"),
+                                '-' => if (is_float)
+                                    c.LLVMBuildFSub(self.builder, current_value, rhs_value, "fsub_compound")
+                                else
+                                    c.LLVMBuildSub(self.builder, current_value, rhs_value, "sub_compound"),
+                                '*' => if (is_float)
+                                    c.LLVMBuildFMul(self.builder, current_value, rhs_value, "fmul_compound")
+                                else
+                                    c.LLVMBuildMul(self.builder, current_value, rhs_value, "mul_compound"),
+                                '/' => if (is_float)
+                                    c.LLVMBuildFDiv(self.builder, current_value, rhs_value, "fdiv_compound")
+                                else
+                                    c.LLVMBuildSDiv(self.builder, current_value, rhs_value, "sdiv_compound"),
+                                else => return errors.CodegenError.UnsupportedOperation,
+                            };
+                            _ = c.LLVMBuildStore(self.builder, new_value, ptr_val);
+                        } else {
+                            return errors.CodegenError.TypeMismatch;
+                        }
+                    },
                     .identifier => |ident| {
                         const var_info = CodeGenerator.getVariable(self, ident.name) orelse return errors.CodegenError.UndefinedVariable;
 

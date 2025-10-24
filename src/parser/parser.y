@@ -465,6 +465,14 @@ assignment:
   | ref_expression TOKEN_REASSIGN expression {
         $$ = zig_create_compound_assignment($1, $3, $2);
     }
+  | TOKEN_MULTIPLY ref_expression TOKEN_ASSIGN expression {
+        void* deref = zig_create_unary_op('*', $2);
+        $$ = zig_create_assignment(deref, $4);
+    }
+  | TOKEN_MULTIPLY ref_expression TOKEN_REASSIGN expression {
+        void* deref = zig_create_unary_op('*', $2);
+        $$ = zig_create_compound_assignment(deref, $4, $3);
+    }
 ;
 
 array_initializer:
