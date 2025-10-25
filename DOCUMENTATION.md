@@ -182,6 +182,11 @@ fun     if      else    for     return  break   continue
 const   struct  enum    wrap    use     null    as      goto
 ```
 
+**Note on `const`**
+- Applied to variables: prevents reassignment (`const i32 x = 10;`)
+- Applied to pointers: prevents modification through pointer (`const ptr<i32> p;`)
+- Provides compile-time safety and documents intent
+
 ### Operators
 
 **Arithmetic**: `+`, `-`, `*`, `/`, `%`
@@ -235,7 +240,8 @@ const   struct  enum    wrap    use     null    as      goto
 
 **Pointers**
 ```zl
-ptr<i32> int_ptr;        ?? Pointer to i32
+ptr<i32> int_ptr;        ?? Mutable pointer to i32
+const ptr<i32> ro_ptr;   ?? Const pointer (read-only)
 ptr<ptr<u8>> str_ptr;    ?? Pointer to pointer to u8
 ptr<void> generic_ptr;   ?? Generic void pointer
 ```
@@ -416,12 +422,95 @@ buffer[0] = 42;
 @free(buffer as ptr<void>);
 ```
 
+### Const Pointers
+
+**Declaring Const Pointers**
+
+Const pointers prevent modification of the value they point to, providing compile-time safety:
+
+```zl
+i32 x = 42;
+ptr<i32> p1 = &x;           ?? Mutable pointer
+const ptr<i32> p2 = &x;     ?? Const pointer (read-only)
+```
+
+**Operations with Const Pointers**
+
+```zl
+?? Reading is always allowed
+i32 value1 = *p1;           ?? ✅ OK
+i32 value2 = *p2;           ?? ✅ OK
+
+?? Writing through mutable pointer
+*p1 = 100;                  ?? ✅ OK
+
+?? Writing through const pointer
+*p2 = 100;                  ?? ❌ Compile error!
+?? Error: Cannot modify value through const pointer 'p2'
+```
+
+**Compound Assignment**
+
+Const pointers also prevent compound assignment operations:
+
+```zl
+ptr<i32> mutable = &x;
+const ptr<i32> readonly = &x;
+
+*mutable += 10;             ?? ✅ OK
+*mutable *= 2;              ?? ✅ OK
+
+*readonly += 10;            ?? ❌ Compile error!
+*readonly *= 2;             ?? ❌ Compile error!
+```
+
+**Use Cases**
+
+1. **Function Parameters** - Prevent accidental modification:
+   ```zl
+   fun calculate_sum(data: const ptr<i32>, size: i32) >> i32 {
+       i32 sum = 0;
+       for i32 i = 0; i < size; i++ {
+           sum += data[i];  ?? Safe: read-only access
+       }
+       return sum;
+   }
+   ```
+
+2. **Shared Data** - Multiple readers, no writers:
+   ```zl
+   const ptr<arr<f32, 1000>> shared_data = &buffer;
+   fun process(data: const ptr<arr<f32, 1000>>) >> void {
+       ?? Can read but not modify shared data
+   }
+   ```
+
+3. **API Guarantees** - Document intent in function signatures:
+   ```zl
+   fun write_to_file(data: const ptr<u8>, size: i32) >> void {
+       ?? Caller knows data won't be modified
+   }
+   ```
+
+**Memory Safety**
+
+Const pointers provide compile-time guarantees:
+- ✅ Prevent accidental modification
+- ✅ Document read-only intent
+- ✅ Enable compiler optimizations
+- ✅ Catch errors at compile time, not runtime
+
 ### Pointer Arithmetic
 
 ```zl
 ptr<i32> p = &array[0];
 p = p + 1;              ?? Move to next element
 i32 val = *(p + 2);     ?? Access element at offset
+
+?? Works with const pointers too (pointer itself can change)
+const ptr<i32> cp = &array[0];
+cp = cp + 1;            ?? OK: pointer address changes
+*cp = 10;               ?? Error: cannot modify through const pointer
 ```
 
 ### Struct Layout
@@ -877,6 +966,7 @@ if buffer == null {
 3. **Use const for read-only data**
    ```zl
    const i32 TABLE_SIZE = 1000;
+   const ptr<i32> readonly = &data;  ?? Prevent modification
    ```
 
 4. **Prefer stack allocation when possible**
