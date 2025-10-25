@@ -19,6 +19,7 @@ fun main() >> i32 {
 - **⚡ SIMD Built-in** - First-class SIMD vector support for high-performance computing
 - **🔧 Direct C Interop** - Call C functions with `@` prefix, seamless libc integration
 - **🏗️ Modern Type System** - Structs with default values, enums, generics, and more
+- **🔒 Const Pointers** - Compile-time safety with read-only pointer guarantees
 - **🔄 Smart Loops** - Flexible `for` loops that work with any expression
 - **🧠 Brainfuck Integration** - Because why not? Embed Brainfuck code directly!
 - **🎨 Type Inference** - Auto-cast with `as _` for cleaner code
@@ -76,7 +77,8 @@ bool is_active = true;       ?? Booleans
 ptr<i32> my_ptr = &count;    ?? Pointers
 arr<i32, 100> numbers;       ?? Fixed-size arrays
 
-const i32 MAX = 100;         ?? Constants
+const i32 MAX = 100;         ?? Constant variables
+const ptr<i32> readonly_ptr = &count;  ?? Const pointers (read-only)
 ```
 
 **Note:** Comments use `??` instead of `//`
@@ -207,6 +209,12 @@ ptr<i32> typed = raw as ptr<i32>;
 i32 value = 100;
 ptr<i32> p = &value;        ?? Take address
 i32 deref = *p;             ?? Dereference
+*p = 200;                   ?? Modify through pointer
+
+?? Const pointers - cannot modify through them
+const ptr<i32> readonly = &value;
+i32 read = *readonly;       ?? ✅ Reading is OK
+*readonly = 50;             ?? ❌ Compile error: Cannot modify through const pointer
 
 ?? Pointer arithmetic
 p = p + 1;
@@ -214,6 +222,11 @@ p = p + 1;
 ?? Pass by reference
 fun increment(val: ptr<i32>) >> void {
     *val = *val + 1;
+}
+
+?? Const parameters prevent modification
+fun read_only(val: const ptr<i32>) >> i32 {
+    return *val;  ?? OK to read
 }
 ```
 
@@ -293,11 +306,13 @@ Check out the `examples/` directory for more:
 - **hello_world.zl** - Basic syntax
 - **factorial.zl** - Recursion
 - **brainfuck.zl** - Full Brainfuck interpreter in ZLang
+- **const_pointer_demo.zl** - Const pointer safety demonstration
 - **tests/simd_test.zl** - Comprehensive SIMD examples
 - **tests/struct_test.zl** - Struct features
 - **tests/loop_test.zl** - All loop variations
 - **tests/cast_test.zl** - Type casting examples
 - **tests/pointer_test.zl** - Pointer operations
+- **tests/deref_test.zl** - Pointer dereferencing
 
 ## 🏗️ Architecture
 
