@@ -502,14 +502,15 @@ pub const CodeGenerator = struct {
                                 return errors.CodegenError.TypeMismatch;
                             }
 
+                            // Check if this is ptr<const T> (const pointee, not const pointer)
                             if (un.operand.data == .identifier) {
                                 const ptr_name = un.operand.data.identifier.name;
                                 if (CodeGenerator.getVariable(self, ptr_name)) |var_info| {
-                                    if (var_info.is_const) {
+                                    if (utils.isConstPointer(var_info.type_name)) {
                                         if (self.current_line > 0) {
-                                            std.debug.print("Error at line {d}: Cannot modify value through const pointer '{s}'\n", .{ self.current_line, ptr_name });
+                                            std.debug.print("Error at line {d}: Cannot modify value through pointer to const '{s}'\n", .{ self.current_line, ptr_name });
                                         } else {
-                                            std.debug.print("Error: Cannot modify value through const pointer '{s}'\n", .{ptr_name});
+                                            std.debug.print("Error: Cannot modify value through pointer to const '{s}'\n", .{ptr_name});
                                         }
                                         return errors.CodegenError.ConstReassignment;
                                     }
@@ -746,14 +747,15 @@ pub const CodeGenerator = struct {
                                 return errors.CodegenError.TypeMismatch;
                             }
 
+                            // Check if this is ptr<const T> (const pointee, not const pointer)
                             if (un.operand.data == .identifier) {
                                 const ptr_name = un.operand.data.identifier.name;
                                 if (CodeGenerator.getVariable(self, ptr_name)) |var_info| {
-                                    if (var_info.is_const) {
+                                    if (utils.isConstPointer(var_info.type_name)) {
                                         if (self.current_line > 0) {
-                                            std.debug.print("Error at line {d}: Cannot modify value through const pointer '{s}'\n", .{ self.current_line, ptr_name });
+                                            std.debug.print("Error at line {d}: Cannot modify value through pointer to const '{s}'\n", .{ self.current_line, ptr_name });
                                         } else {
-                                            std.debug.print("Error: Cannot modify value through const pointer '{s}'\n", .{ptr_name});
+                                            std.debug.print("Error: Cannot modify value through pointer to const '{s}'\n", .{ptr_name});
                                         }
                                         return errors.CodegenError.ConstReassignment;
                                     }
@@ -2950,7 +2952,8 @@ pub const CodeGenerator = struct {
                             if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                                 const ptr_ty = var_info.type_ref;
                                 const ptr_val = c.LLVMBuildLoad2(self.builder, @ptrCast(ptr_ty), @ptrCast(var_info.value), "load_ptr_for_deref");
-                                const elem_ty = c.LLVMGetElementType(@ptrCast(ptr_ty));
+                                const ptr_val_ty = c.LLVMTypeOf(ptr_val);
+                                const elem_ty = c.LLVMGetElementType(@ptrCast(ptr_val_ty));
                                 if (c.LLVMGetTypeKind(elem_ty) == c.LLVMFunctionTypeKind) {
                                     return ptr_val;
                                 }
