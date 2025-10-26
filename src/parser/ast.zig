@@ -1,4 +1,5 @@
 const std = @import("std");
+const utils = @import("../codegen/utils.zig");
 
 pub const NodeType = enum {
     program,
@@ -330,8 +331,8 @@ pub const Node = struct {
     allocator: std.mem.Allocator,
     line: usize,
 
-    pub fn create(allocator: std.mem.Allocator, data: NodeData) !*Node {
-        const node = try allocator.create(Node);
+    pub fn create(allocator: std.mem.Allocator, data: NodeData) *Node {
+        const node = utils.create(Node, allocator);
         node.* = Node{
             .data = data,
             .allocator = allocator,

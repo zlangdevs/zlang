@@ -4,6 +4,7 @@ const errors = @import("errors.zig");
 const parser = @import("parser/parser.zig");
 const ast = @import("parser/ast.zig");
 const codegen = @import("codegen/llvm.zig");
+const utils = @import("codegen/utils.zig");
 
 const allocator = std.heap.page_allocator;
 
@@ -14,7 +15,7 @@ const ModuleInfo = struct {
 
     pub fn init(alloc: std.mem.Allocator, path: []const u8, ast_node: *ast.Node) ModuleInfo {
         return ModuleInfo{
-            .path = alloc.dupe(u8, path) catch unreachable,
+            .path = utils.dupe(u8, alloc, path),
             .ast = ast_node,
             .dependencies = std.ArrayList([]const u8){},
         };
@@ -147,7 +148,7 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
 
 fn resolveModulePath(base_path: []const u8, module_name: []const u8, alloc: std.mem.Allocator) ?[]const u8 {
     if (std.mem.endsWith(u8, module_name, ".zl")) {
-        return alloc.dupe(u8, module_name);
+        return utils.dupe(u8, alloc, module_name);
     }
     const base_dir = std.fs.path.dirname(base_path) orelse ".";
     const module_file = try std.fmt.allocPrint(alloc, "{s}.zl", .{module_name});
@@ -156,7 +157,7 @@ fn resolveModulePath(base_path: []const u8, module_name: []const u8, alloc: std.
     defer alloc.free(full_path);
     const file = std.fs.cwd().openFile(full_path, .{}) catch return null;
     file.close();
-    return alloc.dupe(u8, full_path);
+    return utils.dupe(u8, alloc, full_path);
 }
 
 fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
@@ -194,7 +195,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
         },
     };
 
-    const merged_program = try ast.Node.create(alloc, merged_program_data);
+    const merged_program = ast.Node.create(alloc, merged_program_data);
     var module_name_map = std.StringHashMap([]const u8).init(alloc);
     defer module_name_map.deinit();
     var module_deps = std.StringHashMap(std.ArrayList([]const u8)).init(alloc);
@@ -206,10 +207,10 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
     for (modules.items) |module| {
         const base = std.fs.path.basename(module.path);
         const name_no_ext = if (std.mem.endsWith(u8, base, ".zl")) base[0 .. base.len - 3] else base;
-        try module_name_map.put(module.path, try alloc.dupe(u8, name_no_ext));
+        try module_name_map.put(module.path, utils.dupe(u8, alloc, name_no_ext));
         var deps = std.ArrayList([]const u8){};
-        for (module.dependencies.items) |d| try deps.append(alloc, try alloc.dupe(u8, d));
-        try module_deps.put(try alloc.dupe(u8, name_no_ext), deps);
+        for (module.dependencies.items) |d| try deps.append(alloc, utils.dupe(u8, alloc, d));
+        try module_deps.put(utils.dupe(u8, alloc, name_no_ext), deps);
     }
     var func_to_module = std.StringHashMap([]const u8).init(alloc);
     defer func_to_module.deinit();
@@ -367,7 +368,7 @@ fn collectZlFilesFromDir(alloc: std.mem.Allocator, dir_path: []const u8, files_l
         if (entry.kind == .file and std.mem.endsWith(u8, entry.path, ".zl")) {
             const full_path = try std.fs.path.join(alloc, &[_][]const u8{ dir_path, entry.path });
             defer alloc.free(full_path);
-            const path_copy = try alloc.dupe(u8, full_path);
+            const path_copy = utils.dupe(u8, alloc, full_path);
             try files_list.append(alloc, path_copy);
         }
     }
@@ -388,7 +389,7 @@ fn trimSpaces(s: []const u8) []const u8 {
 }
 
 fn asciiLower(a: []const u8, alloc: std.mem.Allocator) ![]u8 {
-    var out = try alloc.alloc(u8, a.len);
+    var out = utils.alloc(u8, alloc, a.len);
     for (a, 0..) |ch, i| {
         out[i] = std.ascii.toLower(ch);
     }
@@ -434,7 +435,7 @@ fn collectStatements(alloc: std.mem.Allocator, content: []const u8) !std.ArrayLi
             if (depth > 0) depth -= 1;
         }
         if (ch == ';' and depth == 0) {
-            const stmt = try alloc.dupe(u8, trimSpaces(buf.items));
+            const stmt = utils.dupe(u8, alloc, trimSpaces(buf.items));
             try stmts.append(alloc, stmt);
             buf.clearRetainingCapacity();
         } else {
@@ -508,7 +509,7 @@ fn countSubstring(hay: []const u8, needle: []const u8) usize {
 }
 
 fn buildPtrType(alloc: std.mem.Allocator, base: []const u8, depth: usize) ![]u8 {
-    var t = try alloc.dupe(u8, base);
+    var t = utils.dupe(u8, alloc, base);
     var d: usize = 0;
     while (d < depth) : (d += 1) {
         const wrapped = try std.fmt.allocPrint(alloc, "ptr<{s}>", .{t});
@@ -531,7 +532,7 @@ fn mapCTypeToZType(alloc: std.mem.Allocator, raw0: []const u8) !?[]u8 {
                 try tmp.append(alloc, ch);
             }
         }
-        raw = try alloc.dupe(u8, trimSpaces(tmp.items));
+        raw = utils.dupe(u8, alloc, trimSpaces(tmp.items));
     }
 
     var lower = try asciiLower(raw, alloc);
@@ -550,7 +551,7 @@ fn mapCTypeToZType(alloc: std.mem.Allocator, raw0: []const u8) !?[]u8 {
                 try tmp.append(alloc, ch);
             }
         }
-        lower = try alloc.dupe(u8, trimSpaces(tmp.items));
+        lower = utils.dupe(u8, alloc, trimSpaces(tmp.items));
     }
 
     const has_unsigned = std.mem.indexOf(u8, lower, "unsigned") != null;
@@ -592,7 +593,7 @@ fn mapCTypeToZType(alloc: std.mem.Allocator, raw0: []const u8) !?[]u8 {
     }
 
     if (std.mem.eql(u8, base, "void") and ptr_depth == 0) {
-        return try alloc.dupe(u8, base);
+        return utils.dupe(u8, alloc, base);
     }
 
     return try buildPtrType(alloc, base, ptr_depth);
