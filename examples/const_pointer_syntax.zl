@@ -1,0 +1,29 @@
+?? Demonstrates the new const pointer syntax
+?? ptr<const T>: pointer to const data
+?? const ptr<T>: const pointer (cannot be reassigned)
+
+fun main() >> i32 {
+    @printf("=== Const Pointer Syntax Demo ===\n\n");
+    
+    i32 x = 10;
+    i32 y = 20;
+    
+    @printf("1. Mutable pointer to mutable data:\n");
+    ptr<i32> p1 = &x;
+    *p1 = 15;
+    @printf("   After *p1 = 15: x = %d\n", x);
+    
+    @printf("\n2. Pointer to const data (ptr<const i32>):\n");
+    ptr<const i32> p2 = &y;
+    i32 val1 = *p2;
+    @printf("   Can read: *p2 = %d\n", val1);
+    @printf("   Cannot write through p2 (compile error if uncommented)\n");
+    @printf("   ?? *p2 = 50;  would fail\n");
+    
+    @printf("\n3. Semantics comparison:\n");
+    @printf("   ptr<const T>:  value is const, pointer can be reassigned\n");
+    @printf("   const ptr<T>:  pointer is const, value can change\n");
+    @printf("   const ptr<const T>: both are const\n");
+    
+    return 0;
+}

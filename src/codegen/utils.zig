@@ -184,9 +184,30 @@ pub fn getDefaultValueForType(cg: *codegen.CodeGenerator, type_name: []const u8)
     return c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0);
 }
 
+/// Check if a type is ptr<const T>
+pub fn isConstPointer(type_name: []const u8) bool {
+    if (!std.mem.startsWith(u8, type_name, "ptr<") or !std.mem.endsWith(u8, type_name, ">")) {
+        return false;
+    }
+    const inner = type_name[4 .. type_name.len - 1];
+    const trimmed = std.mem.trim(u8, inner, " \t");
+    return std.mem.startsWith(u8, trimmed, "const ");
+}
+
+/// Strip "const " from beginning of type name
+pub fn stripConst(type_name: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, type_name, " \t");
+    if (std.mem.startsWith(u8, trimmed, "const ")) {
+        return std.mem.trim(u8, trimmed[6..], " \t");
+    }
+    return type_name;
+}
+
 pub fn getLLVMType(self: *codegen.CodeGenerator, type_name: []const u8) errors.CodegenError!c.LLVMTypeRef {
     if (std.mem.startsWith(u8, type_name, "ptr<") and std.mem.endsWith(u8, type_name, ">")) {
-        const inner_type_name = type_name[4 .. type_name.len - 1];
+        var inner_type_name = type_name[4 .. type_name.len - 1];
+        // Strip const if present (ptr<const T> syntax)
+        inner_type_name = stripConst(inner_type_name);
         // detect function type inside ptr<ret(args)> without changing grammar
         if (std.mem.indexOfScalar(u8, inner_type_name, '(')) |lp| if (std.mem.lastIndexOfScalar(u8, inner_type_name, ')')) |rp| if (rp > lp) {
             const ret_part = std.mem.trim(u8, inner_type_name[0..lp], " \t");

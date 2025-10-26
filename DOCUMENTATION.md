@@ -240,10 +240,12 @@ const   struct  enum    wrap    use     null    as      goto
 
 **Pointers**
 ```zl
-ptr<i32> int_ptr;        ?? Mutable pointer to i32
-const ptr<i32> ro_ptr;   ?? Const pointer (read-only)
-ptr<ptr<u8>> str_ptr;    ?? Pointer to pointer to u8
-ptr<void> generic_ptr;   ?? Generic void pointer
+ptr<i32> int_ptr;            ?? Mutable pointer to mutable i32
+ptr<const i32> ro_ptr;       ?? Mutable pointer to const i32 (cannot modify value)
+const ptr<i32> fixed_ptr;    ?? Const pointer to i32 (cannot reassign pointer)
+const ptr<const i32> both;   ?? Const pointer to const i32 (neither can change)
+ptr<ptr<u8>> str_ptr;        ?? Pointer to pointer to u8
+ptr<void> generic_ptr;       ?? Generic void pointer
 ```
 
 **Arrays**
@@ -426,36 +428,44 @@ buffer[0] = 42;
 
 **Declaring Const Pointers**
 
-Const pointers prevent modification of the value they point to, providing compile-time safety:
+ZLang supports C/C++-style const pointer semantics with two orthogonal concepts:
+- **`ptr<const T>`** - Pointer to const data (can't modify value, can reassign pointer)
+- **`const ptr<T>`** - Const pointer (can't reassign pointer, can modify value)
 
 ```zl
 i32 x = 42;
-ptr<i32> p1 = &x;           ?? Mutable pointer
-const ptr<i32> p2 = &x;     ?? Const pointer (read-only)
-```
+i32 y = 100;
 
-**Operations with Const Pointers**
+?? Mutable pointer to mutable data
+ptr<i32> p1 = &x;
+*p1 = 50;                   ?? ✅ OK - can modify value
+p1 = &y;                    ?? ✅ OK - can reassign pointer
 
-```zl
-?? Reading is always allowed
-i32 value1 = *p1;           ?? ✅ OK
-i32 value2 = *p2;           ?? ✅ OK
+?? Mutable pointer to const data
+ptr<const i32> p2 = &x;
+i32 val = *p2;              ?? ✅ OK - can read
+*p2 = 50;                   ?? ❌ Error: Cannot modify through pointer to const
+p2 = &y;                    ?? ✅ OK - can reassign pointer
 
-?? Writing through mutable pointer
-*p1 = 100;                  ?? ✅ OK
+?? Const pointer to mutable data
+const ptr<i32> p3 = &x;
+*p3 = 50;                   ?? ✅ OK - can modify value
+p3 = &y;                    ?? ❌ Error: Cannot reassign const variable
 
-?? Writing through const pointer
-*p2 = 100;                  ?? ❌ Compile error!
-?? Error: Cannot modify value through const pointer 'p2'
+?? Const pointer to const data
+const ptr<const i32> p4 = &x;
+i32 val2 = *p4;             ?? ✅ OK - can read
+*p4 = 50;                   ?? ❌ Error: Cannot modify through pointer to const
+p4 = &y;                    ?? ❌ Error: Cannot reassign const variable
 ```
 
 **Compound Assignment**
 
-Const pointers also prevent compound assignment operations:
+Pointers to const data prevent compound assignment operations:
 
 ```zl
 ptr<i32> mutable = &x;
-const ptr<i32> readonly = &x;
+ptr<const i32> readonly = &x;
 
 *mutable += 10;             ?? ✅ OK
 *mutable *= 2;              ?? ✅ OK
@@ -468,7 +478,7 @@ const ptr<i32> readonly = &x;
 
 1. **Function Parameters** - Prevent accidental modification:
    ```zl
-   fun calculate_sum(data: const ptr<i32>, size: i32) >> i32 {
+   fun calculate_sum(data: ptr<const i32>, size: i32) >> i32 {
        i32 sum = 0;
        for i32 i = 0; i < size; i++ {
            sum += data[i];  ?? Safe: read-only access
@@ -479,15 +489,15 @@ const ptr<i32> readonly = &x;
 
 2. **Shared Data** - Multiple readers, no writers:
    ```zl
-   const ptr<arr<f32, 1000>> shared_data = &buffer;
-   fun process(data: const ptr<arr<f32, 1000>>) >> void {
+   ptr<const arr<f32, 1000>> shared_data = &buffer;
+   fun process(data: ptr<const arr<f32, 1000>>) >> void {
        ?? Can read but not modify shared data
    }
    ```
 
 3. **API Guarantees** - Document intent in function signatures:
    ```zl
-   fun write_to_file(data: const ptr<u8>, size: i32) >> void {
+   fun write_to_file(data: ptr<const u8>, size: i32) >> void {
        ?? Caller knows data won't be modified
    }
    ```
@@ -507,10 +517,11 @@ ptr<i32> p = &array[0];
 p = p + 1;              ?? Move to next element
 i32 val = *(p + 2);     ?? Access element at offset
 
-?? Works with const pointers too (pointer itself can change)
-const ptr<i32> cp = &array[0];
-cp = cp + 1;            ?? OK: pointer address changes
-*cp = 10;               ?? Error: cannot modify through const pointer
+?? Works with const data pointers (pointer can move, data is read-only)
+ptr<const i32> cp = &array[0];
+i32 val = *cp;          ?? OK: can read
+cp = cp + 1;            ?? OK: pointer address can change  
+*cp = 10;               ?? Error: cannot modify through pointer to const
 ```
 
 ### Struct Layout

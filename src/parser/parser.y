@@ -281,6 +281,12 @@ complex_type_name:
         free($3);
         $$ = result;
     }
+  | TOKEN_IDENTIFIER TOKEN_LESS TOKEN_CONST type_name TOKEN_GREATER %prec TOKEN_LESS {
+        char* result = malloc(strlen($1) + strlen($4) + 12);
+        sprintf(result, "%s<const %s>", $1, $4);
+        free($4);
+        $$ = result;
+    }
   | TOKEN_IDENTIFIER TOKEN_LESS type_name TOKEN_GREATER %prec TOKEN_LESS {
         char* result = malloc(strlen($1) + strlen($3) + 5);
         sprintf(result, "%s<%s>", $1, $3);

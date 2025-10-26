@@ -70,15 +70,16 @@ fun main() >> i32 {
 ### Variables & Types
 
 ```zl
-i32 count = 42;              ?? Signed integers: i8, i16, i32, i64
-u64 big_num = 1000000;       ?? Unsigned: u8, u16, u32, u64
-f32 temperature = 98.6;      ?? Floats: f16, f32, f64
-bool is_active = true;       ?? Booleans
-ptr<i32> my_ptr = &count;    ?? Pointers
-arr<i32, 100> numbers;       ?? Fixed-size arrays
+i32 count = 42;                   ?? Signed integers: i8, i16, i32, i64
+u64 big_num = 1000000;            ?? Unsigned: u8, u16, u32, u64
+f32 temperature = 98.6;           ?? Floats: f16, f32, f64
+bool is_active = true;            ?? Booleans
+ptr<i32> my_ptr = &count;         ?? Mutable pointer to mutable data
+ptr<const i32> ro_ptr = &count;   ?? Pointer to const data (value can't change)
+const ptr<i32> fixed = &count;    ?? Const pointer (pointer can't be reassigned)
+arr<i32, 100> numbers;            ?? Fixed-size arrays
 
-const i32 MAX = 100;         ?? Constant variables
-const ptr<i32> readonly_ptr = &count;  ?? Const pointers (read-only)
+const i32 MAX = 100;              ?? Constant variables
 ```
 
 **Note:** Comments use `??` instead of `//`
@@ -211,10 +212,16 @@ ptr<i32> p = &value;        ?? Take address
 i32 deref = *p;             ?? Dereference
 *p = 200;                   ?? Modify through pointer
 
-?? Const pointers - cannot modify through them
-const ptr<i32> readonly = &value;
+?? Pointer to const - cannot modify value, can reassign pointer
+ptr<const i32> readonly = &value;
 i32 read = *readonly;       ?? ✅ Reading is OK
-*readonly = 50;             ?? ❌ Compile error: Cannot modify through const pointer
+*readonly = 50;             ?? ❌ Compile error: Cannot modify through pointer to const
+readonly = &other_value;    ?? ✅ Can reassign pointer
+
+?? Const pointer - cannot reassign pointer, can modify value
+const ptr<i32> fixed = &value;
+*fixed = 50;                ?? ✅ Can modify value
+fixed = &other_value;       ?? ❌ Compile error: Cannot reassign const variable
 
 ?? Pointer arithmetic
 p = p + 1;
@@ -225,8 +232,8 @@ fun increment(val: ptr<i32>) >> void {
 }
 
 ?? Const parameters prevent modification
-fun read_only(val: const ptr<i32>) >> i32 {
-    return *val;  ?? OK to read
+fun read_only(val: ptr<const i32>) >> i32 {
+    return *val;  ?? OK to read, cannot modify
 }
 ```
 
