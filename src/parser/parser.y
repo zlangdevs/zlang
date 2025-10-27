@@ -73,6 +73,11 @@ extern void* current_scanner;
 void* ast_root = NULL;
 %}
 
+/* Expected shift/reduce conflicts (benign, resolved by GLR):
+   - State 1: TOKEN_IDENTIFIER as type_name vs start of complex_type_name
+   - State ~68: TOKEN_IDENTIFIER as ref_base vs function_call vs struct_initializer
+   - State ~236: TOKEN_IDENTIFIER in multiple contexts (label, type, ref_base)
+   These ambiguities are inherent to the language syntax and correctly resolved. */
 %expect 3
 %expect-rr 0
 
@@ -135,6 +140,8 @@ void* ast_root = NULL;
 %start program
 
 %%
+
+/* ========== TOP-LEVEL PROGRAM STRUCTURE ========== */
 
 program:
     /* empty */ {
@@ -212,6 +219,8 @@ function_list:
    }
 ;
 
+/* ========== FUNCTION DECLARATIONS ========== */
+
 c_function_decl:
     TOKEN_FUN TOKEN_AT function_name TOKEN_LPAREN parameter_list TOKEN_RPAREN TOKEN_RSHIFT type_name {
         $$ = zig_create_c_function_decl($3, $8, $5);
@@ -263,6 +272,8 @@ parameter:
         free($3);
     }
 ;
+
+/* ========== TYPE SYSTEM ========== */
 
 function_name:
     TOKEN_IDENTIFIER { $$ = strdup($1); }
@@ -349,6 +360,7 @@ function_type_param_list:
   | TOKEN_IDENTIFIER { $$ = strdup($1); }
  ;
 
+/* ========== STATEMENTS ========== */
 
 statement_list:
     /* empty */ { $$ = zig_create_stmt_list(); }
@@ -447,6 +459,8 @@ brainfuck_statement:
         free($1);
     }
 ;
+
+/* ========== EXPRESSIONS ========== */
 
 ref_base:
     TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
@@ -652,10 +666,13 @@ primary_expression:
     | TOKEN_NULL { $$ = zig_create_null_literal(); }
 ;
 
+/* ========== LITERALS AND IDENTIFIERS ========== */
 
 string_literal:
     TOKEN_STRING { $$ = strdup($1); }
 ;
+
+/* ========== DECLARATIONS (use, enum, struct) ========== */
 
 use_statement:
     TOKEN_USE module_path {
