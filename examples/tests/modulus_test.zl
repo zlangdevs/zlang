@@ -14,10 +14,8 @@ fun main() >> i32 {
     i64 f = 44;
     @printf("(expected 2):%d\n", a % 3);
 
-    ?? It should work but it doesn't. fix
     f32 flo = 2.001222;
-    @printf("%f\n", flo % 2.011);
-    ?? return 0;
+    @printf("(expected 2.001222):%f\n", flo % 2.011);
 
     i32 g = 41;
     @printf("(expected 1): %i", g % -2); ?? Why would you do that?
