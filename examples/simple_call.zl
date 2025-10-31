@@ -6,6 +6,5 @@ fun helper() >> void {
 fun main() >> i32 {
     @printf("Starting main \t");
     helper();
-    @printf("Called helper\t");
     return 0;
 }
