@@ -730,7 +730,7 @@ pub fn main() !u8 {
             errors.CLIError.NoOutputPath => "No output path specified after -o",
             errors.CLIError.NoArch => "No target specified after -arch",
             errors.CLIError.InvalidArgument => "Unrecognized argument",
-            errors.CLIError.NoHelp => "Ahahahha, help message? I wont help you",
+            errors.CLIError.NoHelp => "Ahahahha, help message? I won't help you",
             else => "Unknown error while parsing arguments",
         };
         std.debug.print("{s}\n", .{error_msg});
