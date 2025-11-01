@@ -1,5 +1,5 @@
 fun main() >> i32 {
-    ..* This is coool af multiline comment
-    its still continuing *..
+    ... This is coool af multiline comment
+    its still continuing ...
     return 0;
 }
