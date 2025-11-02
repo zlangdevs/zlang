@@ -277,7 +277,6 @@ fun main() >> i32 {
         ?load x 0?
         ?load y 1?
         [->+<]        ?? Add x to y
-        ?store y 1?
     };
     
     @printf("Result: %d\n", y);  ?? Prints: 8
