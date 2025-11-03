@@ -23,5 +23,28 @@ fun main() >> i32 {
     f64 f64_ = 2.1;
     @printf("f64 + f16 test (expected 3.3):%.1f\n", f64_+f16_);
     f64_ = f64_ + f1 + f16_ + 0.0 + 1.1 + 2.222222222;
+    
+    ?? Modulus tests
+    i32 mod_a = 2;
+    @printf("(expected 0):%d\n", mod_a % 2);
+    i32 mod_b = 44;
+    @printf("(expected 2):%d\n", mod_b % 3);
+
+    u16 mod_c = 2;
+    @printf("(expected 0):%d\n", mod_c % 2);
+    u16 mod_d = 44;
+    @printf("(expected 2):%i\n", mod_d % 3);
+
+    i64 mod_e = 2;
+    @printf("(expected 0):%i\n", mod_e % 2);
+    i64 mod_f = 44;
+    @printf("(expected 2):%d\n", mod_f % 3);
+
+    f32 flo = 2.001222;
+    @printf("(expected 2.001222):%f\n", flo % 2.011);
+
+    i32 mod_g = 41;
+    @printf("(expected 1): %i", mod_g % -2); ?? Why would you do that?
+    
     return 0;
 }
