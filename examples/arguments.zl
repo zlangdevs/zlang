@@ -1,0 +1,7 @@
+fun main(argc: i32, argv: ptr<ptr<u8>>) >> i32 {
+    @printf("Args count: %d\n", argc);
+    for i32 i = 0; i < argc; i++ {
+        @printf("argument #%d: %s\n", i, argv[i]);
+    }
+    return 0;
+}
