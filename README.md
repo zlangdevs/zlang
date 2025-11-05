@@ -128,7 +128,7 @@ for i32 i = 0; i < 10; i++ {
 ```zl
 struct Point {
     x i32,
-    y i32
+    y i32,
 }
 
 struct Person {
