@@ -10,6 +10,7 @@ const functions = @import("functions.zig");
 const numeric = @import("numeric.zig");
 const array = @import("array.zig");
 const simd = @import("simd.zig");
+const enums = @import("enums.zig");
 
 const c_bindings = @import("c_bindings.zig");
 const c = c_bindings.c;
@@ -423,7 +424,7 @@ pub const CodeGenerator = struct {
                 for (prog.globals.items) |glob| try self.generateGlobalDeclaration(glob);
                 for (prog.functions.items) |func| {
                     if (func.data == .enum_decl) {
-                        try self.generateEnumDeclaration(func.data.enum_decl);
+                        try enums.generateEnumDeclaration(self, func.data.enum_decl);
                     } else if (func.data == .struct_decl) {
                         try self.generateStructType(func.data.struct_decl);
                     } else if (func.data == .c_function_decl) {
@@ -1169,7 +1170,7 @@ pub const CodeGenerator = struct {
                 try CodeGenerator.generateCFunctionDeclaration(self, c_func);
             },
             .enum_decl => |enum_decl| {
-                try self.generateEnumDeclaration(enum_decl);
+                try enums.generateEnumDeclaration(self, enum_decl);
             },
             .struct_decl => {
                 // Struct declarations are only valid at top level, not in statements
@@ -1392,45 +1393,7 @@ pub const CodeGenerator = struct {
         c.LLVMPositionBuilderAtEnd(self.builder, label_block);
     }
 
-    fn processGlobalEnums(self: *CodeGenerator, func_node: *ast.Node) errors.CodegenError!void {
-        switch (func_node.data) {
-            .function => |func| {
-                for (func.body.items) |stmt| {
-                    try self.findAndProcessEnums(stmt);
-                }
-            },
-            else => {},
-        }
-    }
-
-    fn findAndProcessEnums(self: *CodeGenerator, node: *ast.Node) errors.CodegenError!void {
-        switch (node.data) {
-            .enum_decl => |enum_decl| {
-                try self.generateEnumDeclaration(enum_decl);
-            },
-            .if_stmt => |if_stmt| {
-                for (if_stmt.then_body.items) |stmt| {
-                    try self.findAndProcessEnums(stmt);
-                }
-                if (if_stmt.else_body) |else_body| {
-                    for (else_body.items) |stmt| {
-                        try self.findAndProcessEnums(stmt);
-                    }
-                }
-            },
-            .for_stmt => |for_stmt| {
-                for (for_stmt.body.items) |stmt| {
-                    try self.findAndProcessEnums(stmt);
-                }
-            },
-            .c_for_stmt => |c_for_stmt| {
-                for (c_for_stmt.body.items) |stmt| {
-                    try self.findAndProcessEnums(stmt);
-                }
-            },
-            else => {},
-        }
-    }
+    pub const processGlobalEnums = enums.processGlobalEnums;
 
     fn generateGlobalDeclaration(self: *CodeGenerator, global_node: *ast.Node) errors.CodegenError!void {
         switch (global_node.data) {
@@ -1461,41 +1424,6 @@ pub const CodeGenerator = struct {
                 });
             },
             else => return errors.CodegenError.TypeMismatch,
-        }
-    }
-
-    fn generateEnumDeclaration(self: *CodeGenerator, enum_decl: ast.EnumDecl) errors.CodegenError!void {
-        var current_value: i32 = 0;
-        for (enum_decl.values.items) |enum_value| {
-            var value: i32 = current_value;
-            if (enum_value.value) |expr| {
-                const const_value = try self.generateExpression(expr);
-                if (c.LLVMIsConstant(const_value) == 0) {
-                    return errors.CodegenError.TypeMismatch;
-                }
-                const int_value = c.LLVMConstIntGetSExtValue(const_value);
-                value = @intCast(int_value);
-            }
-            const enum_const = c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
-            const enum_name_z = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ enum_decl.name, enum_value.name });
-            defer self.allocator.free(enum_name_z);
-            const enum_name_z_null = utils.dupeZ(self.allocator, enum_name_z);
-            defer self.allocator.free(enum_name_z_null);
-            const global_var = c.LLVMAddGlobal(self.module, c.LLVMInt32TypeInContext(self.context), enum_name_z_null.ptr);
-            c.LLVMSetInitializer(global_var, enum_const);
-            c.LLVMSetLinkage(global_var, c.LLVMExternalLinkage);
-            c.LLVMSetGlobalConstant(global_var, 1);
-
-            const var_info = structs.VariableInfo{
-                .value = @ptrCast(global_var),
-                .type_ref = @ptrCast(c.LLVMInt32TypeInContext(@ptrCast(self.context))),
-                .type_name = "i32",
-                .is_const = true,
-            };
-            try self.variables.put(utils.dupe(u8, self.allocator, enum_name_z), var_info);
-            try self.variables.put(utils.dupe(u8, self.allocator, enum_value.name), var_info);
-
-            current_value = value + 1;
         }
     }
 
@@ -2237,16 +2165,9 @@ pub const CodeGenerator = struct {
             },
             .qualified_identifier => {
                 const qual_id = expr.data.qualified_identifier;
-                if (qual_id.base.data == .identifier) {
-                    const base_name = qual_id.base.data.identifier.name;
-                    const enum_var_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ base_name, qual_id.field });
-                    defer self.allocator.free(enum_var_name);
-                    if (CodeGenerator.getVariable(self, enum_var_name)) |enum_var_info| {
-                        const load_instr = c.LLVMBuildLoad2(self.builder, @ptrCast(enum_var_info.type_ref), @ptrCast(enum_var_info.value), "enum_value");
-                        const alignment = self.getAlignmentForType(@ptrCast(enum_var_info.type_ref));
-                        c.LLVMSetAlignment(load_instr, alignment);
-                        return load_instr;
-                    }
+                // Try to load enum value first
+                if (try enums.tryLoadEnumValue(self, qual_id)) |enum_value| {
+                    return enum_value;
                 }
                 var result_value: c.LLVMValueRef = undefined;
                 var result_type: c.LLVMTypeRef = undefined;
