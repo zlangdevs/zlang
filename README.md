@@ -313,6 +313,7 @@ Check out the `examples/` directory for more:
 - **factorial.zl** - Recursion
 - **brainfuck.zl** - Full Brainfuck interpreter in ZLang
 - **const_pointer_demo.zl** - Const pointer safety demonstration
+- **arguments.zl** - Arguments reading
 - **tests/simd_test.zl** - Comprehensive SIMD examples
 - **tests/struct_test.zl** - Struct features
 - **tests/loop_test.zl** - All loop variations
