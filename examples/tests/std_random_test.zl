@@ -1,0 +1,41 @@
+use std.random
+
+fun main() >> i32 {
+    ?? Test basic rand()
+    srand(42);
+    i32 r1 = rand();
+    @printf("Random value with seed 42: %d\n", r1);
+    
+    ?? Test randRange
+    i32 r2 = randRange(1, 10);
+    @printf("Random in range [1, 10]: %d\n", r2);
+    
+    if (r2 < 1 || r2 > 10) {
+        @printf("ERROR: randRange out of bounds!\n");
+        return 1;
+    }
+    
+    ?? Test seeding with specific value
+    srand(42);
+    i32 s1 = rand();
+    srand(42);
+    i32 s2 = rand();
+    
+    if (s1 != s2) {
+        @printf("ERROR: Same seed produced different values!\n");
+        return 1;
+    }
+    
+    ?? Test with different seed
+    srand(100);
+    i32 r3 = randRange(1, 100);
+    @printf("Random in range [1, 100] with seed 100: %d\n", r3);
+    
+    if (r3 < 1 || r3 > 100) {
+        @printf("ERROR: randRange out of bounds!\n");
+        return 1;
+    }
+    
+    @printf("All random tests passed!\n");
+    return 0;
+}
