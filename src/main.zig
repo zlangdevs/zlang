@@ -146,7 +146,56 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
     }
 }
 
-fn resolveModulePath(base_path: []const u8, module_name: []const u8, alloc: std.mem.Allocator) ?[]const u8 {
+fn getStdlibPath(alloc: std.mem.Allocator) ![]const u8 {
+    // Check ZSTDPATH environment variable first
+    if (std.process.getEnvVarOwned(alloc, "ZSTDPATH")) |zstdpath| {
+        return zstdpath;
+    } else |_| {
+        // Fall back to stdlib directory relative to compiler binary
+        const exe_path = try std.fs.selfExePathAlloc(alloc);
+        defer alloc.free(exe_path);
+        const exe_dir = std.fs.path.dirname(exe_path) orelse ".";
+        return std.fs.path.join(alloc, &[_][]const u8{ exe_dir, "stdlib" });
+    }
+}
+
+fn resolveStdModule(module_name: []const u8, alloc: std.mem.Allocator) ?[]const u8 {
+    // module_name should be like "std.math" - extract the module part
+    if (!std.mem.startsWith(u8, module_name, "std.")) {
+        return null;
+    }
+
+    const module_part = module_name[4..]; // Skip "std."
+    const stdlib_path = getStdlibPath(alloc) catch return null;
+    defer alloc.free(stdlib_path);
+
+    const module_file = std.fmt.allocPrint(alloc, "{s}.zl", .{module_part}) catch return null;
+    defer alloc.free(module_file);
+
+    const full_path = std.fs.path.join(alloc, &[_][]const u8{ stdlib_path, module_file }) catch return null;
+
+    // Check if file exists
+    const file = std.fs.cwd().openFile(full_path, .{}) catch {
+        alloc.free(full_path);
+        return null;
+    };
+    file.close();
+
+    return full_path;
+}
+
+fn resolveModulePath(base_path: []const u8, module_name: []const u8, alloc: std.mem.Allocator) anyerror!?[]const u8 {
+    // Check if this is a standard library import
+    if (std.mem.startsWith(u8, module_name, "std.")) {
+        if (resolveStdModule(module_name, alloc)) |std_path| {
+            return std_path;
+        }
+        // If std module resolution failed, print error and return null
+        std.debug.print("\x1b[31mError:\x1b[0m Standard library module '\x1b[33m{s}\x1b[0m' not found.\n", .{module_name});
+        std.debug.print("  Searched in ZSTDPATH or stdlib/ directory.\n", .{});
+        return null;
+    }
+
     if (std.mem.endsWith(u8, module_name, ".zl")) {
         return utils.dupe(u8, alloc, module_name);
     }
@@ -160,6 +209,28 @@ fn resolveModulePath(base_path: []const u8, module_name: []const u8, alloc: std.
     return utils.dupe(u8, alloc, full_path);
 }
 
+fn parseModuleFile(file_path: []const u8, alloc: std.mem.Allocator) !ModuleInfo {
+    const input = read_file(file_path) catch |err| {
+        std.debug.print("Error reading file {s}: {}\n", .{ file_path, err });
+        return err;
+    };
+    const ast_root = parser.parse(alloc, input) catch |err| {
+        const loc = parser.lastParseErrorLocation();
+        if (loc) |l| {
+            std.debug.print("Parse error at {s}:{d}:{d}: {}\n", .{ file_path, l.line, l.column, err });
+        } else {
+            std.debug.print("Error parsing file {s}: {}\n", .{ file_path, err });
+        }
+        return err;
+    };
+    if (ast_root) |root| {
+        var module = ModuleInfo.init(alloc, file_path, root);
+        collectUseStatements(root, &module.dependencies);
+        return module;
+    }
+    return error.ParseFailed;
+}
+
 fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
     var modules = std.ArrayList(ModuleInfo){};
     defer {
@@ -168,25 +239,44 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
         }
         modules.deinit(alloc);
     }
+
+    var loaded_modules = std.StringHashMap(void).init(alloc);
+    defer loaded_modules.deinit();
+
+    var to_process = std.ArrayList([]const u8){};
+    defer to_process.deinit(alloc);
+
+    // Add initial input files
     for (ctx.input_files.items) |input_file| {
-        const input = read_file(input_file) catch |err| {
-            std.debug.print("Error reading file {s}: {}\n", .{ input_file, err });
-            return err;
-        };
-        const ast_root = parser.parse(alloc, input) catch |err| {
-            const loc = parser.lastParseErrorLocation();
-            if (loc) |l| {
-                std.debug.print("Parse error at {s}:{d}:{d}: {}\n", .{ input_file, l.line, l.column, err });
-            } else {
-                std.debug.print("Error parsing file {s}: {}\n", .{ input_file, err });
-            }
-            return err;
-        };
-        if (ast_root) |root| {
-            var module = ModuleInfo.init(alloc, input_file, root);
-            collectUseStatements(root, &module.dependencies);
-            try modules.append(alloc, module);
+        try to_process.append(alloc, input_file);
+    }
+
+    // Process modules and their dependencies
+    var i: usize = 0;
+    while (i < to_process.items.len) : (i += 1) {
+        const current_file = to_process.items[i];
+
+        // Skip if already loaded
+        if (loaded_modules.contains(current_file)) {
+            continue;
         }
+
+        const module = try parseModuleFile(current_file, alloc);
+        try loaded_modules.put(utils.dupe(u8, alloc, current_file), {});
+
+        // Resolve and add dependencies
+        for (module.dependencies.items) |dep| {
+            if (try resolveModulePath(current_file, dep, alloc)) |dep_path| {
+                if (!loaded_modules.contains(dep_path)) {
+                    try to_process.append(alloc, dep_path);
+                }
+            } else {
+                std.debug.print("\x1b[31mError:\x1b[0m Cannot resolve module '\x1b[33m{s}\x1b[0m' imported from {s}\n", .{ dep, current_file });
+                return error.ModuleNotFound;
+            }
+        }
+
+        try modules.append(alloc, module);
     }
     const merged_program_data = ast.NodeData{
         .program = ast.Program{
