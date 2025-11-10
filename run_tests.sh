@@ -12,6 +12,9 @@ declare -a FAILED_COMPILE_FILES
 declare -a FAILED_EXPECTED_FILES
 declare -a PASSED_FILES
 
+# Set ZSTDPATH to the stdlib directory relative to the project root
+export ZSTDPATH="$(pwd)/stdlib"
+
 find_file_by_pattern() {
     local pattern="$1"
     local found_files=()
