@@ -262,6 +262,65 @@ Use `wrap` for automatic C ABI compatibility:
 wrap @some_c_function(x: i32, y: f32) >> i32;
 ```
 
+## 📦 Imports and Standard Library
+
+ZLang supports importing other modules using the `use` directive.
+
+- **Local modules**: `use utils` loads `utils.zl` located relative to the importing file's directory.
+- **Standard library modules**: `use std.<module>` loads modules from the standard library.
+
+### Standard Library Resolution
+
+When you import `std.<module>`, ZLang searches for `<module>.zl` in:
+
+- The directory specified by the `ZSTDPATH` environment variable.
+- If `ZSTDPATH` is not set, the `stdlib/` directory located next to the compiler binary.
+
+Example layout:
+
+```
+zlang              # compiler binary
+stdlib/            # default stdlib directory if ZSTDPATH is not set
+  random.zl
+```
+
+You can explicitly set `ZSTDPATH`:
+
+```bash
+export ZSTDPATH=/path/to/zlang/stdlib
+```
+
+If a standard module cannot be found, the compiler prints a clear error indicating it searched `ZSTDPATH` or the default `stdlib/` directory.
+
+### Using std.random
+
+The `std.random` module wraps libc random functions and provides helpers.
+
+```zl
+use std.random
+
+fun main() >> i32 {
+    srand(42);
+    i32 r = rand();
+    @printf("rand(): %d\n", r);
+
+    i32 dice = randRange(1, 6);
+    @printf("dice: %d\n", dice);
+    return 0;
+}
+```
+
+Provided symbols:
+
+- **srand(seed: u32) >> void**
+- **rand() >> i32**
+- **randRange(min: i32, max: i32) >> i32**
+- **time(t: ptr<i64>) >> i64**
+
+Notes:
+- Tests run via `./run_tests.sh` automatically set `ZSTDPATH` to the project `stdlib/`.
+- Additional std modules can be added by dropping `<name>.zl` into `stdlib/` and importing with `use std.<name>`.
+
 ## 🎪 Unique Features
 
 ### Embedded Brainfuck
