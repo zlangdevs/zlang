@@ -407,7 +407,7 @@ Native Binary
 ## 🔧 Building from Source
 
 Requirements:
-- Zig (latest)
+- Zig (0.15.1)
 - Flex
 - Bison 3.x+
 - LLVM/Clang
