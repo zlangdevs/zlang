@@ -1,0 +1,93 @@
+?? Time module for zlang standard library
+?? Provides time-related functions and utilities
+
+?? C library time functions
+wrap @time(t: ptr<i64>) >> i64;
+wrap @clock() >> i64;
+wrap @difftime(time1: i64, time0: i64) >> f64;
+wrap @mktime(tm: ptr<u8>) >> i64;
+wrap @gmtime(timer: ptr<i64>) >> ptr<u8>;
+wrap @localtime(timer: ptr<i64>) >> ptr<u8>;
+wrap @strftime(s: ptr<u8>, maxsize: u64, format: ptr<u8>, tm: ptr<u8>) >> u64;
+wrap @asctime(tm: ptr<u8>) >> ptr<u8>;
+wrap @ctime(timer: ptr<i64>) >> ptr<u8>;
+
+?? Sleep functions (platform specific)
+wrap @usleep(usec: u32) >> i32;
+wrap @sleep(seconds: u32) >> u32;
+
+?? Get current timestamp in seconds since Unix epoch
+fun now() >> i64 {
+    return time(null);
+}
+
+?? Get current timestamp in milliseconds (approximation using clock)
+fun nowMillis() >> i64 {
+    ?? clock() returns processor time, not wall time, so use time() * 1000
+    return now() * 1000;
+}
+
+?? Sleep for specified number of seconds
+fun sleepSeconds(seconds: u32) >> void {
+    sleep(seconds);
+}
+
+?? Sleep for specified number of milliseconds
+fun sleepMillis(millis: u32) >> void {
+    usleep(millis * 1000);
+}
+
+?? Sleep for specified number of microseconds
+fun sleepMicros(micros: u32) >> void {
+    usleep(micros);
+}
+
+?? Calculate difference between two timestamps in seconds
+fun timeDiff(time1: i64, time0: i64) >> f64 {
+    return difftime(time1, time0);
+}
+
+?? Simple timer structure for measuring elapsed time
+struct Timer {
+    start_time i64,
+    end_time i64
+}
+
+?? Start a timer
+fun timerStart() >> Timer {
+    Timer timer;
+    timer.start_time = now();
+    timer.end_time = 0;
+    return timer;
+}
+
+?? Stop a timer and return elapsed seconds
+fun timerStop(timer: Timer) >> Timer {
+    timer.end_time = now();
+    return timer;
+}
+
+?? Get elapsed time without stopping the timer
+fun timerElapsed(timer: Timer) >> f64 {
+    i64 current_time = now();
+    return timeDiff(current_time, timer.start_time);
+}
+
+?? Reset a timer
+fun timerReset(timer: Timer) >> Timer {
+    timer.start_time = now();
+    timer.end_time = 0;
+    return timer;
+}
+
+?? Format current time as string (simplified)
+?? Returns a pointer to static buffer from ctime
+fun timeString() >> ptr<u8> {
+    i64 current_time = now();
+    return ctime(&current_time);
+}
+
+?? Check if a timer has been running for more than specified seconds
+fun timerExpired(timer: Timer, seconds: f64) >> bool {
+    return timerElapsed(timer) >= seconds;
+}
