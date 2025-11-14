@@ -1,0 +1,23 @@
+wrap @sqrt(x: f64) >> f64;
+wrap @pow(base: f64, exp: f64) >> f64;
+wrap @sin(x: f64) >> f64;
+wrap @cos(x: f64) >> f64;
+wrap @fabs(x: f64) >> f64;
+
+fun square(x: f64) >> f64 {
+    return pow(x, 2.0);
+}
+
+fun cube(x: f64) >> f64 {
+    return pow(x, 3.0);
+}
+
+fun distance(x1: f64, y1: f64, x2: f64, y2: f64) >> f64 {
+    f64 dx = x2 - x1;
+    f64 dy = y2 - y1;
+    return sqrt(dx * dx + dy * dy);
+}
+
+fun toRadians(degrees: f64) >> f64 {
+    return degrees * 3.141592653589793 / 180.0;
+}

@@ -1,0 +1,39 @@
+use std.math
+
+fun main() >> i32 {
+    @printf("=== ZLang std.math Demo ===\n\n");
+    
+    ?? Basic mathematical operations
+    f64 x = 16.0;
+    f64 root = sqrt(x);
+    @printf("sqrt(%.1f) = %.2f\n", x, root);
+    
+    f64 power = pow(2.0, 8.0);
+    @printf("2^8 = %.0f\n", power);
+    
+    ?? Helper functions
+    f64 sq = square(7.0);
+    @printf("square(7) = %.0f\n", sq);
+    
+    f64 cb = cube(4.0);
+    @printf("cube(4) = %.0f\n", cb);
+    
+    ?? Trigonometry
+    f64 angle = toRadians(45.0);
+    f64 sine = sin(angle);
+    f64 cosine = cos(angle);
+    @printf("sin(45°) = %.6f\n", sine);
+    @printf("cos(45°) = %.6f\n", cosine);
+    
+    ?? Distance calculation
+    f64 dist = distance(1.0, 1.0, 4.0, 5.0);
+    @printf("distance from (1,1) to (4,5) = %.2f\n", dist);
+    
+    ?? Absolute value
+    f64 negative = -42.5;
+    f64 absolute = fabs(negative);
+    @printf("fabs(%.1f) = %.1f\n", negative, absolute);
+    
+    @printf("\nMath operations completed successfully!\n");
+    return 0;
+}

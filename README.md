@@ -317,6 +317,41 @@ Provided symbols:
 - **randRange(min: i32, max: i32) >> i32**
 - **time(t: ptr<i64>) >> i64**
 
+### Using std.math
+
+The `std.math` module wraps common mathematical functions from libm.
+
+```zl
+use std.math
+
+fun main() >> i32 {
+    f64 x = 16.0;
+    f64 root = sqrt(x);
+    @printf("sqrt(%.1f) = %.2f\n", x, root);
+    
+    f64 angle = toRadians(90.0);
+    f64 sine = sin(angle);
+    @printf("sin(90°) = %.6f\n", sine);
+    
+    f64 dist = distance(0.0, 0.0, 3.0, 4.0);
+    @printf("distance = %.1f\n", dist);
+    
+    return 0;
+}
+```
+
+Provided symbols:
+
+- **sqrt(x: f64) >> f64** - Square root
+- **pow(base: f64, exp: f64) >> f64** - Power function
+- **sin(x: f64) >> f64**, **cos(x: f64) >> f64** - Trigonometric functions
+- **fabs(x: f64) >> f64** - Absolute value for floats
+- **square(x: f64) >> f64**, **cube(x: f64) >> f64** - Helper functions
+- **distance(x1, y1, x2, y2) >> f64** - Euclidean distance
+- **toRadians(degrees: f64) >> f64** - Convert degrees to radians
+
+**Note:** Math functions require linking with `-lm`. The test runner handles this automatically.
+
 Notes:
 - Tests run via `./run_tests.sh` automatically set `ZSTDPATH` to the project `stdlib/`.
 - Additional std modules can be added by dropping `<name>.zl` into `stdlib/` and importing with `use std.<name>`.

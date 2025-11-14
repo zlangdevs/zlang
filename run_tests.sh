@@ -54,8 +54,14 @@ test_single_file() {
     echo "Testing $filename..."
     echo "====================================================="
     
+    # Check if this test needs math library linking
+    local math_link=""
+    if [[ "$filename" == *"math"* ]] || grep -q "use std\.math" "$test_file" 2>/dev/null; then
+        math_link="-lm"
+    fi
+    
     echo "Compiling with $APP:"
-    if $APP "$test_file"; then
+    if $APP "$test_file" $math_link; then
         if [ -f "a.out" ]; then
             BINARY="a.out"
         elif [ -f "output" ]; then
@@ -167,11 +173,17 @@ for test_file in "$TEST_DIR"/*.zl; do
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     filename=$(basename "$test_file")
     
+    # Check if this test needs math library linking
+    math_link=""
+    if [[ "$filename" == *"math"* ]] || grep -q "use std\.math" "$test_file" 2>/dev/null; then
+        math_link="-lm"
+    fi
+    
     clear
     echo "Testing $filename..."
     echo "====================================================="
     
-    if $APP "$test_file" 2>/dev/null; then
+    if $APP "$test_file" $math_link 2>/dev/null; then
         if [ -f "a.out" ]; then
             BINARY="a.out"
         elif [ -f "output" ]; then
