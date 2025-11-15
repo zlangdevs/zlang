@@ -1,0 +1,89 @@
+use std.assert
+
+fun main() >> i32 {
+    @printf("=== Testing std.assert module ===\n\n");
+    
+    testStart();
+    
+    ?? Test basic assertions that should pass
+    @printf("1. Testing assertions that should pass:\n");
+    
+    assertTrue(true, "assertTrue with true condition");
+    testPass("assertTrue(true)");
+    
+    assertFalse(false, "assertFalse with false condition");
+    testPass("assertFalse(false)");
+    
+    assertEqual(42, 42, "assertEqual with equal values");
+    testPass("assertEqual(42, 42)");
+    
+    assertNotEqual(10, 20, "assertNotEqual with different values");
+    testPass("assertNotEqual(10, 20)");
+    
+    assertGreater(10, 5, "assertGreater with 10 > 5");
+    testPass("assertGreater(10, 5)");
+    
+    assertLess(5, 10, "assertLess with 5 < 10");
+    testPass("assertLess(5, 10)");
+    
+    assertInRange(7, 5, 10, "assertInRange with 7 in [5,10]");
+    testPass("assertInRange(7, 5, 10)");
+    
+    ?? Test float equality
+    assertEqualFloat(3.14159, 3.14159, 0.00001, "assertEqualFloat with exact match");
+    testPass("assertEqualFloat exact");
+    
+    assertEqualFloat(3.14159, 3.14160, 0.0001, "assertEqualFloat with tolerance");
+    testPass("assertEqualFloat with tolerance");
+    
+    ?? Test null pointer assertions
+    ptr<void> null_ptr = null;
+    assertNull(null_ptr, "assertNull with null pointer");
+    testPass("assertNull");
+    
+    i32 value = 42;
+    ptr<i32> non_null = &value;
+    assertNotNull(non_null as ptr<void>, "assertNotNull with valid pointer");
+    testPass("assertNotNull");
+    
+    ?? Test basic assert function
+    assert(true, "Basic assert with true condition");
+    testPass("assert(true)");
+    
+    @printf("\n2. All passing assertions completed successfully!\n\n");
+    
+    ?? Test some edge cases
+    @printf("3. Testing edge cases:\n");
+    
+    ?? Test range boundaries
+    assertInRange(5, 5, 10, "assertInRange boundary test (min)");
+    testPass("assertInRange min boundary");
+    
+    assertInRange(10, 5, 10, "assertInRange boundary test (max)");
+    testPass("assertInRange max boundary");
+    
+    ?? Test float with zero tolerance
+    assertEqualFloat(1.0, 1.0, 0.0, "assertEqualFloat with zero tolerance");
+    testPass("assertEqualFloat zero tolerance");
+    
+    @printf("\n4. Edge case tests completed!\n\n");
+    
+    ?? Demonstrate test framework
+    @printf("5. Demonstrating test framework usage:\n");
+    
+    ?? Simulate some test results
+    testPass("Mock test 1");
+    testPass("Mock test 2");
+    testPass("Mock test 3");
+    
+    @printf("\n");
+    i32 result = testSummary();
+    
+    if (result == 0) {
+        @printf("\n✅ All assert module tests passed!\n");
+        return 0;
+    } else {
+        @printf("\n❌ Some assert module tests failed!\n");
+        return 1;
+    }
+}
