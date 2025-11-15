@@ -352,6 +352,41 @@ Provided symbols:
 
 **Note:** Math functions require linking with `-lm`. The test runner handles this automatically.
 
+### Using std.assert
+
+The `std.assert` module provides assertion functions for testing and debugging.
+
+```zl
+use std.assert
+
+fun main() >> i32 {
+    testStart();
+    
+    ?? Test your functions
+    i32 result = add(5, 3);
+    assertEqual(result, 8, "add(5, 3) should equal 8");
+    testPass("addition test");
+    
+    ?? Test ranges and conditions
+    assertInRange(result, 0, 100, "result should be valid");
+    assertTrue(result > 0, "result should be positive");
+    
+    ?? Get test summary
+    return testSummary();
+}
+```
+
+Provided symbols:
+
+- **assert(condition, message)** - Basic assertion
+- **assertEqual(actual, expected, message)** - Integer equality
+- **assertEqualFloat(actual, expected, epsilon, message)** - Float equality with tolerance
+- **assertTrue(condition, message)**, **assertFalse(condition, message)** - Boolean assertions
+- **assertNull(ptr, message)**, **assertNotNull(ptr, message)** - Pointer assertions
+- **assertGreater(actual, threshold, message)**, **assertLess(actual, threshold, message)** - Comparisons
+- **assertInRange(actual, min, max, message)** - Range validation
+- **testStart()**, **testPass(name)**, **testFail(name, message)**, **testSummary()** - Test framework
+
 Notes:
 - Tests run via `./run_tests.sh` automatically set `ZSTDPATH` to the project `stdlib/`.
 - Additional std modules can be added by dropping `<name>.zl` into `stdlib/` and importing with `use std.<name>`.
@@ -405,6 +440,8 @@ Check out the `examples/` directory for more:
 
 - **hello_world.zl** - Basic syntax
 - **factorial.zl** - Recursion
+- **math_demo.zl** - Mathematical functions with std.math
+- **assert_demo.zl** - Testing and assertions with std.assert
 - **brainfuck.zl** - Full Brainfuck interpreter in ZLang
 - **const_pointer_demo.zl** - Const pointer safety demonstration
 - **arguments.zl** - Arguments reading
