@@ -1,0 +1,159 @@
+?? ZLang Standard Library - Assert Module
+?? Provides assertion functions for testing and debugging
+
+wrap @exit(code: i32) >> void;
+
+?? Basic assertion - fails if condition is false
+fun assert(condition: bool, message: ptr<u8>) >> void {
+    if (!condition) {
+        @printf("ASSERTION FAILED: %s\n", message);
+        exit(1);
+    }
+}
+
+?? Assert with custom failure code
+fun assertWithCode(condition: bool, message: ptr<u8>, code: i32) >> void {
+    if (!condition) {
+        @printf("ASSERTION FAILED: %s\n", message);
+        exit(code);
+    }
+}
+
+?? Assert equality for integers
+fun assertEqual(actual: i32, expected: i32, message: ptr<u8>) >> void {
+    if (actual != expected) {
+        @printf("ASSERTION FAILED: %s\n", message);
+        @printf("  Expected: %d\n", expected);
+        @printf("  Actual: %d\n", actual);
+        exit(1);
+    }
+}
+
+?? Assert equality for floats (with epsilon tolerance)
+fun assertEqualFloat(actual: f64, expected: f64, epsilon: f64, message: ptr<u8>) >> void {
+    f64 diff = actual - expected;
+    if (diff < 0.0) {
+        diff = -diff;
+    }
+    if (diff > epsilon) {
+        @printf("ASSERTION FAILED: %s\n", message);
+        @printf("  Expected: %.6f\n", expected);
+        @printf("  Actual: %.6f\n", actual);
+        @printf("  Difference: %.6f (tolerance: %.6f)\n", diff, epsilon);
+        exit(1);
+    }
+}
+
+?? Assert not equal for integers
+fun assertNotEqual(actual: i32, expected: i32, message: ptr<u8>) >> void {
+    if (actual == expected) {
+        @printf("ASSERTION FAILED: %s\n", message);
+        @printf("  Values should not be equal: %d\n", actual);
+        exit(1);
+    }
+}
+
+?? Assert true
+fun assertTrue(condition: bool, message: ptr<u8>) >> void {
+    if (!condition) {
+        @printf("ASSERTION FAILED: %s\n", message);
+        @printf("  Expected: true\n");
+        @printf("  Actual: false\n");
+        exit(1);
+    }
+}
+
+?? Assert false
+fun assertFalse(condition: bool, message: ptr<u8>) >> void {
+    if (condition) {
+        @printf("ASSERTION FAILED: %s\n", message);
+        @printf("  Expected: false\n");
+        @printf("  Actual: true\n");
+        exit(1);
+    }
+}
+
+?? Assert null pointer
+fun assertNull(ptr: ptr<void>, message: ptr<u8>) >> void {
+    ptr<void> null_ptr = null;
+    if (ptr != null_ptr) {
+        @printf("ASSERTION FAILED: %s\n", message);
+        @printf("  Expected: null pointer\n");
+        @printf("  Actual: non-null pointer\n");
+        exit(1);
+    }
+}
+
+?? Assert non-null pointer
+fun assertNotNull(ptr: ptr<void>, message: ptr<u8>) >> void {
+    ptr<void> null_ptr = null;
+    if (ptr == null_ptr) {
+        @printf("ASSERTION FAILED: %s\n", message);
+        @printf("  Expected: non-null pointer\n");
+        @printf("  Actual: null pointer\n");
+        exit(1);
+    }
+}
+
+?? Assert greater than
+fun assertGreater(actual: i32, threshold: i32, message: ptr<u8>) >> void {
+    if (actual <= threshold) {
+        @printf("ASSERTION FAILED: %s\n", message);
+        @printf("  Expected: > %d\n", threshold);
+        @printf("  Actual: %d\n", actual);
+        exit(1);
+    }
+}
+
+?? Assert less than
+fun assertLess(actual: i32, threshold: i32, message: ptr<u8>) >> void {
+    if (actual >= threshold) {
+        @printf("ASSERTION FAILED: %s\n", message);
+        @printf("  Expected: < %d\n", threshold);
+        @printf("  Actual: %d\n", actual);
+        exit(1);
+    }
+}
+
+?? Assert range (inclusive)
+fun assertInRange(actual: i32, min_val: i32, max_val: i32, message: ptr<u8>) >> void {
+    if (actual < min_val || actual > max_val) {
+        @printf("ASSERTION FAILED: %s\n", message);
+        @printf("  Expected: in range [%d, %d]\n", min_val, max_val);
+        @printf("  Actual: %d\n", actual);
+        exit(1);
+    }
+}
+
+?? Simple pass/fail counter for test suites
+i32 test_count = 0;
+i32 pass_count = 0;
+
+fun testStart() >> void {
+    test_count = 0;
+    pass_count = 0;
+    @printf("=== Starting Test Suite ===\n");
+}
+
+fun testPass(test_name: ptr<u8>) >> void {
+    test_count++;
+    pass_count++;
+    @printf("✅ %s\n", test_name);
+}
+
+fun testFail(test_name: ptr<u8>, message: ptr<u8>) >> void {
+    test_count++;
+    @printf("❌ %s: %s\n", test_name, message);
+}
+
+fun testSummary() >> i32 {
+    @printf("\n=== Test Summary ===\n");
+    @printf("Total: %d, Passed: %d, Failed: %d\n", test_count, pass_count, test_count - pass_count);
+    if (pass_count == test_count) {
+        @printf("🎉 All tests passed!\n");
+        return 0;
+    } else {
+        @printf("❌ Some tests failed!\n");
+        return 1;
+    }
+}

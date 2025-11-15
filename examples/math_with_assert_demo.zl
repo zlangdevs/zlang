@@ -1,0 +1,85 @@
+use std.math
+use std.assert
+
+?? Example: Testing a simple geometry library
+fun circleArea(radius: f64) >> f64 {
+    return 3.141592653589793 * square(radius);
+}
+
+fun triangleArea(base: f64, height: f64) >> f64 {
+    return 0.5 * base * height;
+}
+
+fun pythagorean(a: f64, b: f64) >> f64 {
+    return sqrt(square(a) + square(b));
+}
+
+fun main() >> i32 {
+    @printf("=== Math + Assert Demo: Geometry Library ===\n\n");
+    
+    testStart();
+    
+    ?? Test circle area calculation
+    f64 circle_area = circleArea(5.0);
+    assertEqualFloat(circle_area, 78.539816, 0.000001, "Circle area with radius 5");
+    testPass("Circle area calculation");
+    
+    ?? Test triangle area calculation
+    f64 triangle_area = triangleArea(10.0, 6.0);
+    assertEqualFloat(triangle_area, 30.0, 0.000001, "Triangle area with base=10, height=6");
+    testPass("Triangle area calculation");
+    
+    ?? Test Pythagorean theorem (3-4-5 triangle)
+    f64 hypotenuse = pythagorean(3.0, 4.0);
+    assertEqualFloat(hypotenuse, 5.0, 0.000001, "Pythagorean theorem: 3-4-5 triangle");
+    testPass("Pythagorean theorem");
+    
+    ?? Test distance function from math module
+    f64 dist = distance(0.0, 0.0, 6.0, 8.0);
+    assertEqualFloat(dist, 10.0, 0.000001, "Distance from origin to (6,8)");
+    testPass("Distance calculation");
+    
+    ?? Test trigonometry with known values
+    f64 angle_30 = toRadians(30.0);
+    f64 sin_30 = sin(angle_30);
+    assertEqualFloat(sin_30, 0.5, 0.000001, "sin(30°) should be 0.5");
+    testPass("Trigonometry: sin(30°)");
+    
+    f64 angle_60 = toRadians(60.0);
+    f64 cos_60 = cos(angle_60);
+    assertEqualFloat(cos_60, 0.5, 0.000001, "cos(60°) should be 0.5");
+    testPass("Trigonometry: cos(60°)");
+    
+    ?? Test mathematical properties
+    f64 x = 7.0;
+    f64 x_squared = square(x);
+    f64 x_cubed = cube(x);
+    
+    assertTrue(x_squared > x, "x² should be greater than x for x > 1");
+    testPass("Mathematical property: x² > x");
+    
+    assertTrue(x_cubed > x_squared, "x³ should be greater than x² for x > 1");
+    testPass("Mathematical property: x³ > x²");
+    
+    ?? Test absolute value properties
+    f64 negative = -15.5;
+    f64 positive = fabs(negative);
+    
+    assertTrue(positive > 0.0, "Absolute value should be positive");
+    testPass("Absolute value property");
+    
+    assertEqualFloat(positive, 15.5, 0.000001, "fabs(-15.5) should equal 15.5");
+    testPass("Absolute value calculation");
+    
+    @printf("\n");
+    i32 result = testSummary();
+    
+    if (result == 0) {
+        @printf("\n🎉 All geometry tests passed!\n");
+        @printf("The math and assert modules work perfectly together!\n");
+    } else {
+        @printf("\n❌ Some geometry tests failed!\n");
+    }
+    
+    return result;
+}
