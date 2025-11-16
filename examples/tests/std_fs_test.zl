@@ -1,0 +1,41 @@
+use std.fs
+
+fun main() >> i32 {
+    @printf("Testing std.fs module\n");
+    
+    i32 fd = createFile("testfile.txt");
+    i64 written = writeString(fd, "test\n");
+    close(fd);
+    
+    bool exists = fileExists("testfile.txt");
+    if (!exists) {
+        @printf("ERROR file check\n");
+        return 1;
+    }
+    
+    fd = openForRead("testfile.txt");
+    arr<u8, 256> buffer;
+    i64 bytes_read = readAll(fd, &buffer[0], 255);
+    buffer[bytes_read] = 0;
+    close(fd);
+    
+    ptr<void> file = fopen("stream.txt", "w");
+    fprintString(file, "stream test\n");
+    fclose(file);
+    
+    file = fopen("stream.txt", "r");
+    arr<u8, 256> line_buffer;
+    ptr<u8> line = fgets(&line_buffer[0], 256, file);
+    fclose(file);
+    
+    bool renamed = moveFile("stream.txt", "renamed.txt");
+    
+    bool dir_created = makeDir("testdir");
+    
+    deleteFile("testfile.txt");
+    deleteFile("renamed.txt");
+    removeDir("testdir");
+    
+    @printf("All tests passed\n");
+    return 0;
+}

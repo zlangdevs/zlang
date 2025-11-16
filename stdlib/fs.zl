@@ -1,0 +1,137 @@
+?? Filesystem module for zlang standard library
+?? Provides file I/O operations and filesystem utilities
+
+?? File operation flags (for open)
+enum FileFlags {
+    O_RDONLY = 0,
+    O_WRONLY = 1,
+    O_RDWR = 2,
+    O_CREAT = 64,
+    O_TRUNC = 512,
+    O_APPEND = 1024
+}
+
+?? File permissions (for open with O_CREAT)
+enum FilePerms {
+    S_IRUSR = 256,
+    S_IWUSR = 128,
+    S_IRGRP = 32,
+    S_IWGRP = 16,
+    S_IROTH = 4,
+    S_IWOTH = 2
+}
+
+?? Standard file operations (POSIX)
+wrap @open(pathname: ptr<u8>, flags: i32, mode: i32) >> i32;
+wrap @close(fd: i32) >> i32;
+wrap @read(fd: i32, buf: ptr<void>, count: u64) >> i64;
+wrap @write(fd: i32, buf: ptr<void>, count: u64) >> i64;
+wrap @unlink(pathname: ptr<u8>) >> i32;
+wrap @rename(oldpath: ptr<u8>, newpath: ptr<u8>) >> i32;
+wrap @access(pathname: ptr<u8>, mode: i32) >> i32;
+
+?? Standard C file I/O
+wrap @fopen(filename: ptr<u8>, mode: ptr<u8>) >> ptr<void>;
+wrap @fclose(stream: ptr<void>) >> i32;
+wrap @fread(ptr: ptr<void>, size: u64, nmemb: u64, stream: ptr<void>) >> u64;
+wrap @fwrite(ptr: ptr<void>, size: u64, nmemb: u64, stream: ptr<void>) >> u64;
+wrap @fgets(s: ptr<u8>, size: i32, stream: ptr<void>) >> ptr<u8>;
+wrap @fputs(s: ptr<u8>, stream: ptr<void>) >> i32;
+wrap @fflush(stream: ptr<void>) >> i32;
+wrap @feof(stream: ptr<void>) >> i32;
+wrap @ferror(stream: ptr<void>) >> i32;
+wrap @fseek(stream: ptr<void>, offset: i64, whence: i32) >> i32;
+wrap @ftell(stream: ptr<void>) >> i64;
+wrap @rewind(stream: ptr<void>) >> void;
+
+?? Directory operations
+wrap @mkdir(pathname: ptr<u8>, mode: i32) >> i32;
+wrap @rmdir(pathname: ptr<u8>) >> i32;
+
+?? Utility functions
+wrap @remove(pathname: ptr<u8>) >> i32;
+wrap @tmpfile() >> ptr<void>;
+
+?? Open file with default read-write-create permissions
+fun openFile(path: ptr<u8>, flags: i32) >> i32 {
+    i32 mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+    return open(path, flags, mode);
+}
+
+?? Create a new file (truncate if exists)
+fun createFile(path: ptr<u8>) >> i32 {
+    i32 flags = O_WRONLY | O_CREAT | O_TRUNC;
+    return openFile(path, flags);
+}
+
+?? Open file for reading
+fun openForRead(path: ptr<u8>) >> i32 {
+    return open(path, O_RDONLY, 0);
+}
+
+?? Open file for writing (create if doesn't exist)
+fun openForWrite(path: ptr<u8>) >> i32 {
+    i32 flags = O_WRONLY | O_CREAT | O_TRUNC;
+    return openFile(path, flags);
+}
+
+?? Open file for appending
+fun openForAppend(path: ptr<u8>) >> i32 {
+    i32 flags = O_WRONLY | O_CREAT | O_APPEND;
+    return openFile(path, flags);
+}
+
+?? Check if file exists
+fun fileExists(path: ptr<u8>) >> bool {
+    i32 result = access(path, 0);
+    return result == 0;
+}
+
+?? Delete a file
+fun deleteFile(path: ptr<u8>) >> bool {
+    i32 result = unlink(path);
+    return result == 0;
+}
+
+?? Rename or move a file
+fun moveFile(oldpath: ptr<u8>, newpath: ptr<u8>) >> bool {
+    i32 result = rename(oldpath, newpath);
+    return result == 0;
+}
+
+?? Write string to file (using file descriptor)
+fun writeString(fd: i32, str: ptr<u8>) >> i64 {
+    u64 len = 0;
+    ptr<u8> p = str;
+    u8 c = *p;
+    for (c != 0) {
+        len++;
+        p = p + 1;
+        c = *p;
+    }
+    return write(fd, str as ptr<void>, len);
+}
+
+?? Read entire file into buffer (returns bytes read, -1 on error)
+fun readAll(fd: i32, buffer: ptr<u8>, max_size: u64) >> i64 {
+    return read(fd, buffer as ptr<void>, max_size);
+}
+
+?? Write string to FILE* stream
+fun fprintString(stream: ptr<void>, str: ptr<u8>) >> bool {
+    i32 result = fputs(str, stream);
+    return result >= 0;
+}
+
+?? Create directory with default permissions
+fun makeDir(path: ptr<u8>) >> bool {
+    i32 mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+    i32 result = mkdir(path, mode);
+    return result == 0;
+}
+
+?? Remove directory (must be empty)
+fun removeDir(path: ptr<u8>) >> bool {
+    i32 result = rmdir(path);
+    return result == 0;
+}
