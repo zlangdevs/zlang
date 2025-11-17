@@ -1,6 +1,5 @@
 wrap @srand(seed: u32) >> void;
 wrap @rand() >> i32;
-wrap @time(t: ptr<i64>) >> i64;
 
 fun randRange(min: i32, max: i32) >> i32 {
     if (max < min) {
