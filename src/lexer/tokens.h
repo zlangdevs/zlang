@@ -50,6 +50,7 @@ typedef enum {
     TOKEN_WRAP,
     TOKEN_ENUM,
     TOKEN_STRUCT,
+    TOKEN_UNION,
     TOKEN_DOT,
     TOKEN_AS,
     TOKEN_UNDERSCORE,
