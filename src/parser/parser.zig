@@ -514,6 +514,26 @@ export fn zig_create_struct_decl(name_ptr: [*c]const u8, fields_ptr: ?*anyopaque
         .struct_decl = ast.StructDecl{
             .name = name_copy,
             .fields = fields,
+            .is_union = false,
+        },
+    };
+    const node = ast.Node.create(global_allocator, struct_decl_data);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_union_decl(name_ptr: [*c]const u8, fields_ptr: ?*anyopaque) ?*anyopaque {
+    const name = std.mem.span(name_ptr);
+    const name_copy = utils.dupe(u8, global_allocator, name);
+    var fields = std.ArrayList(ast.StructField){};
+    if (fields_ptr) |ptr| {
+        const struct_field_list = @as(*StructFieldList, @ptrFromInt(@intFromPtr(ptr)));
+        fields = struct_field_list.items;
+    }
+    const struct_decl_data = ast.NodeData{
+        .struct_decl = ast.StructDecl{
+            .name = name_copy,
+            .fields = fields,
+            .is_union = true,
         },
     };
     const node = ast.Node.create(global_allocator, struct_decl_data);

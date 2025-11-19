@@ -49,6 +49,7 @@ FLOAT_DOT  \.{DIGIT_WITH_DELIM}{EXPONENT}?
 "wrap"      { return TOKEN_WRAP; }
 "enum"      { return TOKEN_ENUM; }
 "struct"    { return TOKEN_STRUCT; }
+"union"     { return TOKEN_UNION; }
 "null"      { return TOKEN_NULL; }
 "as"        { return TOKEN_AS; }
 "_"         { return TOKEN_UNDERSCORE; }

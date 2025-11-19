@@ -47,6 +47,7 @@ extern void* zig_create_wrapper_function(const char* name, const char* return_ty
 extern void* zig_create_use_stmt(const char* module_path);
 extern void* zig_create_enum_decl(const char* name, void* values);
 extern void* zig_create_struct_decl(const char* name, void* fields);
+extern void* zig_create_union_decl(const char* name, void* fields);
 extern void* zig_create_qualified_identifier(void* base, const char* field);
 extern void* zig_create_enum_value_list(void);
 extern void zig_add_enum_value(void* list, const char* name, void* value);
@@ -95,7 +96,7 @@ void* ast_root = NULL;
 %token <number> TOKEN_CHAR
 %token <number> TOKEN_REASSIGN
 
-%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_GOTO TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_DOT TOKEN_NULL TOKEN_CONST
+%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_GOTO TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_UNION TOKEN_DOT TOKEN_NULL TOKEN_CONST
 %token TOKEN_AS TOKEN_UNDERSCORE
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
@@ -132,7 +133,7 @@ void* ast_root = NULL;
 %type <node> expression logical_or_expression logical_and_expression bitwise_or_expression bitwise_xor_expression bitwise_and_expression shift_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression postfix_expression argument_list arguments
 %type <node> cast_expression
 %type <node> c_for_statement for_increment
-%type <node> array_initializer c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration wrap_statement
+%type <node> array_initializer c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration union_declaration wrap_statement
 %type <node> enum_values enum_value_list struct_fields struct_field_list
 %type <node> struct_initializer struct_field_values struct_field_value_list initializer_expression ref_expression ref_base
 %type <string> type_name function_name string_literal complex_type_name module_path function_type_core function_type_param_list
@@ -206,6 +207,15 @@ function_list:
        zig_add_to_program(ast_root, $1);
    }
    | function_list struct_declaration {
+       zig_add_to_program(ast_root, $2);
+   }
+   | union_declaration {
+       if (ast_root == NULL) {
+           ast_root = zig_create_program();
+       }
+       zig_add_to_program(ast_root, $1);
+   }
+   | function_list union_declaration {
        zig_add_to_program(ast_root, $2);
    }
    | wrap_statement {
@@ -691,6 +701,13 @@ enum_declaration:
 struct_declaration:
     TOKEN_STRUCT TOKEN_IDENTIFIER TOKEN_LBRACE struct_fields TOKEN_RBRACE {
         $$ = zig_create_struct_decl($2, $4);
+        free($2);
+    }
+;
+
+union_declaration:
+    TOKEN_UNION TOKEN_IDENTIFIER TOKEN_LBRACE struct_fields TOKEN_RBRACE {
+        $$ = zig_create_union_decl($2, $4);
         free($2);
     }
 ;
