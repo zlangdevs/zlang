@@ -270,6 +270,17 @@ struct TypeName {
 }
 ```
 
+**Unions**
+```zl
+union UnionName {
+    field1 type1,
+    field2 type2,
+    field3 type3
+}
+```
+
+Unions share memory between all fields (like C unions). All fields occupy the same memory location, with the size determined by the largest field.
+
 **Enums**
 ```zl
 enum EnumName {
@@ -524,9 +535,9 @@ cp = cp + 1;            ?? OK: pointer address can change
 *cp = 10;               ?? Error: cannot modify through pointer to const
 ```
 
-### Struct Layout
+### Struct and Union Layout
 
-Structs follow C ABI layout rules:
+**Structs** follow C ABI layout rules:
 - Fields are laid out in declaration order
 - Padding follows platform alignment rules
 - Compatible with C structs
@@ -538,6 +549,27 @@ struct Example {
     c i16        ?? 2 bytes + 2 bytes padding
 }
 ?? Total size: 12 bytes (platform dependent)
+```
+
+**Unions** share memory between all fields:
+- All fields start at offset 0
+- Size is determined by the largest field
+- Alignment matches the most-aligned field
+- Compatible with C unions
+
+```zl
+union Value {
+    i i32,       ?? 4 bytes
+    f f32,       ?? 4 bytes
+    b bool       ?? 1 byte (padded to 4)
+}
+?? Total size: 4 bytes (all fields overlap)
+
+union Data {
+    small i32,          ?? 4 bytes
+    large arr<u8, 16>   ?? 16 bytes
+}
+?? Total size: 16 bytes (size of largest field)
 ```
 
 ---
@@ -990,6 +1022,46 @@ if buffer == null {
 ---
 
 ## Common Patterns
+
+### Tagged Unions
+
+Unions can be combined with a tag field to create safe discriminated unions:
+
+```zl
+union Value {
+    i i32,
+    f f32,
+    p ptr<u8>
+}
+
+struct TaggedValue {
+    tag u8,    ?? 0=int, 1=float, 2=pointer
+    data Value
+}
+
+fun print_value(tv: TaggedValue) >> void {
+    if tv.tag == 0 {
+        @printf("Integer: %d\n", tv.data.i);
+    } else if tv.tag == 1 {
+        @printf("Float: %f\n", tv.data.f);
+    } else if tv.tag == 2 {
+        @printf("Pointer: %p\n", tv.data.p);
+    }
+}
+
+fun main() >> i32 {
+    TaggedValue tv;
+    tv.tag = 0;
+    tv.data.i = 42;
+    print_value(tv);
+    
+    tv.tag = 1;
+    tv.data.f = 3.14;
+    print_value(tv);
+    
+    return 0;
+}
+```
 
 ### Option Type Simulation
 

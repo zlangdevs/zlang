@@ -523,7 +523,7 @@ pub const CodeGenerator = struct {
                                 else
                                     @as(c_uint, @intCast(idx));
                                 const field_ptr = try self.getStructFieldPointer(@ptrCast(struct_type), var_info.value, field_index);
-                                const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+                                const field_type = try structs.getFieldType(self, struct_type, field_index);
                                 const field_type_kind = c.LLVMGetTypeKind(field_type);
                                 if (field_val.value.data == .string_literal and field_type_kind == c.LLVMArrayTypeKind) {
                                     try self.assignStringLiteralToArrayField(field_ptr, @ptrCast(field_type), field_val.value.data.string_literal);
@@ -638,7 +638,7 @@ pub const CodeGenerator = struct {
                                 else
                                     @as(c_uint, @intCast(idx));
                                 const field_ptr = try self.getStructFieldPointer(struct_type, alloca, field_index);
-                                const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+                                const field_type = try structs.getFieldType(self, struct_type, field_index);
                                 const field_type_kind = c.LLVMGetTypeKind(field_type);
                                 if (field_val.value.data == .string_literal and field_type_kind == c.LLVMArrayTypeKind) {
                                     try self.assignStringLiteralToArrayField(field_ptr, field_type, field_val.value.data.string_literal);
@@ -2226,7 +2226,7 @@ pub const CodeGenerator = struct {
                         struct_ptr = temp_alloca;
                     }
                     const field_ptr = try self.getStructFieldPointer(@ptrCast(struct_type), @ptrCast(struct_ptr), field_index);
-                    const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+                    const field_type = try structs.getFieldType(self, struct_type, field_index);
                     const field_type_kind = c.LLVMGetTypeKind(field_type);
                     if (field_type_kind == c.LLVMArrayTypeKind) {
                         return @ptrCast(field_ptr);
@@ -2246,7 +2246,7 @@ pub const CodeGenerator = struct {
                                 const field_map = self.struct_fields.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
                                 const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
                                 const field_ptr = try self.getStructFieldPointer(@ptrCast(struct_type), @ptrCast(result_value), field_index);
-                                const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+                                const field_type = try structs.getFieldType(self, struct_type, field_index);
                                 const field_type_kind = c.LLVMGetTypeKind(field_type);
                                 if (field_type_kind == c.LLVMArrayTypeKind) {
                                     return @ptrCast(field_ptr);
@@ -2270,7 +2270,7 @@ pub const CodeGenerator = struct {
                             const field_map = self.struct_fields.get(struct_name) orelse return errors.CodegenError.TypeMismatch;
                             const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
                             const field_ptr = try self.getStructFieldPointer(struct_type, result_value, field_index);
-                            const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+                            const field_type = try structs.getFieldType(self, struct_type, field_index);
                             const field_type_kind = c.LLVMGetTypeKind(field_type);
                             if (field_type_kind == c.LLVMArrayTypeKind) {
                                 return field_ptr;

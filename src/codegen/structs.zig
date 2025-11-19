@@ -126,12 +126,12 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
             };
             const field_map = cg.struct_fields.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
             const field_index = field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable;
-            const field_count = c.LLVMCountStructElementTypes(struct_type);
-            if (field_index >= field_count) {
-                return errors.CodegenError.TypeMismatch;
-            }
+
             const field_ptr = try getStructFieldPointer(cg, struct_type, current_value, field_index);
-            const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+
+            // Get the actual field type (works for both structs and unions)
+            const field_type = try getFieldType(cg, struct_type, field_index);
+
             if (field_name_len < path.len) {
                 // There's more path to process after this field
                 const field_type_kind = c.LLVMGetTypeKind(field_type);
@@ -179,8 +179,42 @@ pub fn generateStructFieldAssignment(cg: *llvm.CodeGenerator, struct_name: []con
 }
 
 pub fn getStructFieldPointer(cg: *llvm.CodeGenerator, struct_type: c.LLVMTypeRef, struct_value: c.LLVMValueRef, field_index: c_uint) errors.CodegenError!c.LLVMValueRef {
-    var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), field_index, 0) };
-    return c.LLVMBuildGEP2(@ptrCast(cg.builder), struct_type, struct_value, &indices[0], 2, "struct_field_ptr");
+    // Check if this is a union by examining the struct name
+    const struct_name_ptr = c.LLVMGetStructName(struct_type);
+    var is_union = false;
+    if (struct_name_ptr) |name_ptr| {
+        const name = std.mem.sliceTo(name_ptr, 0);
+        if (cg.struct_declarations.get(name)) |decl| {
+            is_union = decl.is_union;
+        }
+    }
+
+    if (is_union) {
+        // For unions, all fields are at offset 0, just get pointer to the union body at index 0
+        var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0) };
+        const union_body_ptr = c.LLVMBuildGEP2(@ptrCast(cg.builder), struct_type, struct_value, &indices[0], 2, "union_body_ptr");
+        return union_body_ptr;
+    } else {
+        // For structs, use the actual field index
+        var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), field_index, 0) };
+        return c.LLVMBuildGEP2(@ptrCast(cg.builder), struct_type, struct_value, &indices[0], 2, "struct_field_ptr");
+    }
+}
+
+pub fn getFieldType(cg: *llvm.CodeGenerator, struct_type: c.LLVMTypeRef, field_index: c_uint) !c.LLVMTypeRef {
+    const struct_name_ptr = c.LLVMGetStructName(struct_type);
+    if (struct_name_ptr) |name_ptr| {
+        const name = std.mem.sliceTo(name_ptr, 0);
+        if (cg.struct_declarations.get(name)) |decl| {
+            if (decl.is_union) {
+                // For unions, get the actual field type from the declaration
+                if (field_index >= decl.fields.items.len) return errors.CodegenError.TypeMismatch;
+                return try utils.getLLVMType(cg, decl.fields.items[field_index].type_name);
+            }
+        }
+    }
+    // For regular structs, use LLVM's type info
+    return c.LLVMStructGetTypeAtIndex(struct_type, field_index);
 }
 
 pub fn assignToField(cg: *llvm.CodeGenerator, field_ptr: c.LLVMValueRef, field_type: c.LLVMTypeRef, value_expr: *ast.Node) errors.CodegenError!void {
@@ -301,12 +335,12 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
             };
             const field_map = cg.struct_fields.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
             const field_index = field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable;
-            const field_count = c.LLVMCountStructElementTypes(struct_type);
-            if (field_index >= field_count) {
-                return errors.CodegenError.TypeMismatch;
-            }
+
             const field_ptr = try getStructFieldPointer(cg, struct_type, current_value, field_index);
-            const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+
+            // Get the actual field type (works for both structs and unions)
+            const field_type = try getFieldType(cg, struct_type, field_index);
+
             if (dot_pos != null) {
                 const field_type_kind = c.LLVMGetTypeKind(field_type);
                 if (field_type_kind != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
@@ -349,14 +383,48 @@ pub fn generateStructType(cg: *llvm.CodeGenerator, struct_decl: ast.StructDecl) 
     var field_types = std.ArrayList(c.LLVMTypeRef){};
     defer field_types.deinit(cg.allocator);
     var field_map = std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(cg.allocator);
-    for (struct_decl.fields.items, 0..) |field, i| {
-        const field_type = try utils.getLLVMType(cg, field.type_name);
-        try field_types.append(cg.allocator, @ptrCast(field_type));
-        try field_map.put(field.name, @intCast(i));
+
+    if (struct_decl.is_union) {
+        // For unions, find the largest field type and use that as the body
+        var max_size: c_ulonglong = 0;
+        var max_align: c_uint = 1;
+        var largest_type: ?c.LLVMTypeRef = null;
+
+        for (struct_decl.fields.items, 0..) |field, i| {
+            const field_type = try utils.getLLVMType(cg, field.type_name);
+            const size = c.LLVMStoreSizeOfType(c.LLVMGetModuleDataLayout(cg.module), field_type);
+            const alignment = utils.getAlignmentForType(cg, field_type);
+
+            if (size > max_size or (size == max_size and alignment > max_align)) {
+                max_size = size;
+                max_align = alignment;
+                largest_type = field_type;
+            }
+
+            try field_map.put(field.name, @intCast(i));
+        }
+
+        // Union body is a single element of the largest type
+        if (largest_type) |lt| {
+            var union_body = [_]c.LLVMTypeRef{lt};
+            c.LLVMStructSetBody(struct_type, &union_body[0], 1, 0);
+        } else {
+            // Empty union - use i8
+            var union_body = [_]c.LLVMTypeRef{c.LLVMInt8TypeInContext(cg.context)};
+            c.LLVMStructSetBody(struct_type, &union_body[0], 1, 0);
+        }
+    } else {
+        // Regular struct - all fields laid out sequentially
+        for (struct_decl.fields.items, 0..) |field, i| {
+            const field_type = try utils.getLLVMType(cg, field.type_name);
+            try field_types.append(cg.allocator, @ptrCast(field_type));
+            try field_map.put(field.name, @intCast(i));
+        }
+
+        // Set the struct body with resolved field types
+        c.LLVMStructSetBody(struct_type, field_types.items.ptr, @intCast(field_types.items.len), 0);
     }
 
-    // Set the struct body with resolved field types
-    c.LLVMStructSetBody(struct_type, field_types.items.ptr, @intCast(field_types.items.len), 0);
     try cg.struct_fields.put(struct_decl.name, field_map);
 }
 
@@ -393,7 +461,10 @@ pub fn generateStructInitializer(cg: *llvm.CodeGenerator, struct_init: ast.Struc
         else
             @as(c_uint, @intCast(idx));
         const field_ptr = try getStructFieldPointer(cg, struct_type, struct_ptr, field_index);
-        const field_type = c.LLVMStructGetTypeAtIndex(struct_type, field_index);
+
+        // Get the actual field type (works for both structs and unions)
+        const field_type = try getFieldType(cg, struct_type, field_index);
+
         const field_type_kind = c.LLVMGetTypeKind(field_type);
         if (field_val.value.data == .string_literal and field_type_kind == c.LLVMArrayTypeKind) {
             try assignStringLiteralToArrayField(cg, field_ptr, field_type, field_val.value.data.string_literal);

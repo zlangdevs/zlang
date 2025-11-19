@@ -258,6 +258,7 @@ pub const StructField = struct {
 pub const StructDecl = struct {
     name: []const u8,
     fields: std.ArrayList(StructField),
+    is_union: bool = false,
 };
 
 pub const StructInitializer = struct {

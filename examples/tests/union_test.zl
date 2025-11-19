@@ -1,0 +1,68 @@
+union IntOrFloat {
+    i i32,
+    f f32
+}
+
+union Value {
+    byte u8,
+    word u16,
+    dword u32,
+    qword u64
+}
+
+struct Tagged {
+    tag u8,
+    value IntOrFloat
+}
+
+fun test_basic_union() >> void {
+    IntOrFloat u;
+    
+    u.i = 42;
+    @printf("(expected 42) As int: %d\n", u.i);
+    
+    u.f = 3.14;
+    @printf("(expected 3.14) As float: %f\n", u.f);
+}
+
+fun test_value_sizes() >> void {
+    Value v;
+    
+    v.dword = 0;
+    v.byte = 255;
+    @printf("(expected 255) byte: %u\n", v.byte);
+    
+    v.dword = 0x12345678;
+    @printf("(expected lower byte 120) byte: %u\n", v.byte);
+}
+
+fun test_tagged_union() >> void {
+    Tagged t;
+    
+    t.tag = 0;
+    t.value.i = 100;
+    
+    if t.tag == 0 {
+        @printf("(expected 100) Integer value: %d\n", t.value.i);
+    }
+    
+    t.tag = 1;
+    t.value.f = 2.718;
+    
+    if t.tag == 1 {
+        @printf("(expected 2.718) Float value: %f\n", t.value.f);
+    }
+}
+
+fun main() >> i32 {
+    @printf("=== Basic Union Test ===\n");
+    test_basic_union();
+    
+    @printf("\n=== Value Sizes Test ===\n");
+    test_value_sizes();
+    
+    @printf("\n=== Tagged Union Test ===\n");
+    test_tagged_union();
+    
+    return 0;
+}
