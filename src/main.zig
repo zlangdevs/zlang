@@ -159,13 +159,16 @@ fn getStdlibPath(alloc: std.mem.Allocator) ![]const u8 {
     }
 }
 
-fn resolveStdModule(module_name: []const u8, alloc: std.mem.Allocator) ?[]const u8 {
-    // module_name should be like "std.math" - extract the module part
+fn resolveStdModule(module_name: []const u8, alloc: std.mem.Allocator, has_zstdpath: *bool) ?[]const u8 {
     if (!std.mem.startsWith(u8, module_name, "std.")) {
         return null;
     }
-
-    const module_part = module_name[4..]; // Skip "std."
+    const module_part = module_name[4..];
+    has_zstdpath.* = if (std.process.getEnvVarOwned(alloc, "ZSTDPATH")) |path| blk: {
+        alloc.free(path);
+        break :blk true;
+    } else |_| false;
+    
     const stdlib_path = getStdlibPath(alloc) catch return null;
     defer alloc.free(stdlib_path);
 
@@ -187,12 +190,30 @@ fn resolveStdModule(module_name: []const u8, alloc: std.mem.Allocator) ?[]const 
 fn resolveModulePath(base_path: []const u8, module_name: []const u8, alloc: std.mem.Allocator) anyerror!?[]const u8 {
     // Check if this is a standard library import
     if (std.mem.startsWith(u8, module_name, "std.")) {
-        if (resolveStdModule(module_name, alloc)) |std_path| {
+        var has_zstdpath: bool = false;
+        if (resolveStdModule(module_name, alloc, &has_zstdpath)) |std_path| {
             return std_path;
         }
         // If std module resolution failed, print error and return null
         std.debug.print("\x1b[31mError:\x1b[0m Standard library module '\x1b[33m{s}\x1b[0m' not found.\n", .{module_name});
-        std.debug.print("  Searched in ZSTDPATH or stdlib/ directory.\n", .{});
+        
+        if (!has_zstdpath) {
+            std.debug.print("\x1b[33mHint:\x1b[0m The ZSTDPATH environment variable is not set.\n", .{});
+            std.debug.print("  Standard library modules are searched in the following locations:\n", .{});
+            std.debug.print("    1. The directory specified by ZSTDPATH (if set)\n", .{});
+            std.debug.print("    2. The stdlib/ directory next to the compiler binary\n", .{});
+            std.debug.print("\n", .{});
+            std.debug.print("  To fix this, set ZSTDPATH to point to your stdlib directory:\n", .{});
+            std.debug.print("    \x1b[36mexport ZSTDPATH=/path/to/zlang/stdlib\x1b[0m\n", .{});
+        } else {
+            std.debug.print("  Searched in ZSTDPATH or stdlib/ directory.\n", .{});
+            const stdlib_path = getStdlibPath(alloc) catch {
+                std.debug.print("  Could not determine stdlib path.\n", .{});
+                return null;
+            };
+            defer alloc.free(stdlib_path);
+            std.debug.print("  Searched in: \x1b[36m{s}\x1b[0m\n", .{stdlib_path});
+        }
         return null;
     }
 
