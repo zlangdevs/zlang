@@ -1,0 +1,27 @@
+fun main() >> i32 {
+    @printf("=== FizzBuzz Test ===\n");
+    
+    ?? Classic FizzBuzz: print numbers from 1 to 100
+    ?? - Print "Fizz" if divisible by 3
+    ?? - Print "Buzz" if divisible by 5
+    ?? - Print "FizzBuzz" if divisible by both 3 and 5
+    ?? - Otherwise print the number
+    
+    for i32 i = 1; i <= 100; i++ {
+        bool divisible_by_3 = (i % 3) == 0;
+        bool divisible_by_5 = (i % 5) == 0;
+        
+        if divisible_by_3 && divisible_by_5 {
+            @printf("FizzBuzz\n");
+        } else if divisible_by_3 {
+            @printf("Fizz\n");
+        } else if divisible_by_5 {
+            @printf("Buzz\n");
+        } else {
+            @printf("%d\n", i);
+        }
+    }
+    
+    @printf("\n=== FizzBuzz Complete! ===\n");
+    return 0;
+}
