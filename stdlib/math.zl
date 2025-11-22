@@ -1,23 +1,265 @@
+?? ZLang Standard Library - Math Module
+?? Comprehensive mathematical functions wrapping C math library
+
+?? ============================================================================
+?? Constants
+?? ============================================================================
+
+f64 PI = 3.141592653589793;
+f64 E = 2.718281828459045;
+f64 TAU = 6.283185307179586;  ?? 2 * PI
+f64 SQRT2 = 1.4142135623730951;
+f64 SQRT3 = 1.7320508075688772;
+f64 PHI = 1.618033988749895;  ?? Golden ratio
+
+?? ============================================================================
+?? Basic Mathematical Functions
+?? ============================================================================
+
 wrap @sqrt(x: f64) >> f64;
+wrap @cbrt(x: f64) >> f64;
 wrap @pow(base: f64, exp: f64) >> f64;
+wrap @exp(x: f64) >> f64;
+wrap @exp2(x: f64) >> f64;
+wrap @log(x: f64) >> f64;
+wrap @log10(x: f64) >> f64;
+wrap @log2(x: f64) >> f64;
+
+?? ============================================================================
+?? Trigonometric Functions
+?? ============================================================================
+
 wrap @sin(x: f64) >> f64;
 wrap @cos(x: f64) >> f64;
+wrap @tan(x: f64) >> f64;
+wrap @asin(x: f64) >> f64;
+wrap @acos(x: f64) >> f64;
+wrap @atan(x: f64) >> f64;
+wrap @atan2(y: f64, x: f64) >> f64;
+
+?? ============================================================================
+?? Hyperbolic Functions
+?? ============================================================================
+
+wrap @sinh(x: f64) >> f64;
+wrap @cosh(x: f64) >> f64;
+wrap @tanh(x: f64) >> f64;
+wrap @asinh(x: f64) >> f64;
+wrap @acosh(x: f64) >> f64;
+wrap @atanh(x: f64) >> f64;
+
+?? ============================================================================
+?? Rounding and Remainder Functions
+?? ============================================================================
+
+wrap @ceil(x: f64) >> f64;
+wrap @floor(x: f64) >> f64;
+wrap @round(x: f64) >> f64;
+wrap @trunc(x: f64) >> f64;
+wrap @fmod(x: f64, y: f64) >> f64;
+wrap @remainder(x: f64, y: f64) >> f64;
+
+?? ============================================================================
+?? Absolute Value and Sign Functions
+?? ============================================================================
+
 wrap @fabs(x: f64) >> f64;
+wrap @copysign(x: f64, y: f64) >> f64;
 
+?? ============================================================================
+?? Comparison and Classification Functions
+?? ============================================================================
+
+wrap @fmax(x: f64, y: f64) >> f64;
+wrap @fmin(x: f64, y: f64) >> f64;
+wrap @fdim(x: f64, y: f64) >> f64;
+
+?? ============================================================================
+?? Special Functions
+?? ============================================================================
+
+wrap @erf(x: f64) >> f64;
+wrap @erfc(x: f64) >> f64;
+wrap @tgamma(x: f64) >> f64;
+wrap @lgamma(x: f64) >> f64;
+
+?? ============================================================================
+?? Floating-Point Manipulation Functions
+?? ============================================================================
+
+wrap @ldexp(x: f64, exp: i32) >> f64;
+wrap @hypot(x: f64, y: f64) >> f64;
+
+?? ============================================================================
+?? Helper Functions
+?? ============================================================================
+
+?? Square of a number
 fun square(x: f64) >> f64 {
-    return pow(x, 2.0);
+    return x * x;
 }
 
+?? Cube of a number
 fun cube(x: f64) >> f64 {
-    return pow(x, 3.0);
+    return x * x * x;
 }
 
+?? Convert degrees to radians
+fun toRadians(degrees: f64) >> f64 {
+    return degrees * PI / 180.0;
+}
+
+?? Convert radians to degrees
+fun toDegrees(radians: f64) >> f64 {
+    return radians * 180.0 / PI;
+}
+
+?? Calculate Euclidean distance between two points in 2D space
 fun distance(x1: f64, y1: f64, x2: f64, y2: f64) >> f64 {
     f64 dx = x2 - x1;
     f64 dy = y2 - y1;
     return sqrt(dx * dx + dy * dy);
 }
 
-fun toRadians(degrees: f64) >> f64 {
-    return degrees * 3.141592653589793 / 180.0;
+?? Calculate Euclidean distance between two points in 3D space
+fun distance3D(x1: f64, y1: f64, z1: f64, x2: f64, y2: f64, z2: f64) >> f64 {
+    f64 dx = x2 - x1;
+    f64 dy = y2 - y1;
+    f64 dz = z2 - z1;
+    return sqrt(dx * dx + dy * dy + dz * dz);
 }
+
+?? Linear interpolation between two values
+fun lerp(a: f64, b: f64, t: f64) >> f64 {
+    return a + t * (b - a);
+}
+
+?? Clamp a value between min and max
+fun clamp(value: f64, min_val: f64, max_val: f64) >> f64 {
+    f64 result = fmax(min_val, fmin(value, max_val));
+    return result;
+}
+
+?? Check if a number is approximately equal to another (within epsilon)
+fun approxEqual(a: f64, b: f64, epsilon: f64) >> bool {
+    f64 diff = fabs(a - b);
+    f64 comparison = diff - epsilon;
+    bool result = comparison <= 0.0;
+    return result;
+}
+
+?? Calculate the sign of a number (-1, 0, or 1)
+fun signNum(x: f64) >> f64 {
+    if x > 0.0 {
+        return 1.0;
+    }
+    f64 negated = -x;
+    if negated > 0.0 {
+        return -1.0;
+    }
+    return 0.0;
+}
+
+?? Check if a number is a power of two
+fun isPowerOfTwo(n: i32) >> bool {
+    if n > 0 {
+        bool result = (n & (n - 1)) == 0;
+        return result;
+    }
+    return false;
+}
+
+?? Map a value from one range to another
+fun map(value: f64, in_min: f64, in_max: f64, out_min: f64, out_max: f64) >> f64 {
+    return (value - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
+?? Calculate the average of two numbers
+fun average(a: f64, b: f64) >> f64 {
+    return (a + b) / 2.0;
+}
+
+?? Calculate the geometric mean of two numbers
+fun geometricMean(a: f64, b: f64) >> f64 {
+    return sqrt(a * b);
+}
+
+?? Check if a value is in range [min, max]
+fun inRange(value: f64, min_val: f64, max_val: f64) >> bool {
+    return value >= min_val && value <= max_val;
+}
+
+?? Smooth step interpolation (Hermite interpolation)
+fun smoothstep(edge0: f64, edge1: f64, x: f64) >> f64 {
+    f64 t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+?? ============================================================================
+?? Helper functions for integer math
+?? ============================================================================
+
+?? Calculate the greatest common divisor (GCD) using Euclidean algorithm (recursive)
+fun gcd(a: i32, b: i32) >> i32 {
+    i32 temp_a = a;
+    i32 temp_b = b;
+    
+    i32 neg_a = -temp_a;
+    if neg_a > 0 {
+        temp_a = neg_a;
+    }
+    i32 neg_b = -temp_b;
+    if neg_b > 0 {
+        temp_b = neg_b;
+    }
+    
+    if temp_b == 0 {
+        return temp_a;
+    }
+    i32 remainder = temp_a % temp_b;
+    return gcd(temp_b, remainder);
+}
+
+?? Calculate the least common multiple (LCM)
+fun lcm(a: i32, b: i32) >> i32 {
+    if a == 0 || b == 0 {
+        return 0;
+    }
+    i32 a_abs = a;
+    i32 b_abs = b;
+    i32 neg_a = -a_abs;
+    if neg_a > 0 {
+        a_abs = neg_a;
+    }
+    i32 neg_b = -b_abs;
+    if neg_b > 0 {
+        b_abs = neg_b;
+    }
+    i32 result = (a_abs / gcd(a_abs, b_abs)) * b_abs;
+    return result;
+}
+
+?? Calculate nth Fibonacci number (recursive - avoids parser issues with for loops)
+fun fibonacci(n: i32) >> i64 {
+    if n > 1 {
+        i64 fib_n1 = fibonacci(n - 1);
+        i64 fib_n2 = fibonacci(n - 2);
+        return fib_n1 + fib_n2;
+    }
+    if n == 1 {
+        return 1;
+    }
+    return 0;
+}
+
+?? Calculate factorial (integer version) - recursive to avoid parser issues
+fun factorial(n: i32) >> i64 {
+    if n < 2 {
+        return 1;
+    }
+    i64 n64 = n;
+    i64 prev = factorial(n - 1);
+    i64 result = n64 * prev;
+    return result;
+}
+
