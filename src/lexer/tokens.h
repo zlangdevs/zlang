@@ -61,5 +61,6 @@ int zlang_lex_init(void **scanner);
 int zlang_lex_destroy(void *scanner);
 int zlang_lex(void *scanner);
 char *zlang_get_text(void *scanner);
+void zlang_reset_lexer_state(void);
 
 #endif
