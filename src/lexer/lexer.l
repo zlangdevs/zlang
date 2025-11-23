@@ -7,6 +7,12 @@ extern YYSTYPE yylval;
 static int template_depth = 0;
 static int last_was_identifier = 0;
 static int last_was_rparen = 0;
+
+void zlang_reset_lexer_state(void) {
+    template_depth = 0;
+    last_was_identifier = 0;
+    last_was_rparen = 0;
+}
 %}
 
 %option noyywrap

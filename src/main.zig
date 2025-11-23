@@ -168,7 +168,7 @@ fn resolveStdModule(module_name: []const u8, alloc: std.mem.Allocator, has_zstdp
         alloc.free(path);
         break :blk true;
     } else |_| false;
-    
+
     const stdlib_path = getStdlibPath(alloc) catch return null;
     defer alloc.free(stdlib_path);
 
@@ -196,7 +196,7 @@ fn resolveModulePath(base_path: []const u8, module_name: []const u8, alloc: std.
         }
         // If std module resolution failed, print error and return null
         std.debug.print("\x1b[31mError:\x1b[0m Standard library module '\x1b[33m{s}\x1b[0m' not found.\n", .{module_name});
-        
+
         if (!has_zstdpath) {
             std.debug.print("\x1b[33mHint:\x1b[0m The ZSTDPATH environment variable is not set.\n", .{});
             std.debug.print("  Standard library modules are searched in the following locations:\n", .{});

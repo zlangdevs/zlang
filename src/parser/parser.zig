@@ -16,6 +16,7 @@ extern fn zlang_set_in(file: ?*anyopaque, scanner: ?*anyopaque) void;
 extern fn fmemopen(buffer: [*c]const u8, size: usize, mode: [*c]const u8) ?*anyopaque;
 extern fn fclose(file: ?*anyopaque) c_int;
 extern fn zlang_get_lineno(scanner: ?*anyopaque) c_int;
+extern fn zlang_reset_lexer_state() void;
 
 // Global variables used by Bison parser
 export var current_scanner: ?*anyopaque = null;
@@ -1092,6 +1093,9 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!
         return errors.ParseError.LexerInitFailed;
     }
     defer _ = zlang_lex_destroy(current_scanner);
+
+    // Reset lexer state to avoid pollution from previous parses
+    zlang_reset_lexer_state();
 
     // Create null-terminated input
     const null_terminated_input = try allocator.dupeZ(u8, input);
