@@ -6,6 +6,7 @@ extern fn zlang_lex_destroy(scanner: ?*anyopaque) c_int;
 extern fn zlang_lex(scanner: ?*anyopaque) c_int;
 extern fn zlang_get_text(scanner: ?*anyopaque) [*c]u8;
 extern fn zlang_set_in(file: ?*anyopaque, scanner: ?*anyopaque) void;
+extern fn zlang_reset_lexer_state() void;
 
 extern fn fmemopen(buffer: [*c]const u8, size: usize, mode: [*c]const u8) ?*anyopaque;
 extern fn fclose(file: ?*anyopaque) c_int;
@@ -116,6 +117,7 @@ pub fn tokenize(allocator: std.mem.Allocator, input: []const u8) errors.Tokenize
         return errors.TokenizeError.LexerInitFailed;
     }
     defer _ = zlang_lex_destroy(scanner);
+    zlang_reset_lexer_state();
     const null_terminated_input = utils.dupeZ(allocator, input);
     defer allocator.free(null_terminated_input);
     const file = fmemopen(null_terminated_input.ptr, input.len, "r");
