@@ -5,6 +5,7 @@ const parser = @import("parser/parser.zig");
 const ast = @import("parser/ast.zig");
 const codegen = @import("codegen/llvm.zig");
 const utils = @import("codegen/utils.zig");
+const diagnostics = @import("diagnostics.zig");
 
 const allocator = std.heap.page_allocator;
 
@@ -238,7 +239,13 @@ fn parseModuleFile(file_path: []const u8, alloc: std.mem.Allocator) !ModuleInfo 
     const ast_root = parser.parse(alloc, input) catch |err| {
         const loc = parser.lastParseErrorLocation();
         if (loc) |l| {
-            std.debug.print("Parse error at {s}:{d}:{d}: {}\n", .{ file_path, l.line, l.column, err });
+            diagnostics.printDiagnostic(alloc, .{
+                .file_path = file_path,
+                .line = l.line,
+                .column = l.column,
+                .message = "Parse error",
+                .severity = .Error,
+            });
         } else {
             std.debug.print("Error parsing file {s}: {}\n", .{ file_path, err });
         }
@@ -849,14 +856,8 @@ pub fn main() !u8 {
     };
     defer ctx.deinit(allocator);
 
-    const ast_root = parseMultiFile(&ctx, allocator) catch |err| {
-        const loc = parser.lastParseErrorLocation();
-        if (loc) |l| {
-            const file_hint = if (ctx.input_files.items.len > 0) ctx.input_files.items[0] else "<unknown>";
-            std.debug.print("Parse error at {s}:{d}:{d}: {}\n", .{ file_hint, l.line, l.column, err });
-        } else {
-            std.debug.print("Error parsing files: {}\n", .{err});
-        }
+    const ast_root = parseMultiFile(&ctx, allocator) catch {
+        // Error already reported in parseModuleFile
         return 1;
     };
 
@@ -891,7 +892,7 @@ pub fn main() !u8 {
                 var dep_slices = std.ArrayList([]const u8){};
                 defer dep_slices.deinit(allocator);
                 for (deps.items) |d| dep_slices.append(allocator, d) catch {};
-                code_generator.registerModule(name_no_ext, dep_slices.items) catch {};
+                code_generator.registerModule(name_no_ext, input_file, dep_slices.items) catch {};
                 switch (root.data) {
                     .program => |prog| {
                         for (prog.functions.items) |fn_node| {
