@@ -11,6 +11,7 @@ const numeric = @import("numeric.zig");
 const array = @import("array.zig");
 const simd = @import("simd.zig");
 const enums = @import("enums.zig");
+const diagnostics = @import("../diagnostics.zig");
 
 const c_bindings = @import("c_bindings.zig");
 const c = c_bindings.c;
@@ -41,6 +42,7 @@ pub const CodeGenerator = struct {
     label_blocks: std.HashMap([]const u8, c.LLVMBasicBlockRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     pending_gotos: std.ArrayList(structs.PendingGoto),
     current_line: usize,
+    module_paths: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
 
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
         _ = c.LLVMInitializeNativeTarget();
@@ -84,6 +86,7 @@ pub const CodeGenerator = struct {
             .label_blocks = std.HashMap([]const u8, c.LLVMBasicBlockRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .pending_gotos = std.ArrayList(structs.PendingGoto){},
             .current_line = 0,
+            .module_paths = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
         };
     }
 
@@ -110,6 +113,12 @@ pub const CodeGenerator = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.module_dependencies.deinit();
+        var paths_it = self.module_paths.iterator();
+        while (paths_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.module_paths.deinit();
         self.function_to_module.deinit();
         for (self.variable_scopes.items) |*scope| {
             scope.deinit();
@@ -120,12 +129,31 @@ pub const CodeGenerator = struct {
         c.LLVMContextDispose(self.context);
     }
 
-    pub fn registerModule(self: *CodeGenerator, module_name: []const u8, deps: []const []const u8) !void {
+    pub fn registerModule(self: *CodeGenerator, module_name: []const u8, full_path: []const u8, deps: []const []const u8) !void {
         var list = std.ArrayList([]const u8){};
         for (deps) |d| {
             try list.append(self.allocator, utils.dupe(u8, self.allocator, d));
         }
         try self.module_dependencies.put(utils.dupe(u8, self.allocator, module_name), list);
+        try self.module_paths.put(utils.dupe(u8, self.allocator, module_name), utils.dupe(u8, self.allocator, full_path));
+    }
+
+    fn reportError(self: *CodeGenerator, message: []const u8, hint: ?[]const u8) void {
+        const file_path = if (self.module_paths.get(self.current_module_name)) |p| p else "unknown";
+        diagnostics.printDiagnostic(self.allocator, .{
+            .file_path = file_path,
+            .line = self.current_line,
+            .column = 0,
+            .message = message,
+            .hint = hint,
+            .severity = .Error,
+        });
+    }
+
+    fn reportErrorFmt(self: *CodeGenerator, comptime fmt: []const u8, args: anytype, hint: ?[]const u8) void {
+        const msg = std.fmt.allocPrint(self.allocator, fmt, args) catch return;
+        defer self.allocator.free(msg);
+        self.reportError(msg, hint);
     }
 
     pub fn registerFunctionModule(self: *CodeGenerator, func_name: []const u8, module_name: []const u8) !void {
@@ -366,9 +394,9 @@ pub const CodeGenerator = struct {
 
         if (var_info.is_const) {
             if (self.current_line > 0) {
-                std.debug.print("Error at line {d}: Cannot reassign const variable '{s}'\n", .{ self.current_line, ident.name });
+                self.reportErrorFmt("Cannot reassign const variable '{s}'", .{ident.name}, "Variable is declared as const");
             } else {
-                std.debug.print("Error: Cannot reassign const variable '{s}'\n", .{ident.name});
+                self.reportErrorFmt("Cannot reassign const variable '{s}'", .{ident.name}, "Variable is declared as const");
             }
             return errors.CodegenError.ConstReassignment;
         }
@@ -472,9 +500,9 @@ pub const CodeGenerator = struct {
                                 if (CodeGenerator.getVariable(self, ptr_name)) |var_info| {
                                     if (utils.isConstPointer(var_info.type_name)) {
                                         if (self.current_line > 0) {
-                                            std.debug.print("Error at line {d}: Cannot modify value through pointer to const '{s}'\n", .{ self.current_line, ptr_name });
+                                            self.reportErrorFmt("Cannot modify value through pointer to const '{s}'", .{ptr_name}, "Pointer points to a const value");
                                         } else {
-                                            std.debug.print("Error: Cannot modify value through pointer to const '{s}'\n", .{ptr_name});
+                                            self.reportErrorFmt("Cannot modify value through pointer to const '{s}'", .{ptr_name}, "Pointer points to a const value");
                                         }
                                         return errors.CodegenError.ConstReassignment;
                                     }
@@ -494,9 +522,9 @@ pub const CodeGenerator = struct {
                             const struct_init = as.value.data.struct_initializer;
                             const struct_type = self.struct_types.get(struct_init.struct_name) orelse {
                                 if (self.current_line > 0) {
-                                    std.debug.print("Error at line {d}: Unknown struct type '{s}'\n", .{ self.current_line, struct_init.struct_name });
+                                    self.reportErrorFmt("Unknown struct type '{s}'", .{struct_init.struct_name}, "Struct type must be declared before use");
                                 } else {
-                                    std.debug.print("Error: Unknown struct type '{s}'\n", .{struct_init.struct_name});
+                                    self.reportErrorFmt("Unknown struct type '{s}'", .{struct_init.struct_name}, "Struct type must be declared before use");
                                 }
                                 return errors.CodegenError.TypeMismatch;
                             };
@@ -577,9 +605,9 @@ pub const CodeGenerator = struct {
                 if (std.mem.eql(u8, decl.type_name, "void")) {
                     if (decl.initializer != null) {
                         if (self.current_line > 0) {
-                            std.debug.print("Error at line {d}: Cannot initialize void variable\n", .{self.current_line});
+                            self.reportError("Cannot initialize void variable", "Void variables cannot hold values");
                         } else {
-                            std.debug.print("Error: Cannot initialize void variable\n", .{});
+                            self.reportError("Cannot initialize void variable", "Void variables cannot hold values");
                         }
                         return errors.CodegenError.TypeMismatch;
                     }
@@ -610,9 +638,9 @@ pub const CodeGenerator = struct {
                             const struct_init = initializer.data.struct_initializer;
                             const struct_type = self.struct_types.get(struct_init.struct_name) orelse {
                                 if (self.current_line > 0) {
-                                    std.debug.print("Error at line {d}: Unknown struct type '{s}'\n", .{ self.current_line, struct_init.struct_name });
+                                    self.reportErrorFmt("Unknown struct type '{s}'", .{struct_init.struct_name}, "Struct type must be declared before use");
                                 } else {
-                                    std.debug.print("Error: Unknown struct type '{s}'\n", .{struct_init.struct_name});
+                                    self.reportErrorFmt("Unknown struct type '{s}'", .{struct_init.struct_name}, "Struct type must be declared before use");
                                 }
                                 return errors.CodegenError.TypeMismatch;
                             };
@@ -717,9 +745,9 @@ pub const CodeGenerator = struct {
                                 if (CodeGenerator.getVariable(self, ptr_name)) |var_info| {
                                     if (utils.isConstPointer(var_info.type_name)) {
                                         if (self.current_line > 0) {
-                                            std.debug.print("Error at line {d}: Cannot modify value through pointer to const '{s}'\n", .{ self.current_line, ptr_name });
+                                            self.reportErrorFmt("Cannot modify value through pointer to const '{s}'", .{ptr_name}, "Pointer points to a const value");
                                         } else {
-                                            std.debug.print("Error: Cannot modify value through pointer to const '{s}'\n", .{ptr_name});
+                                            self.reportErrorFmt("Cannot modify value through pointer to const '{s}'", .{ptr_name}, "Pointer points to a const value");
                                         }
                                         return errors.CodegenError.ConstReassignment;
                                     }
@@ -764,9 +792,9 @@ pub const CodeGenerator = struct {
 
                         if (var_info.is_const) {
                             if (self.current_line > 0) {
-                                std.debug.print("Error at line {d}: Cannot reassign const variable '{s}'\n", .{ self.current_line, ident.name });
+                                self.reportErrorFmt("Cannot reassign const variable '{s}'", .{ident.name}, "Variable is declared as const");
                             } else {
-                                std.debug.print("Error: Cannot reassign const variable '{s}'\n", .{ident.name});
+                                self.reportErrorFmt("Cannot reassign const variable '{s}'", .{ident.name}, "Variable is declared as const");
                             }
                             return errors.CodegenError.ConstReassignment;
                         }
@@ -1508,6 +1536,25 @@ pub const CodeGenerator = struct {
                 if (CodeGenerator.getVariable(self, var_name.name)) |var_info| {
                     source_type_name = var_info.type_name;
                 }
+            } else if (vn.data == .qualified_identifier) {
+                const qual_id = vn.data.qualified_identifier;
+                if (qual_id.base.data == .identifier) {
+                    const base_name = qual_id.base.data.identifier.name;
+                    if (CodeGenerator.getVariable(self, base_name)) |base_var| {
+                        if (std.mem.startsWith(u8, base_var.type_name, "ptr<") and std.mem.endsWith(u8, base_var.type_name, ">")) {
+                            const inner_type_name = base_var.type_name[4 .. base_var.type_name.len - 1];
+                            const struct_decl = self.struct_declarations.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
+                            const field_map = self.struct_fields.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
+                            const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
+                            source_type_name = struct_decl.fields.items[field_index].type_name;
+                        } else {
+                            const struct_decl = self.struct_declarations.get(base_var.type_name) orelse return errors.CodegenError.TypeMismatch;
+                            const field_map = self.struct_fields.get(base_var.type_name) orelse return errors.CodegenError.TypeMismatch;
+                            const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
+                            source_type_name = struct_decl.fields.items[field_index].type_name;
+                        }
+                    }
+                }
             } else if (vn.data == .cast) {
                 const cst = vn.data.cast;
                 if (cst.auto) {
@@ -1578,7 +1625,15 @@ pub const CodeGenerator = struct {
             }
         }
 
-        return val;
+        const from_name = self.getTypeNameFromLLVMType(@ptrCast(from_ty));
+        const to_name = self.getTypeNameFromLLVMType(@ptrCast(target_type));
+
+        if (value_node) |_| {
+            self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
+        } else {
+            self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
+        }
+        return errors.CodegenError.TypeMismatch;
     }
 
     fn floatBitWidth(ty: c.LLVMTypeRef) usize {
@@ -1724,10 +1779,10 @@ pub const CodeGenerator = struct {
         const from_name = self.getTypeNameFromLLVMType(@ptrCast(from_ty));
         const to_name = self.getTypeNameFromLLVMType(@ptrCast(target_type));
 
-        if (value_node) |vn3| {
-            std.debug.print("Type mismatch at line {d}: cannot convert {s} to {s}\n", .{ vn3.line, from_name, to_name });
+        if (value_node) |_| {
+            self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
         } else {
-            std.debug.print("Type mismatch: cannot convert {s} to {s}\n", .{ from_name, to_name });
+            self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
         }
         return errors.CodegenError.TypeMismatch;
     }
