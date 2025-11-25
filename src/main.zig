@@ -6,6 +6,7 @@ const ast = @import("parser/ast.zig");
 const codegen = @import("codegen/llvm.zig");
 const utils = @import("codegen/utils.zig");
 const diagnostics = @import("diagnostics.zig");
+const help = @import("help.zig");
 
 const allocator = std.heap.page_allocator;
 
@@ -440,7 +441,7 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                 } else if (std.mem.startsWith(u8, flag, "-Wl,")) {
                     // Pass through linker options like -Wl,-rpath,/path or others
                     try context.extra_args.append(allocator, flag);
-                } else if (std.mem.eql(u8, flag, "-help")) {
+                } else if (std.mem.eql(u8, flag, "-help") or std.mem.eql(u8, flag, "--help")) {
                     return errors.CLIError.NoHelp;
                 } else {
                     // Forward any other unknown flags directly to clang/linker
@@ -809,8 +810,16 @@ pub fn main() !u8 {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
     if (args.len < 2) {
-        std.debug.print("Usage: zlang <path to file or directory>", .{});
+        help.printHelp();
         return 1;
+    }
+    if (std.mem.eql(u8, args[1], "help")) {
+        if (args.len > 2 and std.mem.eql(u8, args[2], "syntax")) {
+            help.printHelpSyntax();
+        } else {
+            help.printHelp();
+        }
+        return 0;
     }
     if (std.mem.eql(u8, args[1], "wrap")) {
         if (args.len < 5) {
@@ -848,7 +857,10 @@ pub fn main() !u8 {
             errors.CLIError.NoOutputPath => "No output path specified after -o",
             errors.CLIError.NoArch => "No target specified after -arch",
             errors.CLIError.InvalidArgument => "Unrecognized argument",
-            errors.CLIError.NoHelp => "Ahahahha, help message? I won't help you",
+            errors.CLIError.NoHelp => {
+                help.printHelp();
+                return 0;
+            },
             else => "Unknown error while parsing arguments",
         };
         std.debug.print("{s}\n", .{error_msg});
