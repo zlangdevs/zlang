@@ -25,12 +25,18 @@ pub fn printLogo() void {
         \\
     , .{
         cyan,
-        green, cyan,
-        green, cyan,
-        green, cyan,
-        green, cyan,
-        green, cyan,
-        green, cyan,
+        green,
+        cyan,
+        green,
+        cyan,
+        green,
+        cyan,
+        green,
+        cyan,
+        green,
+        cyan,
+        green,
+        cyan,
         reset,
     });
 }
@@ -47,9 +53,7 @@ pub fn printHelp() void {
         \\
     , .{
         bold, reset, green, reset, yellow, reset,
-        bold, reset,
-        cyan, reset,
-        cyan, reset,
+        bold, reset, cyan,  reset, cyan,   reset,
         cyan, reset,
     });
 
@@ -66,7 +70,7 @@ pub fn printHelp() void {
         \\  {s}-L<path>{s}     Add library search path
         \\
     , .{
-        bold, reset,
+        bold,   reset,
         yellow, reset,
         yellow, reset,
         yellow, reset,
@@ -88,7 +92,8 @@ pub fn printHelp() void {
         \\
     , .{
         bold, reset,
-        bold, reset, blue, reset,
+        bold, reset,
+        blue, reset,
     });
 }
 

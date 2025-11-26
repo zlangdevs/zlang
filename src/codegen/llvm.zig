@@ -449,7 +449,6 @@ pub const CodeGenerator = struct {
     pub fn generateCode(self: *CodeGenerator, program: *ast.Node) errors.CodegenError!void {
         switch (program.data) {
             .program => |prog| {
-                for (prog.globals.items) |glob| try self.generateGlobalDeclaration(glob);
                 for (prog.functions.items) |func| {
                     if (func.data == .enum_decl) {
                         try enums.generateEnumDeclaration(self, func.data.enum_decl);
@@ -461,6 +460,7 @@ pub const CodeGenerator = struct {
                         try self.declareFunction(func.data.function);
                     }
                 }
+                for (prog.globals.items) |glob| try self.generateGlobalDeclaration(glob);
                 for (prog.functions.items) |func| {
                     if (func.data == .function) try self.generateFunctionBody(func.data.function);
                 }

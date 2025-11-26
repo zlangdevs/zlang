@@ -1,0 +1,17 @@
+fun main() >> i32 {
+    i32 res = foo();
+    @printf("foo() (expected 10):%d\n", res);
+    
+    i32 res2 = bar(5);
+    @printf("bar(5) (expected 25):%d\n", res2);
+    
+    return 0;
+}
+
+fun foo() >> i32 {
+    return 10;
+}
+
+fun bar(x: i32) >> i32 {
+    return x * x;
+}
