@@ -61,9 +61,9 @@ pub fn printDiagnostic(allocator: std.mem.Allocator, diag: Diagnostic) void {
     if (getLineContent(allocator, diag.file_path, diag.line) catch null) |line_content| {
         defer allocator.free(line_content);
         const trimmed_line = std.mem.trimRight(u8, line_content, "\r");
-        
+
         std.debug.print("{s}    |{s}\n", .{ blue, reset });
-        
+
         std.debug.print("{s}{d:3} |{s} {s}\n", .{ blue, diag.line, reset, trimmed_line });
 
         var col = diag.column;
@@ -77,18 +77,18 @@ pub fn printDiagnostic(allocator: std.mem.Allocator, diag: Diagnostic) void {
         }
 
         std.debug.print("{s}    |{s} ", .{ blue, reset });
-        
+
         var i: usize = 1;
         while (i < col) : (i += 1) {
             std.debug.print(" ", .{});
         }
-        
+
         std.debug.print("{s}{s}", .{ bold, color });
         i = 0;
         while (i < len) : (i += 1) {
             std.debug.print("^", .{});
         }
-        
+
         if (diag.hint) |hint| {
             std.debug.print(" {s}", .{hint});
         }
