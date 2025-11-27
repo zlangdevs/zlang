@@ -3242,13 +3242,62 @@ pub const CodeGenerator = struct {
         defer arena_alloc.free(ir_file);
         try self.writeToFile(ir_file);
 
-        var clang_args_list = std.ArrayList([]const u8){};
-        try clang_args_list.appendSlice(arena_alloc, &[_][]const u8{ "clang", ir_file, "-o", output, "-lc" });
+        const obj_file = try std.fmt.allocPrint(arena_alloc, "{s}.o", .{output});
+        defer arena_alloc.free(obj_file);
+
+        if (optimize) {
+            var opt_args_list = std.ArrayList([]const u8){};
+            try opt_args_list.appendSlice(arena_alloc, &[_][]const u8{
+                "opt",
+                "-O3",
+                ir_file,
+                "-o",
+                ir_file,
+            });
+
+            var opt_child_process = std.process.Child.init(opt_args_list.items, arena_alloc);
+            opt_child_process.stdout_behavior = .Pipe;
+            opt_child_process.stderr_behavior = .Inherit;
+            try opt_child_process.spawn();
+
+            const result = try opt_child_process.wait();
+            if (result != .Exited or result.Exited != 0) {
+                return error.CompilationFailed;
+            }
+        }
+
+        var llc_args_list = std.ArrayList([]const u8){};
+        try llc_args_list.appendSlice(arena_alloc, &[_][]const u8{
+            "llc",
+            "-filetype=obj",
+            "-relocation-model=pic",
+            ir_file,
+            "-o",
+            obj_file,
+        });
+
+        if (optimize) {
+            try llc_args_list.append(arena_alloc, "-O3");
+        }
 
         if (arch.len != 0) {
-            const march_flag: []const u8 = try std.fmt.allocPrint(arena_alloc, "--target={s}", .{arch});
-            try clang_args_list.append(arena_alloc, march_flag);
+            const march_flag: []const u8 = try std.fmt.allocPrint(arena_alloc, "-mtriple={s}", .{arch});
+            try llc_args_list.append(arena_alloc, march_flag);
         }
+
+        var llc_child = std.process.Child.init(llc_args_list.items, arena_alloc);
+        llc_child.stdout_behavior = .Pipe;
+        llc_child.stderr_behavior = .Inherit;
+
+        try llc_child.spawn();
+        const llc_result = try llc_child.wait();
+
+        if (llc_result != .Exited or llc_result.Exited != 0) {
+            return error.CompilationFailed;
+        }
+
+        var clang_args_list = std.ArrayList([]const u8){};
+        try clang_args_list.appendSlice(arena_alloc, &[_][]const u8{ "clang", obj_file, "-o", output, "-lc" });
 
         for (link_objects) |obj| {
             try clang_args_list.append(arena_alloc, obj);
@@ -3258,57 +3307,23 @@ pub const CodeGenerator = struct {
             try clang_args_list.append(arena_alloc, "-lm");
         }
 
-        if (optimize) {
-            // Optimize llvm ir
-            var opt_args_list = std.ArrayList([]const u8){};
-            try opt_args_list.appendSlice(arena_alloc, &[_][]const u8{
-                "opt",
-                "-O3",
-                ir_file,
-                "-o",
-                ir_file, // Owerwrite previous one
-            });
-
-            var opt_child_process = std.process.Child.init(opt_args_list.items, arena_alloc);
-            opt_child_process.stdout_behavior = .Pipe;
-            opt_child_process.stderr_behavior = .Pipe;
-            try opt_child_process.spawn();
-
-            const result = try opt_child_process.wait();
-            if (result != .Exited or result.Exited != 0) {
-                if (opt_child_process.stderr) |s| {
-                    var buf: [4096]u8 = undefined;
-                    const n = s.read(&buf) catch 0;
-                    if (n > 0) std.debug.print("opt stderr: {s}\n", .{buf[0..n]});
-                }
-                return error.CompilationFailed;
-            }
-
-            try clang_args_list.append(arena_alloc, "-O3"); // Append additional flag to clang (+100% fps)
-        }
-
-        // Append additional arguments
         for (extra_flags) |ef| {
             try clang_args_list.append(arena_alloc, ef);
         }
 
-        var child = std.process.Child.init(clang_args_list.items, arena_alloc);
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
+        var clang_child = std.process.Child.init(clang_args_list.items, arena_alloc);
+        clang_child.stdout_behavior = .Pipe;
+        clang_child.stderr_behavior = .Inherit;
 
-        try child.spawn();
-        const result = try child.wait();
+        try clang_child.spawn();
+        const clang_result = try clang_child.wait();
 
-        if (!keep_ll and (result == .Exited and result.Exited == 0)) {
+        if (!keep_ll) {
             std.fs.cwd().deleteFile(ir_file) catch {};
         }
+        std.fs.cwd().deleteFile(obj_file) catch {};
 
-        if (result != .Exited or result.Exited != 0) {
-            if (child.stderr) |s| {
-                var buf: [8192]u8 = undefined;
-                const n = s.read(&buf) catch 0;
-                if (n > 0) std.debug.print("clang stderr: {s}\n", .{buf[0..n]});
-            }
+        if (clang_result != .Exited or clang_result.Exited != 0) {
             return error.CompilationFailed;
         }
     }
