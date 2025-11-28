@@ -3296,35 +3296,90 @@ pub const CodeGenerator = struct {
             return error.CompilationFailed;
         }
 
-        var clang_args_list = std.ArrayList([]const u8){};
-        try clang_args_list.appendSlice(arena_alloc, &[_][]const u8{ "clang", obj_file, "-o", output, "-lc" });
+        // Try to link with ld.lld first
+        var lld_success = false;
+        const crt1_exists = blk: {
+            std.fs.cwd().access("/usr/lib/crt1.o", .{}) catch break :blk false;
+            break :blk true;
+        };
 
-        for (link_objects) |obj| {
-            try clang_args_list.append(arena_alloc, obj);
+        if (crt1_exists) {
+            var lld_args_list = std.ArrayList([]const u8){};
+            try lld_args_list.appendSlice(arena_alloc, &[_][]const u8{
+                "ld.lld",
+                "-o",
+                output,
+                "-dynamic-linker",
+                "/lib64/ld-linux-x86-64.so.2",
+                "-L/usr/lib",
+                "-L/lib64",
+                "-L/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1",
+                "/usr/lib/crt1.o",
+                "/usr/lib/crti.o",
+                obj_file,
+            });
+
+            for (link_objects) |obj| {
+                try lld_args_list.append(arena_alloc, obj);
+            }
+
+            for (extra_flags) |ef| {
+                try lld_args_list.append(arena_alloc, ef);
+            }
+
+            try lld_args_list.append(arena_alloc, "-lc");
+            try lld_args_list.append(arena_alloc, "-lgcc");
+
+            if (self.uses_float_modulo) {
+                try lld_args_list.append(arena_alloc, "-lm");
+            }
+
+            try lld_args_list.append(arena_alloc, "/usr/lib/crtn.o");
+
+            var lld_child = std.process.Child.init(lld_args_list.items, arena_alloc);
+            lld_child.stdout_behavior = .Pipe;
+            lld_child.stderr_behavior = .Inherit;
+
+            try lld_child.spawn();
+            const lld_result = try lld_child.wait();
+
+            if (lld_result == .Exited and lld_result.Exited == 0) {
+                lld_success = true;
+            }
         }
 
-        if (self.uses_float_modulo) {
-            try clang_args_list.append(arena_alloc, "-lm");
+        if (!lld_success) {
+            // Fallback to clang
+            var clang_args_list = std.ArrayList([]const u8){};
+            try clang_args_list.appendSlice(arena_alloc, &[_][]const u8{ "clang", obj_file, "-o", output, "-lc" });
+
+            for (link_objects) |obj| {
+                try clang_args_list.append(arena_alloc, obj);
+            }
+
+            if (self.uses_float_modulo) {
+                try clang_args_list.append(arena_alloc, "-lm");
+            }
+
+            for (extra_flags) |ef| {
+                try clang_args_list.append(arena_alloc, ef);
+            }
+
+            var clang_child = std.process.Child.init(clang_args_list.items, arena_alloc);
+            clang_child.stdout_behavior = .Pipe;
+            clang_child.stderr_behavior = .Inherit;
+
+            try clang_child.spawn();
+            const clang_result = try clang_child.wait();
+
+            if (clang_result != .Exited or clang_result.Exited != 0) {
+                return error.CompilationFailed;
+            }
         }
-
-        for (extra_flags) |ef| {
-            try clang_args_list.append(arena_alloc, ef);
-        }
-
-        var clang_child = std.process.Child.init(clang_args_list.items, arena_alloc);
-        clang_child.stdout_behavior = .Pipe;
-        clang_child.stderr_behavior = .Inherit;
-
-        try clang_child.spawn();
-        const clang_result = try clang_child.wait();
 
         if (!keep_ll) {
             std.fs.cwd().deleteFile(ir_file) catch {};
         }
         std.fs.cwd().deleteFile(obj_file) catch {};
-
-        if (clang_result != .Exited or clang_result.Exited != 0) {
-            return error.CompilationFailed;
-        }
     }
 };
