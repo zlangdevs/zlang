@@ -1,5 +1,11 @@
+use std.time
+
 wrap @srand(seed: u32) >> void;
 wrap @rand() >> i32;
+
+fun seed() >> void {
+    srand(now() as u32);
+}
 
 fun randRange(min: i32, max: i32) >> i32 {
     if (max < min) {
@@ -7,4 +13,46 @@ fun randRange(min: i32, max: i32) >> i32 {
     }
     i32 range = max - min + 1;
     return min + (rand() % range);
+}
+
+fun randFloat() >> f64 {
+    return (rand() as f64) / 2147483647.0;
+}
+
+fun randBool() >> bool {
+    return (rand() % 2) == 1;
+}
+
+struct XorShift {
+    state u32
+}
+
+fun xorShiftInit(seed: u32) >> XorShift {
+    XorShift rng;
+    rng.state = seed;
+    if (rng.state == 0) {
+        rng.state = 123456789;
+    }
+    return rng;
+}
+
+fun xorShiftNext(rng: XorShift) >> u32 {
+    u32 x = rng.state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    rng.state = x;
+    return x;
+}
+
+fun xorShiftRange(rng: XorShift, min: i32, max: i32) >> i32 {
+     if (max < min) {
+        return min;
+    }
+    u32 range = (max - min + 1) as u32;
+    return min + ((xorShiftNext(rng) % range) as i32);
+}
+
+fun xorShiftFloat(rng: XorShift) >> f64 {
+    return (xorShiftNext(rng) as f64) / 4294967295.0;
 }

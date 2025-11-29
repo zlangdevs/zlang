@@ -1,0 +1,29 @@
+use std.random
+use std.time
+
+fun main() >> i32 {
+    if (1 < 2) {
+        @printf("If works\n");
+    }
+    @printf("=== Random Demo ===\n");
+    
+    seed();
+    @printf("Seeded with time.\n");
+
+    @printf("randRange(1, 100): %d\n", randRange(1, 100));
+    @printf("randFloat(): %f\n", randFloat());
+    @printf("randBool(): %d\n", randBool());
+
+    @printf("\n=== XorShift Demo ===\n");
+    XorShift rng = xorShiftInit(12345);
+    @printf("XorShift initialized with 12345.\n");
+    
+    for i32 i = 0; i < 5; i++ {
+        @printf("xorShiftNext: %u\n", xorShiftNext(rng));
+    }
+    
+    @printf("xorShiftRange(10, 20): %d\n", xorShiftRange(rng, 10, 20));
+    @printf("xorShiftFloat(): %f\n", xorShiftFloat(rng));
+
+    return 0;
+}
