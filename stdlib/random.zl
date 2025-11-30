@@ -36,7 +36,7 @@ fun xorShiftInit(seed: u32) >> XorShift {
     return rng;
 }
 
-fun xorShiftNext(rng: XorShift) >> u32 {
+fun xorShiftNext(rng: ptr<XorShift>) >> u32 {
     u32 x = rng.state;
     x ^= x << 13;
     x ^= x >> 17;
@@ -45,14 +45,12 @@ fun xorShiftNext(rng: XorShift) >> u32 {
     return x;
 }
 
-fun xorShiftRange(rng: XorShift, min: i32, max: i32) >> i32 {
-     if (max < min) {
-        return min;
-    }
-    u32 range = (max - min + 1) as u32;
-    return min + ((xorShiftNext(rng) % range) as i32);
+fun xorShiftRange(rng: ptr<XorShift>, min: u32, max: u32) >> u32 {
+    u32 range = max - min;
+    u32 x = xorShiftNext(rng);
+    return min + (x % range);
 }
 
-fun xorShiftFloat(rng: XorShift) >> f64 {
+fun xorShiftFloat(rng: ptr<XorShift>) >> f64 {
     return (xorShiftNext(rng) as f64) / 4294967295.0;
 }
