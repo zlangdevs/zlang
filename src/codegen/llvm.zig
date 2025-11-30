@@ -26,6 +26,7 @@ pub const CodeGenerator = struct {
     external_c_functions: std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     c_function_declarations: std.HashMap([]const u8, bool, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     regular_functions: std.HashMap([]const u8, bool, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    function_return_types: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     sret_functions: std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     current_function: ?c.LLVMValueRef,
     current_function_return_type: []const u8,
@@ -70,6 +71,7 @@ pub const CodeGenerator = struct {
             .external_c_functions = std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .c_function_declarations = std.HashMap([]const u8, bool, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .regular_functions = std.HashMap([]const u8, bool, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .function_return_types = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .sret_functions = std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .current_function = null,
             .current_function_return_type = "",
@@ -96,6 +98,7 @@ pub const CodeGenerator = struct {
         self.external_c_functions.deinit();
         self.c_function_declarations.deinit();
         self.regular_functions.deinit();
+        self.function_return_types.deinit();
         self.sret_functions.deinit();
         self.loop_context_stack.deinit(self.allocator);
         self.label_blocks.deinit();
@@ -1509,6 +1512,11 @@ pub const CodeGenerator = struct {
         } else if ((value_kind == c.LLVMIntegerTypeKind and
             (target_kind == c.LLVMFloatTypeKind or target_kind == c.LLVMDoubleTypeKind or target_kind == c.LLVMHalfTypeKind)))
         {
+            if (source_type_name) |src_name| {
+                if (utils.isUnsignedType(src_name)) {
+                    return c.LLVMBuildUIToFP(self.builder, value, target_type, "uitofp");
+                }
+            }
             return c.LLVMBuildSIToFP(self.builder, value, target_type, "sitofp");
         } else if ((value_kind == c.LLVMFloatTypeKind or value_kind == c.LLVMDoubleTypeKind or value_kind == c.LLVMHalfTypeKind) and
             target_kind == c.LLVMIntegerTypeKind)
@@ -2156,6 +2164,96 @@ pub const CodeGenerator = struct {
         }
     }
 
+    fn mergeTypes(self: *CodeGenerator, t1: []const u8, t2: []const u8) []const u8 {
+        _ = self;
+        if (std.mem.eql(u8, t1, t2)) return t1;
+        if (utils.isFloatType(t1)) return t1;
+        if (utils.isFloatType(t2)) return t2;
+
+        const w1 = utils.getIntWidth(t1);
+        const w2 = utils.getIntWidth(t2);
+
+        if (w1 > w2) return t1;
+        if (w2 > w1) return t2;
+
+        // Same width
+        if (utils.isUnsignedType(t1)) return t1;
+        if (utils.isUnsignedType(t2)) return t2;
+
+        return t1;
+    }
+
+    pub fn inferType(self: *CodeGenerator, node: *ast.Node) errors.CodegenError![]const u8 {
+        switch (node.data) {
+            .identifier => |ident| {
+                if (std.mem.eql(u8, ident.name, "true") or std.mem.eql(u8, ident.name, "false")) return "bool";
+                if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
+                    return var_info.type_name;
+                }
+                return "void";
+            },
+            .number_literal => return "i32",
+            .float_literal => return "f64",
+            .bool_literal => return "bool",
+            .string_literal => return "ptr<u8>",
+            .cast => |cst| {
+                if (cst.type_name) |tn| return tn;
+                return self.inferType(cst.expr);
+            },
+            .binary_op => |bin_op| {
+                const lhs_type = try self.inferType(bin_op.lhs);
+                const rhs_type = try self.inferType(bin_op.rhs);
+                return self.mergeTypes(lhs_type, rhs_type);
+            },
+            .function_call => |call| {
+                if (self.function_return_types.get(call.name)) |ret_type| {
+                    return ret_type;
+                }
+                if (utils.LIBC_FUNCTIONS.get(call.name)) |signature| {
+                    return switch (signature.return_type) {
+                        .void_type => "void",
+                        .int_type => "i32",
+                        .char_ptr_type => "ptr<u8>",
+                        .size_t_type => "u64",
+                        .file_ptr_type => "ptr<u8>",
+                        .long_type => "i64",
+                        .double_type => "f64",
+                    };
+                }
+                if (self.c_function_declarations.get(call.name)) |is_wrapped| {
+                    _ = is_wrapped;
+                }
+                return "i32";
+            },
+            .array_index => |idx| {
+                const arr_type = try self.inferType(idx.array);
+                if (std.mem.startsWith(u8, arr_type, "arr<")) {
+                    const inner = arr_type[4 .. arr_type.len - 1];
+                    var comma_pos: ?usize = null;
+                    var search_idx: usize = inner.len;
+                    while (search_idx > 0) {
+                        search_idx -= 1;
+                        if (inner[search_idx] == ',') {
+                            comma_pos = search_idx;
+                            break;
+                        }
+                    }
+                    if (comma_pos) |pos| {
+                        return std.mem.trim(u8, inner[0..pos], " \t");
+                    }
+                } else if (std.mem.startsWith(u8, arr_type, "ptr<")) {
+                    const inner = arr_type[4 .. arr_type.len - 1];
+                    return std.mem.trim(u8, inner, " \t");
+                }
+                return "void";
+            },
+            .unary_op => |un| {
+                return self.inferType(un.operand);
+            },
+            else => return "void",
+        }
+    }
+
     pub fn generateExpression(self: *CodeGenerator, expr: *ast.Node) errors.CodegenError!c.LLVMValueRef {
         switch (expr.data) {
             .cast => |cst| {
@@ -2163,32 +2261,7 @@ pub const CodeGenerator = struct {
                 if (cst.type_name) |tn| {
                     const target_ty = try self.getLLVMType(tn);
                     const inner = try self.generateExpression(cst.expr);
-                    var source_type_name: ?[]const u8 = null;
-                    if (cst.expr.data == .identifier) {
-                        const ident = cst.expr.data.identifier;
-                        if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
-                            source_type_name = var_info.type_name;
-                        }
-                    } else if (cst.expr.data == .qualified_identifier) {
-                        const qual_id = cst.expr.data.qualified_identifier;
-                        if (qual_id.base.data == .identifier) {
-                            const base_name = qual_id.base.data.identifier.name;
-                            if (CodeGenerator.getVariable(self, base_name)) |base_var| {
-                                if (std.mem.startsWith(u8, base_var.type_name, "ptr<") and std.mem.endsWith(u8, base_var.type_name, ">")) {
-                                    const inner_type_name = base_var.type_name[4 .. base_var.type_name.len - 1];
-                                    const struct_decl = self.struct_declarations.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
-                                    const field_map = self.struct_fields.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
-                                    const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
-                                    source_type_name = struct_decl.fields.items[field_index].type_name;
-                                } else {
-                                    const struct_decl = self.struct_declarations.get(base_var.type_name) orelse return errors.CodegenError.TypeMismatch;
-                                    const field_map = self.struct_fields.get(base_var.type_name) orelse return errors.CodegenError.TypeMismatch;
-                                    const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
-                                    source_type_name = struct_decl.fields.items[field_index].type_name;
-                                }
-                            }
-                        }
-                    }
+                    const source_type_name = try self.inferType(cst.expr);
                     return self.castToTypeWithSourceInfo(inner, @ptrCast(target_ty), source_type_name);
                 }
                 return errors.CodegenError.TypeMismatch;
@@ -3002,8 +3075,9 @@ pub const CodeGenerator = struct {
             return errors.CodegenError.TypeMismatch;
         }
 
-        const lhs_type_name = self.getTypeNameFromLLVMType(lhs_type);
-        const rhs_value = try self.generateExpressionWithContext(bin_op.rhs, lhs_type_name);
+        const lhs_type_name_inferred = try self.inferType(bin_op.lhs);
+        const rhs_value = try self.generateExpressionWithContext(bin_op.rhs, lhs_type_name_inferred);
+        const rhs_type_name_inferred = try self.inferType(bin_op.rhs);
 
         const rhs_type = c.LLVMTypeOf(rhs_value);
         const rhs_kind = c.LLVMGetTypeKind(rhs_type);
@@ -3054,19 +3128,27 @@ pub const CodeGenerator = struct {
             break :blk if (lhs_width >= rhs_width) lhs_type else rhs_type;
         };
 
+        const result_type_name_inferred = self.mergeTypes(lhs_type_name_inferred, rhs_type_name_inferred);
+
         var casted_lhs = lhs_value;
         var casted_rhs = rhs_value;
 
         if (is_float_op) {
             if (lhs_kind == c.LLVMIntegerTypeKind) {
-                casted_lhs = c.LLVMBuildSIToFP(self.builder, lhs_value, result_type, "sitofp_lhs");
+                if (utils.isUnsignedType(lhs_type_name_inferred))
+                    casted_lhs = c.LLVMBuildUIToFP(self.builder, lhs_value, result_type, "uitofp_lhs")
+                else
+                    casted_lhs = c.LLVMBuildSIToFP(self.builder, lhs_value, result_type, "sitofp_lhs");
             } else if (lhs_kind == c.LLVMHalfTypeKind and result_type != lhs_type) {
                 casted_lhs = c.LLVMBuildFPExt(self.builder, lhs_value, result_type, "fpext_lhs");
             } else if (lhs_kind == c.LLVMFloatTypeKind and c.LLVMGetTypeKind(result_type) == c.LLVMDoubleTypeKind) {
                 casted_lhs = c.LLVMBuildFPExt(self.builder, lhs_value, result_type, "fpext_lhs");
             }
             if (rhs_kind == c.LLVMIntegerTypeKind) {
-                casted_rhs = c.LLVMBuildSIToFP(self.builder, rhs_value, result_type, "sitofp_rhs");
+                if (utils.isUnsignedType(rhs_type_name_inferred))
+                    casted_rhs = c.LLVMBuildUIToFP(self.builder, rhs_value, result_type, "uitofp_rhs")
+                else
+                    casted_rhs = c.LLVMBuildSIToFP(self.builder, rhs_value, result_type, "sitofp_rhs");
             } else if (rhs_kind == c.LLVMHalfTypeKind and result_type != rhs_type) {
                 casted_rhs = c.LLVMBuildFPExt(self.builder, rhs_value, result_type, "fpext_rhs");
             } else if (rhs_kind == c.LLVMFloatTypeKind and c.LLVMGetTypeKind(result_type) == c.LLVMDoubleTypeKind) {
@@ -3076,7 +3158,10 @@ pub const CodeGenerator = struct {
             if (lhs_ty_now != result_type) {
                 const lhs_kind_now = c.LLVMGetTypeKind(lhs_ty_now);
                 if (lhs_kind_now == c.LLVMIntegerTypeKind) {
-                    casted_lhs = c.LLVMBuildSIToFP(self.builder, casted_lhs, result_type, "sitofp_lhs2");
+                    if (utils.isUnsignedType(lhs_type_name_inferred))
+                        casted_lhs = c.LLVMBuildUIToFP(self.builder, casted_lhs, result_type, "uitofp_lhs2")
+                    else
+                        casted_lhs = c.LLVMBuildSIToFP(self.builder, casted_lhs, result_type, "sitofp_lhs2");
                 } else if ((lhs_kind_now == c.LLVMHalfTypeKind or lhs_kind_now == c.LLVMFloatTypeKind) and c.LLVMGetTypeKind(result_type) == c.LLVMDoubleTypeKind) {
                     casted_lhs = c.LLVMBuildFPExt(self.builder, casted_lhs, result_type, "fpext_lhs2");
                 } else if (lhs_kind_now == c.LLVMDoubleTypeKind and c.LLVMGetTypeKind(result_type) == c.LLVMFloatTypeKind) {
@@ -3087,7 +3172,10 @@ pub const CodeGenerator = struct {
             if (rhs_ty_now != result_type) {
                 const rhs_kind_now = c.LLVMGetTypeKind(rhs_ty_now);
                 if (rhs_kind_now == c.LLVMIntegerTypeKind) {
-                    casted_rhs = c.LLVMBuildSIToFP(self.builder, casted_rhs, result_type, "sitofp_rhs2");
+                    if (utils.isUnsignedType(rhs_type_name_inferred))
+                        casted_rhs = c.LLVMBuildUIToFP(self.builder, casted_rhs, result_type, "uitofp_rhs2")
+                    else
+                        casted_rhs = c.LLVMBuildSIToFP(self.builder, casted_rhs, result_type, "sitofp_rhs2");
                 } else if ((rhs_kind_now == c.LLVMHalfTypeKind or rhs_kind_now == c.LLVMFloatTypeKind) and c.LLVMGetTypeKind(result_type) == c.LLVMDoubleTypeKind) {
                     casted_rhs = c.LLVMBuildFPExt(self.builder, casted_rhs, result_type, "fpext_rhs2");
                 } else if (rhs_kind_now == c.LLVMDoubleTypeKind and c.LLVMGetTypeKind(result_type) == c.LLVMFloatTypeKind) {
@@ -3114,7 +3202,7 @@ pub const CodeGenerator = struct {
                 c.LLVMBuildMul(self.builder, casted_lhs, casted_rhs, "mul"),
             '/' => if (is_float_op)
                 c.LLVMBuildFDiv(self.builder, casted_lhs, casted_rhs, "fdiv")
-            else if (isUnsignedType(self.getTypeNameFromLLVMType(result_type)))
+            else if (utils.isUnsignedType(result_type_name_inferred))
                 c.LLVMBuildUDiv(self.builder, casted_lhs, casted_rhs, "udiv")
             else
                 c.LLVMBuildSDiv(self.builder, casted_lhs, casted_rhs, "sdiv"),
@@ -3131,7 +3219,7 @@ pub const CodeGenerator = struct {
                     if (width != 8 and width != 16 and width != 32 and width != 64) {
                         return errors.CodegenError.UnsupportedOperation;
                     }
-                    if (isUnsignedType(self.getTypeNameFromLLVMType(result_type)))
+                    if (utils.isUnsignedType(result_type_name_inferred))
                         return c.LLVMBuildURem(self.builder, casted_lhs, casted_rhs, "urem")
                     else
                         return c.LLVMBuildSRem(self.builder, casted_lhs, casted_rhs, "srem");
@@ -3157,7 +3245,7 @@ pub const CodeGenerator = struct {
             },
             '>' => {
                 if (is_float_op) return errors.CodegenError.UnsupportedOperation;
-                if (isUnsignedType(self.getTypeNameFromLLVMType(result_type)))
+                if (utils.isUnsignedType(result_type_name_inferred))
                     return c.LLVMBuildLShr(self.builder, casted_lhs, casted_rhs, "lshr")
                 else
                     return c.LLVMBuildAShr(self.builder, casted_lhs, casted_rhs, "ashr");

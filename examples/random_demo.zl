@@ -19,11 +19,11 @@ fun main() >> i32 {
     @printf("XorShift initialized with 12345.\n");
     
     for i32 i = 0; i < 5; i++ {
-        @printf("xorShiftNext: %u\n", xorShiftNext(rng));
+        @printf("xorShiftNext: %u\n", xorShiftNext(&rng));
     }
     
-    @printf("xorShiftRange(10, 20): %d\n", xorShiftRange(rng, 10, 20));
-    @printf("xorShiftFloat(): %f\n", xorShiftFloat(rng));
+    @printf("xorShiftRange(10, 20): %d\n", xorShiftRange(&rng, 10, 20));
+    @printf("xorShiftFloat(): %f\n", xorShiftFloat(&rng));
 
     return 0;
 }

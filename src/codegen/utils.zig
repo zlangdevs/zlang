@@ -329,6 +329,20 @@ pub fn isUnsignedType(type_name: []const u8) bool {
     return std.mem.startsWith(u8, type_name, "u");
 }
 
+pub fn isFloatType(type_name: []const u8) bool {
+    return std.mem.eql(u8, type_name, "f16") or
+        std.mem.eql(u8, type_name, "f32") or
+        std.mem.eql(u8, type_name, "f64");
+}
+
+pub fn getIntWidth(type_name: []const u8) u32 {
+    if (std.mem.eql(u8, type_name, "bool")) return 1;
+    if (type_name.len < 2) return 0;
+    // Skip 'i' or 'u'
+    const width_str = type_name[1..];
+    return std.fmt.parseInt(u32, width_str, 10) catch 0;
+}
+
 pub fn getAlignmentForType(self: *codegen.CodeGenerator, llvm_type: c.LLVMTypeRef) c_uint {
     const type_kind = c.LLVMGetTypeKind(llvm_type);
     return switch (type_kind) {
