@@ -96,6 +96,7 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
 
     try cg.functions.put(func.name, @ptrCast(llvm_func));
     try cg.regular_functions.put(func.name, true);
+    try cg.function_return_types.put(func.name, func.return_type);
 }
 
 pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.CodegenError!void {
@@ -256,6 +257,7 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
         c.LLVMSetLinkage(llvm_func, c.LLVMExternalLinkage);
     }
     try cg.c_function_declarations.put(utils.dupe(u8, cg.allocator, c_func.name), c_func.is_wrapped);
+    try cg.function_return_types.put(utils.dupe(u8, cg.allocator, c_func.name), c_func.return_type);
 }
 
 pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) errors.CodegenError!c.LLVMValueRef {

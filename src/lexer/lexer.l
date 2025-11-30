@@ -180,8 +180,8 @@ FLOAT_DOT  \.{DIGIT_WITH_DELIM}{EXPONENT}?
 "|"         { last_was_rparen = 0; return TOKEN_BIT_OR; }
 "^"         { last_was_rparen = 0; return TOKEN_XOR; }
 "~"         { last_was_rparen = 0; return TOKEN_BIT_NOT; }
-"{"         { last_was_identifier = 0; last_was_rparen = 0; return TOKEN_LBRACE; }
-"}"         { last_was_rparen = 0; return TOKEN_RBRACE; }
+"{"         { last_was_identifier = 0; last_was_rparen = 0; template_depth = 0; return TOKEN_LBRACE; }
+"}"         { last_was_rparen = 0; template_depth = 0; return TOKEN_RBRACE; }
 "("         { last_was_rparen = 0; return TOKEN_LPAREN; }
 ")"         { last_was_rparen = 1; return TOKEN_RPAREN; }
 "["         { last_was_rparen = 0; return TOKEN_LBRACKET; }
@@ -189,7 +189,7 @@ FLOAT_DOT  \.{DIGIT_WITH_DELIM}{EXPONENT}?
 "@"         { last_was_rparen = 0; return TOKEN_AT; }
 ","         { last_was_identifier = 0; last_was_rparen = 0; return TOKEN_COMMA; }
 ":"         { last_was_rparen = 0; return TOKEN_COLON; }
-";"         { last_was_rparen = 0; return TOKEN_SEMICOLON; }
+";"         { last_was_rparen = 0; template_depth = 0; return TOKEN_SEMICOLON; }
 [ \t\n]+    { /* skip spaces */ }
 "??".*      { /* skip single-line comments */ }
 <BRAINFUCK>[^{}]+ {
