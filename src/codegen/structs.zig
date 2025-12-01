@@ -107,12 +107,36 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
             else
                 path.len;
             const field_name = path[0..field_name_len];
-            const var_type_kind = c.LLVMGetTypeKind(current_type);
+            var var_type_kind = c.LLVMGetTypeKind(current_type);
+            if (var_type_kind == c.LLVMPointerTypeKind) {
+                const element_type = c.LLVMGetElementType(current_type);
+                if (c.LLVMGetTypeKind(element_type) == c.LLVMStructTypeKind) {
+                    current_type = element_type;
+                    var_type_kind = c.LLVMStructTypeKind;
+                    if (std.mem.startsWith(u8, current_type_name, "ptr<") and std.mem.endsWith(u8, current_type_name, ">")) {
+                        current_type_name = current_type_name[4 .. current_type_name.len - 1];
+                    }
+                }
+            }
+
+            var_type_kind = c.LLVMGetTypeKind(current_type);
+            if (var_type_kind == c.LLVMPointerTypeKind) {
+                if (std.mem.startsWith(u8, current_type_name, "ptr<") and std.mem.endsWith(u8, current_type_name, ">")) {
+                    current_value = c.LLVMBuildLoad2(cg.builder, current_type, current_value, "loaded_ptr");
+                    const inner_name = current_type_name[4 .. current_type_name.len - 1];
+                    if (cg.struct_types.get(inner_name)) |struct_type| {
+                        current_type = @ptrCast(struct_type);
+                        current_type_name = inner_name;
+                        var_type_kind = c.LLVMStructTypeKind;
+                    }
+                }
+            }
+
             if (var_type_kind != c.LLVMStructTypeKind) {
                 if (cg.current_line > 0) {
-                    std.debug.print("Error at line {d}: Cannot access field on non-struct type\n", .{cg.current_line});
+                    std.debug.print("Error at line {d}: Cannot access field on non-struct type. Type: {s}, Kind: {d}\n", .{ cg.current_line, current_type_name, var_type_kind });
                 } else {
-                    std.debug.print("Error: Cannot access field on non-struct type\n", .{});
+                    std.debug.print("Error: Cannot access field on non-struct type. Type: {s}, Kind: {d}\n", .{ current_type_name, var_type_kind });
                 }
                 return errors.CodegenError.TypeMismatch;
             }
@@ -316,7 +340,18 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
             const dot_pos = std.mem.indexOfScalar(u8, path, '.');
             const field_name_len = if (dot_pos) |pos| pos else path.len;
             const field_name = path[0..field_name_len];
-            const var_type_kind = c.LLVMGetTypeKind(current_type);
+            var var_type_kind = c.LLVMGetTypeKind(current_type);
+            if (var_type_kind == c.LLVMPointerTypeKind) {
+                const element_type = c.LLVMGetElementType(current_type);
+                if (c.LLVMGetTypeKind(element_type) == c.LLVMStructTypeKind) {
+                    current_type = element_type;
+                    var_type_kind = c.LLVMStructTypeKind;
+                    if (std.mem.startsWith(u8, current_type_name, "ptr<") and std.mem.endsWith(u8, current_type_name, ">")) {
+                        current_type_name = current_type_name[4 .. current_type_name.len - 1];
+                    }
+                }
+            }
+
             if (var_type_kind != c.LLVMStructTypeKind) {
                 if (cg.current_line > 0) {
                     std.debug.print("Error at line {d}: Cannot access field on non-struct type\n", .{cg.current_line});
