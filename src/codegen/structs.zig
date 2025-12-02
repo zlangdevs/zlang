@@ -342,12 +342,13 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
             const field_name = path[0..field_name_len];
             var var_type_kind = c.LLVMGetTypeKind(current_type);
             if (var_type_kind == c.LLVMPointerTypeKind) {
-                const element_type = c.LLVMGetElementType(current_type);
-                if (c.LLVMGetTypeKind(element_type) == c.LLVMStructTypeKind) {
-                    current_type = element_type;
-                    var_type_kind = c.LLVMStructTypeKind;
-                    if (std.mem.startsWith(u8, current_type_name, "ptr<") and std.mem.endsWith(u8, current_type_name, ">")) {
-                        current_type_name = current_type_name[4 .. current_type_name.len - 1];
+                if (std.mem.startsWith(u8, current_type_name, "ptr<") and std.mem.endsWith(u8, current_type_name, ">")) {
+                    current_value = c.LLVMBuildLoad2(cg.builder, current_type, current_value, "loaded_ptr");
+                    const inner_name = current_type_name[4 .. current_type_name.len - 1];
+                    if (cg.struct_types.get(inner_name)) |struct_type| {
+                        current_type = @ptrCast(struct_type);
+                        current_type_name = inner_name;
+                        var_type_kind = c.LLVMStructTypeKind;
                     }
                 }
             }
