@@ -1901,6 +1901,11 @@ pub const CodeGenerator = struct {
                         if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                             source_type_name = var_info.type_name;
                         }
+                    } else if (cst.expr.data == .function_call) {
+                        const call = cst.expr.data.function_call;
+                        if (self.function_return_types.get(call.name)) |ret_type| {
+                            source_type_name = ret_type;
+                        }
                     }
                     return self.castToTypeWithSourceInfo(inner, @ptrCast(target_ty), source_type_name);
                 } else {
@@ -2373,7 +2378,8 @@ pub const CodeGenerator = struct {
                                 const struct_type = self.struct_types.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
                                 const field_map = self.struct_fields.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
                                 const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
-                                const field_ptr = try self.getStructFieldPointer(@ptrCast(struct_type), @ptrCast(result_value), field_index);
+                                const loaded_ptr = c.LLVMBuildLoad2(self.builder, result_type, result_value, "loaded_ptr");
+                                const field_ptr = try self.getStructFieldPointer(@ptrCast(struct_type), @ptrCast(loaded_ptr), field_index);
                                 const field_type = try structs.getFieldType(self, struct_type, field_index);
                                 const field_type_kind = c.LLVMGetTypeKind(field_type);
                                 if (field_type_kind == c.LLVMArrayTypeKind) {
