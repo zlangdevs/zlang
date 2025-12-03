@@ -2206,6 +2206,7 @@ pub const CodeGenerator = struct {
                 return self.inferType(cst.expr);
             },
             .binary_op => |bin_op| {
+                if (bin_op.op == '&' or bin_op.op == '|') return "bool";
                 const lhs_type = try self.inferType(bin_op.lhs);
                 const rhs_type = try self.inferType(bin_op.rhs);
                 return self.mergeTypes(lhs_type, rhs_type);
@@ -2255,6 +2256,7 @@ pub const CodeGenerator = struct {
             .unary_op => |un| {
                 return self.inferType(un.operand);
             },
+            .comparison => return "bool",
             else => return "void",
         }
     }
