@@ -1,0 +1,23 @@
+fun main() >> i32 {
+    i32 x = 65;
+    @printf("Before BF: %d (char: %c)\n", x, x);
+
+    brainfuck {
+        ?len 10?
+        ?load x 0?
+        >>>     
+        +++++   
+        .       
+    };
+
+    @printf("\nAfter BF: %d (char: %c)\n", x, x);
+
+    @printf("Printing 'Hello World' from Brainfuck:\n");
+    brainfuck {
+        ?len 20?
+        ++++++++++[>+++++++>++++++++++>+++>+<<<<-]>++.>+.+++++++..+++.>++.<<+++++++++++++++.>.+++.------.--------.>+.>.
+    };
+    @printf("\n");
+
+    return 0;
+}
