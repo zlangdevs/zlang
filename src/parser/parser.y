@@ -63,6 +63,7 @@ extern void zig_add_global_to_program(void* program, void* global);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
 extern void* zig_create_cast(void* expr, const char* type_name, int auto_flag);
+extern void zlang_set_location(int line, int col);
 
 void yyerror(const char* s);
 int zlang_lex(void* scanner);
@@ -85,6 +86,7 @@ void* ast_root = NULL;
 %define parse.error verbose
 
 %glr-parser
+%locations
 
 %union {
     char* string;
@@ -233,7 +235,7 @@ function_list:
 
 c_function_decl:
     TOKEN_FUN TOKEN_AT function_name TOKEN_LPAREN parameter_list TOKEN_RPAREN TOKEN_RSHIFT type_name {
-        $$ = zig_create_c_function_decl($3, $8, $5);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_c_function_decl($3, $8, $5);
         free($3);
         free($8);
     }
@@ -245,7 +247,7 @@ c_function_decl_statement:
 
 wrap_statement:
     TOKEN_WRAP TOKEN_AT function_name TOKEN_LPAREN parameter_list TOKEN_RPAREN TOKEN_RSHIFT type_name TOKEN_SEMICOLON {
-        $$ = zig_create_wrapper_function($3, $8, $5);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_wrapper_function($3, $8, $5);
         free($3);
         free($8);
     }
@@ -253,14 +255,14 @@ wrap_statement:
 
 function:
     TOKEN_FUN function_name TOKEN_LPAREN parameter_list TOKEN_RPAREN TOKEN_RSHIFT type_name TOKEN_LBRACE statement_list TOKEN_RBRACE {
-        $$ = zig_create_function($2, $7, $4, $9);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_function($2, $7, $4, $9);
         free($2);
         free($7);
     }
 ;
 
 parameter_list:
-    /* empty */ { $$ = zig_create_param_list(); }
+    /* empty */ { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_param_list(); }
   | parameters { $$ = $1; }
 ;
 
@@ -278,7 +280,7 @@ parameters:
 
 parameter:
     TOKEN_IDENTIFIER TOKEN_COLON type_name {
-        $$ = zig_create_parameter($1, $3);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_parameter($1, $3);
         free($3);
     }
 ;
@@ -373,7 +375,7 @@ function_type_param_list:
 /* ========== STATEMENTS ========== */
 
 statement_list:
-    /* empty */ { $$ = zig_create_stmt_list(); }
+    /* empty */ { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_stmt_list(); }
   | statement_list statement {
         if ($2 != NULL) zig_add_to_stmt_list($1, $2);
         $$ = $1;
@@ -399,36 +401,36 @@ statement:
 
 if_statement:
     TOKEN_IF expression TOKEN_LBRACE statement_list TOKEN_RBRACE {
-        $$ = zig_create_if_stmt($2, $4, NULL);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_if_stmt($2, $4, NULL);
     }
   | TOKEN_IF expression TOKEN_LBRACE statement_list TOKEN_RBRACE TOKEN_ELSE TOKEN_LBRACE statement_list TOKEN_RBRACE {
-        $$ = zig_create_if_stmt($2, $4, $8);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_if_stmt($2, $4, $8);
     }
   | TOKEN_IF expression TOKEN_LBRACE statement_list TOKEN_RBRACE TOKEN_ELSE if_statement {
         void* else_stmt_list = zig_create_stmt_list();
         zig_add_to_stmt_list(else_stmt_list, $7);
-        $$ = zig_create_if_stmt($2, $4, else_stmt_list);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_if_stmt($2, $4, else_stmt_list);
     }
 ;
 
 for_statement:
     TOKEN_FOR TOKEN_LBRACE statement_list TOKEN_RBRACE {
-        $$ = zig_create_for_stmt(NULL, $3);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_for_stmt(NULL, $3);
     }
   | TOKEN_FOR TOKEN_LPAREN expression TOKEN_RPAREN TOKEN_LBRACE statement_list TOKEN_RBRACE {
-        $$ = zig_create_for_stmt($3, $6);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_for_stmt($3, $6);
     }
   | TOKEN_FOR TOKEN_IDENTIFIER TOKEN_LBRACE statement_list TOKEN_RBRACE {
-        $$ = zig_create_for_stmt(zig_create_identifier($2), $4);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_for_stmt(zig_create_identifier($2), $4);
     }
 ;
 
 c_for_statement:
     TOKEN_FOR var_declaration TOKEN_SEMICOLON expression TOKEN_SEMICOLON for_increment TOKEN_LBRACE statement_list TOKEN_RBRACE {
-        $$ = zig_create_c_for_stmt($2, $4, $6, $8);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_c_for_stmt($2, $4, $6, $8);
     }
   | TOKEN_FOR assignment TOKEN_SEMICOLON expression TOKEN_SEMICOLON for_increment TOKEN_LBRACE statement_list TOKEN_RBRACE {
-        $$ = zig_create_c_for_stmt($2, $4, $6, $8);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_c_for_stmt($2, $4, $6, $8);
     }
 ;
 
@@ -439,33 +441,33 @@ for_increment:
 
 break_statement:
     TOKEN_BREAK {
-        $$ = zig_create_break_stmt();
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_break_stmt();
     }
 ;
 
 continue_statement:
     TOKEN_CONTINUE {
-        $$ = zig_create_continue_stmt();
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_continue_stmt();
     }
 ;
 
 goto_statement:
     TOKEN_GOTO TOKEN_IDENTIFIER {
-        $$ = zig_create_goto_stmt($2);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_goto_stmt($2);
         free($2);
     }
 ;
 
 label_statement:
     TOKEN_IDENTIFIER TOKEN_COLON {
-        $$ = zig_create_label_stmt($1);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_label_stmt($1);
         free($1);
     }
 ;
 
 brainfuck_statement:
     TOKEN_BRAINFUCK {
-        $$ = zig_create_brainfuck($1);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_brainfuck($1);
         free($1);
     }
 ;
@@ -473,88 +475,88 @@ brainfuck_statement:
 /* ========== EXPRESSIONS ========== */
 
 ref_base:
-    TOKEN_IDENTIFIER { $$ = zig_create_identifier($1); }
+    TOKEN_IDENTIFIER { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_identifier($1); }
 ;
 
 ref_expression:
     ref_base { $$ = $1; }
   | ref_expression TOKEN_LBRACKET expression TOKEN_RBRACKET {
-        $$ = zig_create_array_index($1, $3);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_array_index($1, $3);
     }
   | ref_expression TOKEN_DOT TOKEN_IDENTIFIER {
         const char* field_copy = strdup($3);
-        $$ = zig_create_qualified_identifier($1, field_copy);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_qualified_identifier($1, field_copy);
         free($3);
     }
 ;
 
 assignment:
     ref_expression TOKEN_ASSIGN initializer_expression {
-        $$ = zig_create_assignment($1, $3);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_assignment($1, $3);
     }
   | ref_expression TOKEN_REASSIGN expression {
-        $$ = zig_create_compound_assignment($1, $3, $2);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_compound_assignment($1, $3, $2);
     }
   | TOKEN_MULTIPLY ref_expression TOKEN_ASSIGN expression {
         void* deref = zig_create_unary_op('*', $2);
-        $$ = zig_create_assignment(deref, $4);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_assignment(deref, $4);
     }
   | TOKEN_MULTIPLY ref_expression TOKEN_REASSIGN expression {
         void* deref = zig_create_unary_op('*', $2);
-        $$ = zig_create_compound_assignment(deref, $4, $3);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_compound_assignment(deref, $4, $3);
     }
 ;
 
 array_initializer:
     TOKEN_LBRACE argument_list TOKEN_RBRACE {
-        $$ = zig_create_array_initializer($2);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_array_initializer($2);
     }
 ;
 
 var_declaration:
     type_name TOKEN_IDENTIFIER TOKEN_ASSIGN initializer_expression {
         void* initializer = $4;
-        $$ = zig_create_var_decl($1, $2, initializer, 0);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_var_decl($1, $2, initializer, 0);
         free($1);
     }
     | type_name TOKEN_IDENTIFIER {
-        $$ = zig_create_var_decl($1, $2, NULL, 0);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_var_decl($1, $2, NULL, 0);
         free($1);
     }
     | TOKEN_CONST type_name TOKEN_IDENTIFIER TOKEN_ASSIGN initializer_expression {
         void* initializer = $5;
-        $$ = zig_create_var_decl($2, $3, initializer, 1);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_var_decl($2, $3, initializer, 1);
         free($2);
     }
 ;
 
 global_variable_declaration:
     type_name TOKEN_IDENTIFIER TOKEN_ASSIGN initializer_expression TOKEN_SEMICOLON {
-        $$ = zig_create_var_decl($1, $2, $4, 0);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_var_decl($1, $2, $4, 0);
         free($1);
     }
     | TOKEN_CONST type_name TOKEN_IDENTIFIER TOKEN_ASSIGN initializer_expression TOKEN_SEMICOLON {
-        $$ = zig_create_var_decl($2, $3, $5, 1);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_var_decl($2, $3, $5, 1);
         free($2);
     }
 ;
 
 function_call:
     TOKEN_AT TOKEN_IDENTIFIER TOKEN_LPAREN argument_list TOKEN_RPAREN {
-        $$ = zig_create_function_call($2, 1, $4);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_function_call($2, 1, $4);
     }
   | TOKEN_IDENTIFIER TOKEN_LPAREN argument_list TOKEN_RPAREN {
-        $$ = zig_create_function_call($1, 0, $3);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_function_call($1, 0, $3);
     }
 ;
 
 return_statement:
-    TOKEN_RETURN initializer_expression { $$ = zig_create_return_stmt($2); }
-   | TOKEN_RETURN { $$ = zig_create_return_stmt(NULL); }
+    TOKEN_RETURN initializer_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_return_stmt($2); }
+   | TOKEN_RETURN { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_return_stmt(NULL); }
 ;
 
 argument_list:
-    /* empty */ { $$ = zig_create_arg_list(); }
+    /* empty */ { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_arg_list(); }
   | arguments { $$ = $1; }
 ;
 
@@ -576,70 +578,70 @@ expression:
 
 logical_or_expression:
     logical_and_expression { $$ = $1; }
-  | logical_or_expression TOKEN_OR logical_and_expression { $$ = zig_create_binary_op('|', $1, $3); }
+  | logical_or_expression TOKEN_OR logical_and_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_binary_op('|', $1, $3); }
 ;
 
 logical_and_expression:
     bitwise_or_expression { $$ = $1; }
-  | logical_and_expression TOKEN_AND bitwise_or_expression { $$ = zig_create_binary_op('&', $1, $3); }
+  | logical_and_expression TOKEN_AND bitwise_or_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_binary_op('&', $1, $3); }
 ;
 
 bitwise_or_expression:
     bitwise_xor_expression { $$ = $1; }
-  | bitwise_or_expression TOKEN_BIT_OR bitwise_xor_expression { $$ = zig_create_binary_op('$', $1, $3); }
+  | bitwise_or_expression TOKEN_BIT_OR bitwise_xor_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_binary_op('$', $1, $3); }
 ;
 
 bitwise_xor_expression:
     bitwise_and_expression { $$ = $1; }
-  | bitwise_xor_expression TOKEN_XOR bitwise_and_expression { $$ = zig_create_binary_op('^', $1, $3); }
+  | bitwise_xor_expression TOKEN_XOR bitwise_and_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_binary_op('^', $1, $3); }
 ;
 
 bitwise_and_expression:
     shift_expression { $$ = $1; }
-  | bitwise_and_expression TOKEN_AMPERSAND shift_expression { $$ = zig_create_binary_op('A', $1, $3); }
+  | bitwise_and_expression TOKEN_AMPERSAND shift_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_binary_op('A', $1, $3); }
 ;
 
 shift_expression:
     equality_expression { $$ = $1; }
-  | shift_expression TOKEN_LSHIFT equality_expression { $$ = zig_create_binary_op('<', $1, $3); }
-  | shift_expression TOKEN_RSHIFT equality_expression { $$ = zig_create_binary_op('>', $1, $3); }
+  | shift_expression TOKEN_LSHIFT equality_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_binary_op('<', $1, $3); }
+  | shift_expression TOKEN_RSHIFT equality_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_binary_op('>', $1, $3); }
 ;
 
 equality_expression:
     relational_expression { $$ = $1; }
-  | equality_expression TOKEN_EQUAL relational_expression { $$ = zig_create_comparison('=', $1, $3); }
-  | equality_expression TOKEN_NON_EQUAL relational_expression { $$ = zig_create_comparison('!', $1, $3); }
+  | equality_expression TOKEN_EQUAL relational_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_comparison('=', $1, $3); }
+  | equality_expression TOKEN_NON_EQUAL relational_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_comparison('!', $1, $3); }
 ;
 
 relational_expression:
     additive_expression { $$ = $1; }
-  | relational_expression TOKEN_LESS additive_expression { $$ = zig_create_comparison('<', $1, $3); }
-  | relational_expression TOKEN_GREATER additive_expression { $$ = zig_create_comparison('>', $1, $3); }
-  | relational_expression TOKEN_EQ_LESS additive_expression { $$ = zig_create_comparison('L', $1, $3); }
-  | relational_expression TOKEN_EQ_GREATER additive_expression { $$ = zig_create_comparison('G', $1, $3); }
+  | relational_expression TOKEN_LESS additive_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_comparison('<', $1, $3); }
+  | relational_expression TOKEN_GREATER additive_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_comparison('>', $1, $3); }
+  | relational_expression TOKEN_EQ_LESS additive_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_comparison('L', $1, $3); }
+  | relational_expression TOKEN_EQ_GREATER additive_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_comparison('G', $1, $3); }
 ;
 
 additive_expression:
     multiplicative_expression { $$ = $1; }
-  | additive_expression TOKEN_PLUS multiplicative_expression { $$ = zig_create_binary_op('+', $1, $3); }
-  | additive_expression TOKEN_MINUS multiplicative_expression { $$ = zig_create_binary_op('-', $1, $3); }
+  | additive_expression TOKEN_PLUS multiplicative_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_binary_op('+', $1, $3); }
+  | additive_expression TOKEN_MINUS multiplicative_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_binary_op('-', $1, $3); }
 ;
 
 multiplicative_expression:
     unary_expression { $$ = $1; }
-  | multiplicative_expression TOKEN_MULTIPLY unary_expression { $$ = zig_create_binary_op('*', $1, $3); }
-  | multiplicative_expression TOKEN_DIVIDE unary_expression { $$ = zig_create_binary_op('/', $1, $3); }
-  | multiplicative_expression TOKEN_MODULUS unary_expression { $$ = zig_create_binary_op('%', $1, $3); }
+  | multiplicative_expression TOKEN_MULTIPLY unary_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_binary_op('*', $1, $3); }
+  | multiplicative_expression TOKEN_DIVIDE unary_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_binary_op('/', $1, $3); }
+  | multiplicative_expression TOKEN_MODULUS unary_expression { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_binary_op('%', $1, $3); }
 ;
 
 unary_expression:
     cast_expression { $$ = $1; }
-  | TOKEN_NOT unary_expression %prec NOT { $$ = zig_create_unary_op('!', $2); }
-  | TOKEN_BIT_NOT unary_expression %prec UBIT_NOT { $$ = zig_create_unary_op('~', $2); }
-  | TOKEN_MINUS unary_expression %prec UMINUS { $$ = zig_create_unary_op('-', $2); }
-  | TOKEN_PLUS unary_expression %prec UPLUS { $$ = zig_create_unary_op('+', $2); }
-  | TOKEN_AMPERSAND unary_expression %prec UAMPERSAND { $$ = zig_create_unary_op('&', $2); }
-  | TOKEN_MULTIPLY unary_expression %prec UDEREF { $$ = zig_create_unary_op('*', $2); }
+  | TOKEN_NOT unary_expression %prec NOT { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_unary_op('!', $2); }
+  | TOKEN_BIT_NOT unary_expression %prec UBIT_NOT { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_unary_op('~', $2); }
+  | TOKEN_MINUS unary_expression %prec UMINUS { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_unary_op('-', $2); }
+  | TOKEN_PLUS unary_expression %prec UPLUS { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_unary_op('+', $2); }
+  | TOKEN_AMPERSAND unary_expression %prec UAMPERSAND { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_unary_op('&', $2); }
+  | TOKEN_MULTIPLY unary_expression %prec UDEREF { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_unary_op('*', $2); }
 ;
 
 postfix_expression:
@@ -647,33 +649,33 @@ postfix_expression:
   | primary_expression { $$ = $1; }
   | ref_expression TOKEN_DOT TOKEN_IDENTIFIER TOKEN_LPAREN argument_list TOKEN_RPAREN {
        const char* method_name_copy = strdup($3);
-       $$ = zig_create_method_call($1, method_name_copy, $5);
+       zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_method_call($1, method_name_copy, $5);
        free($3);
    }
-  | postfix_expression TOKEN_INCREMENT { $$ = zig_create_unary_op('I', $1); }
-  | postfix_expression TOKEN_DECREMENT { $$ = zig_create_unary_op('D', $1); }
+  | postfix_expression TOKEN_INCREMENT { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_unary_op('I', $1); }
+  | postfix_expression TOKEN_DECREMENT { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_unary_op('D', $1); }
 ;
 
 cast_expression:
     postfix_expression { $$ = $1; }
   | cast_expression TOKEN_AS type_name {
-        $$ = zig_create_cast($1, $3, 0);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_cast($1, $3, 0);
         free($3);
     }
   | cast_expression TOKEN_AS TOKEN_UNDERSCORE {
-        $$ = zig_create_cast($1, "", 1);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_cast($1, "", 1);
     }
 ;
 
 primary_expression:
      array_initializer { $$ = $1; }
-    | TOKEN_FLOAT { $$ = zig_create_float_literal($1); }
-    | TOKEN_NUMBER { $$ = zig_create_number_literal($1); }
-    | TOKEN_CHAR { $$ = zig_create_char_literal($1); }
-    | string_literal { $$ = zig_create_string_literal($1); free($1); }
+    | TOKEN_FLOAT { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_float_literal($1); }
+    | TOKEN_NUMBER { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_number_literal($1); }
+    | TOKEN_CHAR { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_char_literal($1); }
+    | string_literal { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_string_literal($1); free($1); }
     | function_call { $$ = $1; }
     | TOKEN_LPAREN expression TOKEN_RPAREN { $$ = $2; }
-    | TOKEN_NULL { $$ = zig_create_null_literal(); }
+    | TOKEN_NULL { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_null_literal(); }
 ;
 
 /* ========== LITERALS AND IDENTIFIERS ========== */
@@ -686,52 +688,52 @@ string_literal:
 
 use_statement:
     TOKEN_USE module_path {
-        $$ = zig_create_use_stmt($2);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_use_stmt($2);
         free($2);
     }
 ;
 
 enum_declaration:
     TOKEN_ENUM TOKEN_IDENTIFIER TOKEN_LBRACE enum_values TOKEN_RBRACE {
-        $$ = zig_create_enum_decl($2, $4);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_enum_decl($2, $4);
         free($2);
     }
 ;
 
 struct_declaration:
     TOKEN_STRUCT TOKEN_IDENTIFIER TOKEN_LBRACE struct_fields TOKEN_RBRACE {
-        $$ = zig_create_struct_decl($2, $4);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_struct_decl($2, $4);
         free($2);
     }
 ;
 
 union_declaration:
     TOKEN_UNION TOKEN_IDENTIFIER TOKEN_LBRACE struct_fields TOKEN_RBRACE {
-        $$ = zig_create_union_decl($2, $4);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_union_decl($2, $4);
         free($2);
     }
 ;
 
 struct_initializer:
     TOKEN_IDENTIFIER TOKEN_LBRACE struct_field_values TOKEN_RBRACE {
-        $$ = zig_create_struct_initializer($1, $3);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_struct_initializer($1, $3);
         free($1);
     }
 ;
 
 enum_values:
-   /* empty */ { $$ = zig_create_enum_value_list(); }
+   /* empty */ { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_enum_value_list(); }
    | enum_value_list { $$ = $1; }
 ;
 
 enum_value_list:
     TOKEN_IDENTIFIER {
-        $$ = zig_create_enum_value_list();
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_enum_value_list();
         zig_add_enum_value($$, $1, NULL);
         free($1);
     }
     | TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
-        $$ = zig_create_enum_value_list();
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_enum_value_list();
         zig_add_enum_value($$, $1, $3);
         free($1);
     }
@@ -752,19 +754,19 @@ enum_value_list:
 ;
 
 struct_fields:
-   /* empty */ { $$ = zig_create_struct_field_list(); }
+   /* empty */ { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_struct_field_list(); }
    | struct_field_list { $$ = $1; }
 ;
 
 struct_field_list:
     TOKEN_IDENTIFIER type_name {
-        $$ = zig_create_struct_field_list();
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_struct_field_list();
         zig_add_struct_field($$, $1, $2);
         free($1);
         free($2);
     }
     | TOKEN_IDENTIFIER type_name TOKEN_ASSIGN expression {
-        $$ = zig_create_struct_field_list();
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_struct_field_list();
         zig_add_struct_field_with_default($$, $1, $2, $4);
         free($1);
         free($2);
@@ -788,13 +790,13 @@ struct_field_list:
 ;
 
 struct_field_values:
-    /* empty */ { $$ = zig_create_struct_field_value_list(); }
+    /* empty */ { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_struct_field_value_list(); }
     | struct_field_value_list { $$ = $1; }
 ;
 
 struct_field_value_list:
     TOKEN_IDENTIFIER TOKEN_ASSIGN expression {
-        $$ = zig_create_struct_field_value_list();
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_struct_field_value_list();
         zig_add_struct_field_value($$, $1, $3);
         free($1);
     }
@@ -804,7 +806,7 @@ struct_field_value_list:
         $$ = $1;
     }
     | expression {
-        $$ = zig_create_struct_field_value_list();
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_struct_field_value_list();
         zig_add_struct_positional_value($$, $1);
     }
     | struct_field_value_list TOKEN_COMMA expression {

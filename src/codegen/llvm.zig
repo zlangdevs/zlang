@@ -43,6 +43,7 @@ pub const CodeGenerator = struct {
     label_blocks: std.HashMap([]const u8, c.LLVMBasicBlockRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     pending_gotos: std.ArrayList(structs.PendingGoto),
     current_line: usize,
+    current_column: usize,
     module_paths: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
 
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
@@ -88,6 +89,7 @@ pub const CodeGenerator = struct {
             .label_blocks = std.HashMap([]const u8, c.LLVMBasicBlockRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .pending_gotos = std.ArrayList(structs.PendingGoto){},
             .current_line = 0,
+            .current_column = 0,
             .module_paths = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
         };
     }
@@ -146,7 +148,7 @@ pub const CodeGenerator = struct {
         diagnostics.printDiagnostic(self.allocator, .{
             .file_path = file_path,
             .line = self.current_line,
-            .column = 0,
+            .column = self.current_column,
             .message = message,
             .hint = hint,
             .severity = .Error,
@@ -486,6 +488,7 @@ pub const CodeGenerator = struct {
 
     pub fn generateStatement(self: *CodeGenerator, stmt: *ast.Node) errors.CodegenError!void {
         self.current_line = stmt.line;
+        self.current_column = stmt.column;
         switch (stmt.data) {
             .assignment => |as| {
                 switch (as.target.data) {
@@ -1636,8 +1639,11 @@ pub const CodeGenerator = struct {
         const from_name = self.getTypeNameFromLLVMType(@ptrCast(from_ty));
         const to_name = self.getTypeNameFromLLVMType(@ptrCast(target_type));
 
-        if (value_node) |_| {
+        if (value_node) |vn| {
+            const old_col = self.current_column;
+            if (vn.column > 0) self.current_column = vn.column;
             self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
+            self.current_column = old_col;
         } else {
             self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
         }
