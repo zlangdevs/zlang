@@ -12,7 +12,22 @@ void zlang_reset_lexer_state(void) {
     template_depth = 0;
     last_was_identifier = 0;
     last_was_rparen = 0;
+    last_was_rparen = 0;
 }
+
+static int current_col = 1;
+
+#define YY_USER_ACTION \
+    yylloc.first_line = yylloc.last_line = yylineno; \
+    yylloc.first_column = current_col; \
+    for(int i = 0; i < yyleng; i++) { \
+        if (yytext[i] == '\n') { \
+            current_col = 1; \
+        } else { \
+            current_col++; \
+        } \
+    } \
+    yylloc.last_column = current_col - 1;
 %}
 
 %option noyywrap
