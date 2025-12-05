@@ -331,6 +331,7 @@ pub const Node = struct {
     data: NodeData,
     allocator: std.mem.Allocator,
     line: usize,
+    column: usize,
 
     pub fn create(allocator: std.mem.Allocator, data: NodeData) *Node {
         const node = utils.create(Node, allocator);
@@ -338,6 +339,7 @@ pub const Node = struct {
             .data = data,
             .allocator = allocator,
             .line = 0,
+            .column = 0,
         };
         return node;
     }
