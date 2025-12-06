@@ -1,0 +1,12 @@
+wrap @strlen(s: ptr<u8>) >> u64;
+wrap @strcpy(dest: ptr<u8>, src: ptr<u8>) >> ptr<u8>;
+wrap @strcat(dest: ptr<u8>, src: ptr<u8>) >> ptr<u8>;
+wrap @strcmp(s1: ptr<u8>, s2: ptr<u8>) >> i32;
+wrap @strdup(s: ptr<u8>) >> ptr<u8>;
+wrap @strchr(s: ptr<u8>, c: i32) >> ptr<u8>;
+wrap @strstr(haystack: ptr<u8>, needle: ptr<u8>) >> ptr<u8>;
+
+fun strEq(s1: ptr<u8>, s2: ptr<u8>) >> bool {
+    i32 result = strcmp(s1, s2);
+    return result == 0;
+}
