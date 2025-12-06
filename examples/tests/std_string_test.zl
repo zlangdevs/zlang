@@ -1,0 +1,48 @@
+use std.string
+
+fun main() >> i32 {
+    @printf("Testing std.string module...\n");
+
+    ptr<u8> s1 = "Hello";
+    u64 len = strlen(s1);
+    @printf("strlen('Hello') expected 5):%d\n", len);
+
+    ptr<u8> s2 = "Hello";
+    ptr<u8> s3 = "World";
+    bool eq1 = strEq(s1, s2);
+    bool eq2 = strEq(s1, s3);
+    @printf("strEq('Hello', 'Hello') expected 1):%d\n", eq1);
+    @printf("strEq('Hello', 'World') expected 0):%d\n", eq2);
+
+    arr<u8, 20> buffer;
+    ptr<u8> dest = &buffer;
+    strcpy(dest, s1);
+    bool eq3 = strEq(dest, s1);
+    @printf("strcpy result matches expected 1):%d\n", eq3);
+
+    strcat(dest, " World");
+    ptr<u8> expected = "Hello World";
+    bool eq4 = strEq(dest, expected);
+    @printf("strcat result matches expected 1):%d\n", eq4);
+    @printf("Result string: %s\n", dest);
+
+    ptr<u8> dup = strdup(s1);
+    bool eq5 = strEq(dup, s1);
+    @printf("strdup result matches expected 1):%d\n", eq5);
+
+    ptr<u8> found = strchr(s1, 'e');
+    bool found_check = found != null;
+    @printf("strchr('Hello', 'e') found expected 1):%d\n", found_check);
+    if (found_check) {
+        @printf("strchr result: %s\n", found);
+    }
+
+    ptr<u8> found_str = strstr(expected, "World");
+    bool found_str_check = found_str != null;
+    @printf("strstr('Hello World', 'World') found expected 1):%d\n", found_str_check);
+    if (found_str_check) {
+        @printf("strstr result: %s\n", found_str);
+    }
+
+    return 0;
+}
