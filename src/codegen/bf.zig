@@ -169,6 +169,180 @@ fn expandArrayLoads(cg: *codegen, ctx: *BrainfuckContext) !void {
     new_requests = std.ArrayList(BfLoadRequest){};
 }
 
+const LinearLoopOp = struct {
+    offset: i32,
+    factor: i32,
+};
+
+const BfOp = union(enum) {
+    inc_ptr: i32,
+    add_val: i32,
+    output,
+    input,
+    loop_start,
+    loop_end,
+    set_zero,
+    linear_loop: std.ArrayList(LinearLoopOp),
+};
+
+fn parseBrainfuckOps(allocator: std.mem.Allocator, code: []const u8) !std.ArrayList(BfOp) {
+    var ops = std.ArrayList(BfOp){};
+    errdefer ops.deinit(allocator);
+
+    for (code) |char| {
+        switch (char) {
+            '>' => try ops.append(allocator, .{ .inc_ptr = 1 }),
+            '<' => try ops.append(allocator, .{ .inc_ptr = -1 }),
+            '+' => try ops.append(allocator, .{ .add_val = 1 }),
+            '-' => try ops.append(allocator, .{ .add_val = -1 }),
+            '.' => try ops.append(allocator, .output),
+            ',' => try ops.append(allocator, .input),
+            '[' => try ops.append(allocator, .loop_start),
+            ']' => try ops.append(allocator, .loop_end),
+            else => {},
+        }
+    }
+    return ops;
+}
+
+fn checkLinearLoop(allocator: std.mem.Allocator, body: []const BfOp) !?std.ArrayList(LinearLoopOp) {
+    var effects = std.AutoHashMapUnmanaged(i32, i32){};
+    defer effects.deinit(allocator);
+
+    var ptr_offset: i32 = 0;
+    for (body) |op| {
+        switch (op) {
+            .inc_ptr => |val| ptr_offset += val,
+            .add_val => |val| {
+                const entry = try effects.getOrPut(allocator, ptr_offset);
+                if (!entry.found_existing) entry.value_ptr.* = 0;
+                entry.value_ptr.* += val;
+            },
+            else => return null,
+        }
+    }
+
+    if (ptr_offset != 0) return null;
+
+    const start_change = effects.get(0) orelse return null;
+    if (start_change != -1) return null;
+
+    var factors = std.ArrayList(LinearLoopOp){};
+    errdefer factors.deinit(allocator);
+
+    var it = effects.iterator();
+    while (it.next()) |entry| {
+        const offset = entry.key_ptr.*;
+        const factor = entry.value_ptr.*;
+        if (offset == 0) continue;
+        if (factor != 0) {
+            try factors.append(allocator, .{ .offset = offset, .factor = factor });
+        }
+    }
+    return factors;
+}
+
+fn freeBfOps(allocator: std.mem.Allocator, ops: []const BfOp) void {
+    for (ops) |op| {
+        switch (op) {
+            .linear_loop => |list| {
+                var mut_list = list;
+                mut_list.deinit(allocator);
+            },
+            else => {},
+        }
+    }
+}
+
+fn optimizeOps(allocator: std.mem.Allocator, initial_ops: []const BfOp) !std.ArrayList(BfOp) {
+    var contracted = std.ArrayList(BfOp){};
+    defer contracted.deinit(allocator);
+    var i: usize = 0;
+    while (i < initial_ops.len) {
+        const op = initial_ops[i];
+        switch (op) {
+            .inc_ptr => |val| {
+                var total = val;
+                var j = i + 1;
+                while (j < initial_ops.len) : (j += 1) {
+                    if (initial_ops[j] == .inc_ptr) {
+                        total += initial_ops[j].inc_ptr;
+                    } else {
+                        break;
+                    }
+                }
+                if (total != 0) {
+                    try contracted.append(allocator, .{ .inc_ptr = total });
+                }
+                i = j;
+            },
+            .add_val => |val| {
+                var total = val;
+                var j = i + 1;
+                while (j < initial_ops.len) : (j += 1) {
+                    if (initial_ops[j] == .add_val) {
+                        total += initial_ops[j].add_val;
+                    } else {
+                        break;
+                    }
+                }
+                if (total != 0) {
+                    try contracted.append(allocator, .{ .add_val = total });
+                }
+                i = j;
+            },
+            else => {
+                try contracted.append(allocator, op);
+                i += 1;
+            },
+        }
+    }
+    var optimized = std.ArrayList(BfOp){};
+    errdefer {
+        freeBfOps(allocator, optimized.items);
+        optimized.deinit(allocator);
+    }
+    i = 0;
+    const ops = contracted.items;
+    while (i < ops.len) {
+        const op = ops[i];
+        if (op == .loop_start) {
+            if (i + 2 < ops.len and ops[i + 1] == .add_val and ops[i + 2] == .loop_end) {
+                const val = ops[i + 1].add_val;
+                if (val == 1 or val == -1) {
+                    try optimized.append(allocator, .set_zero);
+                    i += 3;
+                    continue;
+                }
+            }
+            var depth: i32 = 1;
+            var j = i + 1;
+            var possible_linear = true;
+            while (j < ops.len) : (j += 1) {
+                if (ops[j] == .loop_start) {
+                    depth += 1;
+                    possible_linear = false;
+                } else if (ops[j] == .loop_end) {
+                    depth -= 1;
+                }
+                if (depth == 0) break;
+            }
+            if (depth == 0 and possible_linear) {
+                const body = ops[i + 1 .. j];
+                if (try checkLinearLoop(allocator, body)) |factors| {
+                    try optimized.append(allocator, .{ .linear_loop = factors });
+                    i = j + 1;
+                    continue;
+                }
+            }
+        }
+        try optimized.append(allocator, op);
+        i += 1;
+    }
+
+    return optimized;
+}
+
 pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
     var ctx = ParseBfContext(cg.allocator, bf.code);
     defer {
@@ -177,6 +351,13 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
     }
 
     try expandArrayLoads(cg, &ctx);
+    var ops = try parseBrainfuckOps(cg.allocator, ctx.code);
+    defer ops.deinit(cg.allocator);
+    var optimized_ops = try optimizeOps(cg.allocator, ops.items);
+    defer {
+        freeBfOps(cg.allocator, optimized_ops.items);
+        optimized_ops.deinit(cg.allocator);
+    }
 
     const current_function = cg.current_function orelse return errors.CodegenError.TypeMismatch;
 
@@ -293,65 +474,34 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
     var loop_stack = std.ArrayList(struct { cond: c.LLVMBasicBlockRef, exit: c.LLVMBasicBlockRef }){};
     defer loop_stack.deinit(cg.allocator);
 
-    // Create constants for cell operations
-    const cell_one = c.LLVMConstInt(cell_type, 1, 0);
     const cell_zero = c.LLVMConstInt(cell_type, 0, 0);
 
-    // Create max value for unsigned overflow (2^cell_size - 1)
-    // const max_cell_value = if (ctx.cell_size == 64)
-    //     c.LLVMConstInt(cell_type, std.math.maxInt(u64), 0)
-    // else
-    //     c.LLVMConstInt(cell_type, (1 << @intCast(ctx.cell_size)) - 1, 0);
-
-    for (ctx.code) |char| {
-        switch (char) {
-            '>' => {
+    for (optimized_ops.items) |op| {
+        switch (op) {
+            .inc_ptr => |val| {
                 const ptr_val = c.LLVMBuildLoad2(cg.builder, i32_type, ptr, "ptr_val");
-                const new_ptr_val = c.LLVMBuildAdd(cg.builder, ptr_val, c.LLVMConstInt(i32_type, 1, 0), "inc_ptr");
+                const offset = c.LLVMConstInt(i32_type, @as(c_ulonglong, @intCast(@abs(val))), 0);
+                const new_ptr_val = if (val > 0)
+                    c.LLVMBuildAdd(cg.builder, ptr_val, offset, "inc_ptr")
+                else
+                    c.LLVMBuildSub(cg.builder, ptr_val, offset, "dec_ptr");
                 _ = c.LLVMBuildStore(cg.builder, new_ptr_val, ptr);
             },
-            '<' => {
-                const ptr_val = c.LLVMBuildLoad2(cg.builder, i32_type, ptr, "ptr_val");
-                const new_ptr_val = c.LLVMBuildSub(cg.builder, ptr_val, c.LLVMConstInt(i32_type, 1, 0), "dec_ptr");
-                _ = c.LLVMBuildStore(cg.builder, new_ptr_val, ptr);
-            },
-            '+' => {
+            .add_val => |val| {
                 const ptr_val = c.LLVMBuildLoad2(cg.builder, i32_type, ptr, "ptr_val");
                 var indices: [1]c.LLVMValueRef = .{ptr_val};
                 const cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &indices[0], 1, "cell_ptr");
                 const cell_val = c.LLVMBuildLoad2(cg.builder, cell_type, cell_ptr, "cell_val");
 
-                var new_cell_val: c.LLVMValueRef = undefined;
-                if (ctx.cell_signed) {
-                    // Signed arithmetic - let LLVM handle overflow
-                    new_cell_val = c.LLVMBuildAdd(cg.builder, cell_val, cell_one, "inc_cell");
-                } else {
-                    // Unsigned arithmetic with proper wrapping
-                    new_cell_val = c.LLVMBuildAdd(cg.builder, cell_val, cell_one, "inc_cell");
-                    // LLVM handles unsigned overflow correctly by default
-                }
+                const diff = c.LLVMConstInt(cell_type, @as(c_ulonglong, @intCast(@abs(val))), 0);
+                const new_cell_val = if (val > 0)
+                    c.LLVMBuildAdd(cg.builder, cell_val, diff, "inc_cell")
+                else
+                    c.LLVMBuildSub(cg.builder, cell_val, diff, "dec_cell");
 
                 _ = c.LLVMBuildStore(cg.builder, new_cell_val, cell_ptr);
             },
-            '-' => {
-                const ptr_val = c.LLVMBuildLoad2(cg.builder, i32_type, ptr, "ptr_val");
-                var indices: [1]c.LLVMValueRef = .{ptr_val};
-                const cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &indices[0], 1, "cell_ptr");
-                const cell_val = c.LLVMBuildLoad2(cg.builder, cell_type, cell_ptr, "cell_val");
-
-                var new_cell_val: c.LLVMValueRef = undefined;
-                if (ctx.cell_signed) {
-                    // Signed arithmetic - let LLVM handle overflow
-                    new_cell_val = c.LLVMBuildSub(cg.builder, cell_val, cell_one, "dec_cell");
-                } else {
-                    // Unsigned arithmetic with proper wrapping
-                    new_cell_val = c.LLVMBuildSub(cg.builder, cell_val, cell_one, "dec_cell");
-                    // LLVM handles unsigned underflow correctly by default (0-1 = MAX_VALUE)
-                }
-
-                _ = c.LLVMBuildStore(cg.builder, new_cell_val, cell_ptr);
-            },
-            '.' => {
+            .output => {
                 const ptr_val = c.LLVMBuildLoad2(cg.builder, i32_type, ptr, "ptr_val");
                 var indices: [1]c.LLVMValueRef = .{ptr_val};
                 const cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &indices[0], 1, "cell_ptr");
@@ -360,7 +510,7 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
                 var putchar_args: [1]c.LLVMValueRef = .{char_val};
                 _ = c.LLVMBuildCall2(cg.builder, c.LLVMGlobalGetValueType(putchar_func), putchar_func, &putchar_args[0], 1, "");
             },
-            ',' => {
+            .input => {
                 const ptr_val = c.LLVMBuildLoad2(cg.builder, i32_type, ptr, "ptr_val");
                 var indices: [1]c.LLVMValueRef = .{ptr_val};
                 const cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &indices[0], 1, "cell_ptr");
@@ -368,7 +518,7 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
                 const cell_val = cg.castToType(input_val, cell_type);
                 _ = c.LLVMBuildStore(cg.builder, cell_val, cell_ptr);
             },
-            '[' => {
+            .loop_start => {
                 const loop_cond_bb = c.LLVMAppendBasicBlockInContext(cg.context, current_function, "bf_loop_cond");
                 const loop_body_bb = c.LLVMAppendBasicBlockInContext(cg.context, current_function, "bf_loop_body");
                 const loop_exit_bb = c.LLVMAppendBasicBlockInContext(cg.context, current_function, "bf_loop_exit");
@@ -386,7 +536,7 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
                 c.LLVMPositionBuilderAtEnd(cg.builder, loop_body_bb);
                 try loop_stack.append(cg.allocator, .{ .cond = loop_cond_bb, .exit = loop_exit_bb });
             },
-            ']' => {
+            .loop_end => {
                 if (loop_stack.items.len == 0) {
                     return errors.CodegenError.UnsupportedOperation; // Unmatched ]
                 }
@@ -394,7 +544,36 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
                 _ = c.LLVMBuildBr(cg.builder, loop_blocks.?.cond);
                 c.LLVMPositionBuilderAtEnd(cg.builder, loop_blocks.?.exit);
             },
-            else => {}, // Ignore non-brainfuck characters
+            .set_zero => {
+                const ptr_val = c.LLVMBuildLoad2(cg.builder, i32_type, ptr, "ptr_val");
+                var indices: [1]c.LLVMValueRef = .{ptr_val};
+                const cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &indices[0], 1, "cell_ptr");
+                _ = c.LLVMBuildStore(cg.builder, cell_zero, cell_ptr);
+            },
+            .linear_loop => |factors| {
+                const ptr_val = c.LLVMBuildLoad2(cg.builder, i32_type, ptr, "ptr_val");
+                var indices: [1]c.LLVMValueRef = .{ptr_val};
+                const cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &indices[0], 1, "cell_ptr");
+                const count_val = c.LLVMBuildLoad2(cg.builder, cell_type, cell_ptr, "count_val");
+                for (factors.items) |factor| {
+                    const offset_val = c.LLVMConstInt(i32_type, @as(c_ulonglong, @intCast(@abs(factor.offset))), 0);
+                    const dest_ptr_val = if (factor.offset > 0)
+                        c.LLVMBuildAdd(cg.builder, ptr_val, offset_val, "dest_ptr")
+                    else
+                        c.LLVMBuildSub(cg.builder, ptr_val, offset_val, "dest_ptr");
+                    var dest_indices: [1]c.LLVMValueRef = .{dest_ptr_val};
+                    const dest_cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &dest_indices[0], 1, "dest_cell_ptr");
+                    const dest_cell_val = c.LLVMBuildLoad2(cg.builder, cell_type, dest_cell_ptr, "dest_cell_val");
+                    const factor_val = c.LLVMConstInt(cell_type, @as(c_ulonglong, @intCast(@abs(factor.factor))), 0);
+                    const mul_val = c.LLVMBuildMul(cg.builder, count_val, factor_val, "mul_val");
+                    const new_dest_val = if (factor.factor > 0)
+                        c.LLVMBuildAdd(cg.builder, dest_cell_val, mul_val, "add_val")
+                    else
+                        c.LLVMBuildSub(cg.builder, dest_cell_val, mul_val, "sub_val");
+                    _ = c.LLVMBuildStore(cg.builder, new_dest_val, dest_cell_ptr);
+                }
+                _ = c.LLVMBuildStore(cg.builder, cell_zero, cell_ptr);
+            },
         }
     }
 
