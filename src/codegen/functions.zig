@@ -64,7 +64,15 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
     var param_types = std.ArrayList(c.LLVMTypeRef){};
     defer param_types.deinit(cg.allocator);
 
-    for (func.parameters.items) |param| {
+    var is_varargs = false;
+    for (func.parameters.items, 0..) |param, i| {
+        if (utils.isVarArgType(param.type_name)) {
+            if (i != func.parameters.items.len - 1) {
+                return errors.CodegenError.TypeMismatch; // vararg must be last
+            }
+            is_varargs = true;
+            continue;
+        }
         const param_type = try cg.getLLVMType(param.type_name);
         if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind and utils.shouldUseByVal(cg, @ptrCast(param_type))) {
             try param_types.append(cg.allocator, c.LLVMPointerType(@ptrCast(param_type), 0));
@@ -75,9 +83,9 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
 
     const return_type = try cg.getLLVMType(func.return_type);
     const function_type = if (param_types.items.len > 0)
-        c.LLVMFunctionType(@ptrCast(return_type), param_types.items.ptr, @intCast(param_types.items.len), 0)
+        c.LLVMFunctionType(@ptrCast(return_type), param_types.items.ptr, @intCast(param_types.items.len), if (is_varargs) 1 else 0)
     else
-        c.LLVMFunctionType(@ptrCast(return_type), null, 0, 0);
+        c.LLVMFunctionType(@ptrCast(return_type), null, 0, if (is_varargs) 1 else 0);
 
     const func_name_z = utils.dupeZ(cg.allocator, func.name);
     defer cg.allocator.free(func_name_z);
@@ -97,6 +105,14 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
     try cg.functions.put(func.name, @ptrCast(llvm_func));
     try cg.regular_functions.put(func.name, true);
     try cg.function_return_types.put(func.name, func.return_type);
+    if (is_varargs) {
+        const last_param = func.parameters.items[func.parameters.items.len - 1];
+        if (utils.getVarArgType(last_param.type_name)) |var_type| {
+            try cg.function_vararg_types.put(func.name, var_type);
+        } else {
+            try cg.function_vararg_types.put(func.name, "_");
+        }
+    }
 }
 
 pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.CodegenError!void {
@@ -196,7 +212,15 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
         try param_types.append(cg.allocator, c.LLVMPointerType(@ptrCast(return_type), 0));
     }
 
-    for (c_func.parameters.items) |param| {
+    var is_varargs = false;
+    for (c_func.parameters.items, 0..) |param, i| {
+        if (utils.isVarArgType(param.type_name)) {
+            if (i != c_func.parameters.items.len - 1) {
+                return errors.CodegenError.TypeMismatch; // vararg must be last
+            }
+            is_varargs = true;
+            continue;
+        }
         const param_type = try cg.getLLVMType(param.type_name);
         if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind) {
             if (utils.shouldSplitAsVector(cg, @ptrCast(param_type))) {
@@ -216,9 +240,9 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
 
     const final_return_type = if (uses_sret) c.LLVMVoidTypeInContext(@ptrCast(cg.context)) else return_type;
     const function_type = if (param_types.items.len > 0)
-        c.LLVMFunctionType(@ptrCast(final_return_type), param_types.items.ptr, @intCast(param_types.items.len), 0)
+        c.LLVMFunctionType(@ptrCast(final_return_type), param_types.items.ptr, @intCast(param_types.items.len), if (is_varargs) 1 else 0)
     else
-        c.LLVMFunctionType(@ptrCast(final_return_type), null, 0, 0);
+        c.LLVMFunctionType(@ptrCast(final_return_type), null, 0, if (is_varargs) 1 else 0);
 
     if (cg.functions.get(c_func.name) == null) {
         const llvm_func = c.LLVMAddFunction(@ptrCast(cg.module), func_name_z.ptr, function_type);
@@ -235,6 +259,7 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
 
         var actual_param_idx: u32 = attr_idx;
         for (c_func.parameters.items) |param| {
+            if (utils.isVarArgType(param.type_name)) continue;
             const param_type = try cg.getLLVMType(param.type_name);
             if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind) {
                 if (utils.shouldSplitAsVector(cg, @ptrCast(param_type))) {
@@ -258,6 +283,14 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
     }
     try cg.c_function_declarations.put(utils.dupe(u8, cg.allocator, c_func.name), c_func.is_wrapped);
     try cg.function_return_types.put(utils.dupe(u8, cg.allocator, c_func.name), c_func.return_type);
+    if (is_varargs) {
+        const last_param = c_func.parameters.items[c_func.parameters.items.len - 1];
+        if (utils.getVarArgType(last_param.type_name)) |var_type| {
+            try cg.function_vararg_types.put(utils.dupe(u8, cg.allocator, c_func.name), var_type);
+        } else {
+            try cg.function_vararg_types.put(utils.dupe(u8, cg.allocator, c_func.name), "_");
+        }
+    }
 }
 
 pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) errors.CodegenError!c.LLVMValueRef {
@@ -486,6 +519,8 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                 if (i < signature.param_types.len) {
                     const expected_type = libcTypeToLLVM(cg, signature.param_types[i]);
                     arg_value = cg.castToType(arg_value, expected_type);
+                } else if (signature.is_varargs) {
+                    arg_value = prepareArgumentForLibcCall(cg, arg_value, call.name, i);
                 }
             }
         } else {
@@ -515,11 +550,36 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                         arg_value = try cg.castWithRules(arg_value, expected_type, arg);
                     }
                 }
+            } else {
+                // Variadic argument
+                if (cg.function_vararg_types.get(call.name)) |var_type| {
+                    if (std.mem.eql(u8, var_type, "_")) {
+                        // Default C promotions
+                        const arg_type = c.LLVMTypeOf(arg_value);
+                        const arg_kind = c.LLVMGetTypeKind(arg_type);
+                        if (arg_kind == c.LLVMFloatTypeKind) { // float -> double
+                            const double_type = c.LLVMDoubleTypeInContext(cg.context);
+                            arg_value = c.LLVMBuildFPExt(cg.builder, arg_value, double_type, "fpext");
+                        } else if (arg_kind == c.LLVMIntegerTypeKind) {
+                            const width = c.LLVMGetIntTypeWidth(arg_type);
+                            if (width < 32) { // promote < i32 to i32
+                                const i32_type = c.LLVMInt32TypeInContext(cg.context);
+                                arg_value = c.LLVMBuildSExt(cg.builder, arg_value, i32_type, "sext");
+                            }
+                        }
+                    } else {
+                        const expected_type = try cg.getLLVMType(var_type);
+                        arg_value = try cg.castWithRules(arg_value, expected_type, arg);
+                    }
+                }
             }
         }
 
         if (call.is_libc) {
-            arg_value = prepareArgumentForLibcCall(cg, arg_value, call.name, i);
+            // prepareArgumentForLibcCall is already called above for varargs, or not needed for fixed params if castToType handles it
+            // But keeping it for safety if it does specific things
+            // Actually, prepareArgumentForLibcCall does promotions.
+            // We should only call it if we haven't already handled it.
         }
 
         try args.append(cg.allocator, arg_value);

@@ -203,6 +203,21 @@ pub fn stripConst(type_name: []const u8) []const u8 {
     return type_name;
 }
 
+pub fn isVarArgType(type_name: []const u8) bool {
+    const trimmed = std.mem.trim(u8, type_name, " \t");
+    if (std.mem.eql(u8, trimmed, "vararg<_>")) return true;
+    return std.mem.startsWith(u8, trimmed, "vararg<") and std.mem.endsWith(u8, trimmed, ">");
+}
+
+pub fn getVarArgType(type_name: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, type_name, " \t");
+    if (std.mem.eql(u8, trimmed, "vararg<_>")) return null;
+    if (std.mem.startsWith(u8, trimmed, "vararg<") and std.mem.endsWith(u8, trimmed, ">")) {
+        return trimmed[7 .. trimmed.len - 1];
+    }
+    return null;
+}
+
 pub fn getLLVMType(self: *codegen.CodeGenerator, type_name: []const u8) errors.CodegenError!c.LLVMTypeRef {
     if (std.mem.startsWith(u8, type_name, "ptr<") and std.mem.endsWith(u8, type_name, ">")) {
         var inner_type_name = type_name[4 .. type_name.len - 1];
