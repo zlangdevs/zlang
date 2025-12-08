@@ -27,6 +27,7 @@ pub const CodeGenerator = struct {
     c_function_declarations: std.HashMap([]const u8, bool, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     regular_functions: std.HashMap([]const u8, bool, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     function_return_types: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    function_vararg_types: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     sret_functions: std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     current_function: ?c.LLVMValueRef,
     current_function_return_type: []const u8,
@@ -73,6 +74,7 @@ pub const CodeGenerator = struct {
             .c_function_declarations = std.HashMap([]const u8, bool, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .regular_functions = std.HashMap([]const u8, bool, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .function_return_types = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .function_vararg_types = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .sret_functions = std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .current_function = null,
             .current_function_return_type = "",
@@ -101,6 +103,7 @@ pub const CodeGenerator = struct {
         self.c_function_declarations.deinit();
         self.regular_functions.deinit();
         self.function_return_types.deinit();
+        self.function_vararg_types.deinit();
         self.sret_functions.deinit();
         self.loop_context_stack.deinit(self.allocator);
         self.label_blocks.deinit();
@@ -608,6 +611,14 @@ pub const CodeGenerator = struct {
                 }
             },
             .var_decl => |decl| {
+                if (utils.isVarArgType(decl.type_name)) {
+                    if (self.current_line > 0) {
+                        self.reportErrorFmt("Invalid type 'vararg' for variable '{s}'", .{decl.name}, "Variadic arguments can only be used as the last parameter of a function");
+                    } else {
+                        self.reportErrorFmt("Invalid type 'vararg' for variable '{s}'", .{decl.name}, "Variadic arguments can only be used as the last parameter of a function");
+                    }
+                    return errors.CodegenError.TypeMismatch;
+                }
                 if (std.mem.eql(u8, decl.type_name, "void")) {
                     if (decl.initializer != null) {
                         if (self.current_line > 0) {
@@ -1432,6 +1443,14 @@ pub const CodeGenerator = struct {
     fn generateGlobalDeclaration(self: *CodeGenerator, global_node: *ast.Node) errors.CodegenError!void {
         switch (global_node.data) {
             .var_decl => |decl| {
+                if (utils.isVarArgType(decl.type_name)) {
+                    if (self.current_line > 0) {
+                        self.reportErrorFmt("Invalid type 'vararg' for variable '{s}'", .{decl.name}, "Variadic arguments can only be used as the last parameter of a function");
+                    } else {
+                        self.reportErrorFmt("Invalid type 'vararg' for variable '{s}'", .{decl.name}, "Variadic arguments can only be used as the last parameter of a function");
+                    }
+                    return errors.CodegenError.TypeMismatch;
+                }
                 const var_type = try self.getLLVMType(decl.type_name);
                 const var_name_z = utils.dupeZ(self.allocator, decl.name);
                 defer self.allocator.free(var_name_z);
