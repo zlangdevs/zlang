@@ -1,0 +1,10 @@
+wrap @printf(fmt: ptr<u8>, args: vararg<_>) >> i32;
+
+fun main() >> i32 {
+    @printf("Hello, %s!\n", "World");
+    @printf("Integer: (expected 42):%d\n", 42);
+    @printf("Float: (expected 3.14):%.2f\n", 3.14);
+    @printf("Mixed: %d, (expected 4.56):%.2f, %s\n", 123, 4.56, "test");
+    
+    return 0;
+}
