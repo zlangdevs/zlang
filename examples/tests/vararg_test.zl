@@ -1,10 +1,39 @@
+?? Test for variadic arguments
+
+?? Declare C printf function
 wrap @printf(fmt: ptr<u8>, args: vararg<_>) >> i32;
 
+?? Define va_list struct for x86_64
+struct va_list {
+    gp_offset u32,
+    fp_offset u32,
+    overflow_arg_area ptr<void>,
+    reg_save_area ptr<void>
+}
+
+?? Custom variadic function
+fun print_ints(count: i32, args: vararg<_>) >> void {
+    va_list vl;
+    @va_start(&vl);
+    
+    for i32 i = 0; i < count; i++ {
+        i32 val = @va_arg(&vl, "i32");
+        @printf("%d ", val);
+    }
+    @printf("\n");
+    @va_end(&vl);
+}
+
 fun main() >> i32 {
+    ?? Test printf with different types
     @printf("Hello, %s!\n", "World");
     @printf("Integer: (expected 42):%d\n", 42);
     @printf("Float: (expected 3.14):%.2f\n", 3.14);
     @printf("Mixed: %d, (expected 4.56):%.2f, %s\n", 123, 4.56, "test");
+    
+    ?? Test custom variadic function
+    @printf("Custom vararg: ");
+    print_ints(3, 10, 20, 30);
     
     return 0;
 }

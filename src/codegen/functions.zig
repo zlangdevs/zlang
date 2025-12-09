@@ -93,6 +93,7 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
     const llvm_func = c.LLVMAddFunction(@ptrCast(cg.module), func_name_z.ptr, function_type);
 
     for (func.parameters.items, 0..) |param, i| {
+        if (utils.isVarArgType(param.type_name)) continue;
         const param_type = try cg.getLLVMType(param.type_name);
         if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind and utils.shouldUseByVal(cg, @ptrCast(param_type))) {
             const byval_attr = c.LLVMCreateTypeAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("byval", 5), @ptrCast(param_type));
@@ -134,6 +135,7 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
     try variables.pushScope(cg);
     // Add parameters to the function-level scope
     for (func.parameters.items, 0..) |param, i| {
+        if (utils.isVarArgType(param.type_name)) continue;
         const param_value = c.LLVMGetParam(@ptrCast(llvm_func), @intCast(i));
         const param_type = try cg.getLLVMType(param.type_name);
 
@@ -294,6 +296,104 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
 }
 
 pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) errors.CodegenError!c.LLVMValueRef {
+    if (call.is_libc and std.mem.eql(u8, call.name, "va_arg")) {
+        if (call.args.items.len != 2) return errors.CodegenError.TypeMismatch;
+        const vl_ptr = try cg.generateExpression(call.args.items[0]);
+
+        // Expect second arg to be string literal type name
+        const type_arg = call.args.items[1];
+        if (type_arg.data != .string_literal) return errors.CodegenError.TypeMismatch;
+        const type_name = type_arg.data.string_literal.value;
+        const target_type = try cg.getLLVMType(type_name);
+
+        // Define va_list struct type: { i32, i32, i8*, i8* }
+        const i32_ty = c.LLVMInt32TypeInContext(cg.context);
+        const i8_ptr_ty = c.LLVMPointerType(c.LLVMInt8TypeInContext(cg.context), 0);
+        var struct_elems = [_]c.LLVMTypeRef{ i32_ty, i32_ty, i8_ptr_ty, i8_ptr_ty };
+        const va_list_ty = c.LLVMStructTypeInContext(cg.context, &struct_elems, 4, 0);
+        const va_list_ptr_ty = c.LLVMPointerType(va_list_ty, 0);
+
+        const vl = c.LLVMBuildBitCast(cg.builder, vl_ptr, va_list_ptr_ty, "vl_cast");
+
+        const type_kind = c.LLVMGetTypeKind(target_type);
+        const is_float = type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind;
+
+        // Basic Blocks
+        const current_block = c.LLVMGetInsertBlock(cg.builder);
+        const func = c.LLVMGetBasicBlockParent(current_block);
+        const in_reg_bb = c.LLVMAppendBasicBlockInContext(cg.context, func, "va_arg_in_reg");
+        const in_mem_bb = c.LLVMAppendBasicBlockInContext(cg.context, func, "va_arg_in_mem");
+        const cont_bb = c.LLVMAppendBasicBlockInContext(cg.context, func, "va_arg_cont");
+
+        const offset_idx: u32 = if (is_float) 1 else 0;
+        const offset_ptr = c.LLVMBuildStructGEP2(cg.builder, va_list_ty, vl, offset_idx, "offset_ptr");
+        const offset = c.LLVMBuildLoad2(cg.builder, i32_ty, offset_ptr, "offset");
+
+        const limit = c.LLVMConstInt(i32_ty, if (is_float) 176 else 48, 0);
+        const fits_in_reg = c.LLVMBuildICmp(cg.builder, c.LLVMIntULT, offset, limit, "fits_in_reg");
+        _ = c.LLVMBuildCondBr(cg.builder, fits_in_reg, in_reg_bb, in_mem_bb);
+
+        // In Reg
+        c.LLVMPositionBuilderAtEnd(cg.builder, in_reg_bb);
+        const reg_save_area_ptr = c.LLVMBuildStructGEP2(cg.builder, va_list_ty, vl, 3, "reg_save_area_ptr");
+        const reg_save_area = c.LLVMBuildLoad2(cg.builder, i8_ptr_ty, reg_save_area_ptr, "reg_save_area");
+        var idx_list = [_]c.LLVMValueRef{offset};
+        const reg_addr = c.LLVMBuildGEP2(cg.builder, c.LLVMInt8TypeInContext(cg.context), reg_save_area, &idx_list, 1, "reg_addr");
+
+        // Cast reg_addr to pointer to target type (or i64/double)
+        const reg_val_ptr = c.LLVMBuildBitCast(cg.builder, reg_addr, c.LLVMPointerType(target_type, 0), "reg_val_ptr");
+        const reg_val = c.LLVMBuildLoad2(cg.builder, target_type, reg_val_ptr, "reg_val");
+
+        const next_offset = c.LLVMBuildAdd(cg.builder, offset, c.LLVMConstInt(i32_ty, if (is_float) 16 else 8, 0), "next_offset");
+        _ = c.LLVMBuildStore(cg.builder, next_offset, offset_ptr);
+        _ = c.LLVMBuildBr(cg.builder, cont_bb);
+
+        // In Mem
+        c.LLVMPositionBuilderAtEnd(cg.builder, in_mem_bb);
+        const overflow_arg_area_ptr = c.LLVMBuildStructGEP2(cg.builder, va_list_ty, vl, 2, "overflow_arg_area_ptr");
+        const overflow_arg_area = c.LLVMBuildLoad2(cg.builder, i8_ptr_ty, overflow_arg_area_ptr, "overflow_arg_area");
+
+        const mem_val_ptr = c.LLVMBuildBitCast(cg.builder, overflow_arg_area, c.LLVMPointerType(target_type, 0), "mem_val_ptr");
+        const mem_val = c.LLVMBuildLoad2(cg.builder, target_type, mem_val_ptr, "mem_val");
+
+        // Align overflow area to 8 bytes and advance
+        const step = c.LLVMConstInt(c.LLVMInt64TypeInContext(cg.context), 8, 0);
+        var idx_step = [_]c.LLVMValueRef{step};
+        const next_overflow = c.LLVMBuildGEP2(cg.builder, c.LLVMInt8TypeInContext(cg.context), overflow_arg_area, &idx_step, 1, "next_overflow");
+        _ = c.LLVMBuildStore(cg.builder, next_overflow, overflow_arg_area_ptr);
+        _ = c.LLVMBuildBr(cg.builder, cont_bb);
+
+        // Cont
+        c.LLVMPositionBuilderAtEnd(cg.builder, cont_bb);
+        const phi = c.LLVMBuildPhi(cg.builder, target_type, "va_arg_result");
+        var phi_vals = [_]c.LLVMValueRef{ reg_val, mem_val };
+        var phi_blocks = [_]c.LLVMBasicBlockRef{ in_reg_bb, in_mem_bb };
+        c.LLVMAddIncoming(phi, &phi_vals, &phi_blocks, 2);
+
+        return phi;
+    }
+
+    if (call.is_libc and (std.mem.eql(u8, call.name, "va_start") or std.mem.eql(u8, call.name, "va_end"))) {
+        if (call.args.items.len != 1) return errors.CodegenError.TypeMismatch;
+        const arg_val = try cg.generateExpression(call.args.items[0]);
+        const i8_ptr_ty = c.LLVMPointerType(c.LLVMInt8TypeInContext(cg.context), 0);
+        const casted_arg = c.LLVMBuildBitCast(cg.builder, arg_val, i8_ptr_ty, "va_list_cast");
+
+        const void_ty = c.LLVMVoidTypeInContext(cg.context);
+        var param_types = [_]c.LLVMTypeRef{i8_ptr_ty};
+        const fn_ty = c.LLVMFunctionType(void_ty, &param_types, 1, 0);
+
+        const intrinsic_name = if (std.mem.eql(u8, call.name, "va_start")) "llvm.va_start" else "llvm.va_end";
+        var intrinsic = c.LLVMGetNamedFunction(cg.module, intrinsic_name);
+        if (intrinsic == null) {
+            intrinsic = c.LLVMAddFunction(cg.module, intrinsic_name, fn_ty);
+        }
+
+        var args = [_]c.LLVMValueRef{casted_arg};
+        _ = c.LLVMBuildCall2(cg.builder, fn_ty, intrinsic, &args, 1, "");
+        return c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0);
+    }
+
     var func: c.LLVMValueRef = undefined;
     if (call.is_libc) {
         var found_external = false;
