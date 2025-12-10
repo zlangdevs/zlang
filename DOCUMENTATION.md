@@ -393,6 +393,107 @@ wrap @some_c_lib_function(x: i32, y: f32) >> ptr<void>;
 
 The `wrap` keyword ensures proper System V ABI handling for struct parameters and return values.
 
+### Variadic Arguments
+
+**Declaring Variadic Functions**
+
+ZLang supports C-style variadic arguments using the `vararg<_>` syntax. Variadic parameters must be the last parameter in a function signature.
+
+```zl
+?? Declare C printf with variadic arguments
+wrap @printf(fmt: ptr<u8>, args: vararg<_>) >> i32;
+
+?? Call with any number of arguments
+@printf("Hello, %s!\n", "World");
+@printf("Number: %d, Float: %.2f\n", 42, 3.14);
+```
+
+**Typed Variadic Arguments**
+
+You can specify a type constraint for variadic arguments:
+
+```zl
+?? Only accepts i32 variadic arguments
+fun sum_integers(count: i32, nums: vararg<i32>) >> i32 {
+    ?? Implementation using intrinsics
+}
+```
+
+**Accessing Variadic Arguments in ZLang Functions**
+
+To define ZLang functions that process variadic arguments, use the built-in intrinsics:
+
+```zl
+?? Define va_list struct for x86_64
+struct va_list {
+    gp_offset u32,
+    fp_offset u32,
+    overflow_arg_area ptr<void>,
+    reg_save_area ptr<void>
+}
+
+fun print_integers(count: i32, args: vararg<_>) >> void {
+    va_list vl;
+    @va_start(&vl);
+    
+    for i32 i = 0; i < count; i++ {
+        i32 value = @va_arg(&vl, "i32");
+        @printf("%d ", value);
+    }
+    @printf("\n");
+    @va_end(&vl);
+}
+
+fun main() >> i32 {
+    print_integers(3, 10, 20, 30);  ?? Prints: 10 20 30
+    return 0;
+}
+```
+
+**Variadic Intrinsics**
+
+- `@va_start(vl_ptr)` - Initialize a `va_list` to process variadic arguments
+- `@va_arg(vl_ptr, "type")` - Retrieve the next argument of the specified type
+- `@va_end(vl_ptr)` - Clean up the `va_list` after processing
+
+**Supported Types for @va_arg**
+
+The `@va_arg` intrinsic currently supports (on x86_64 Linux):
+- Integers: `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`
+- Floats: `f32`, `f64`
+- Pointers: `ptr<T>` for any type `T`
+
+**Usage Notes**
+
+- `vararg<_>` accepts any type (untyped variadic)
+- `vararg<T>` accepts only arguments of type `T` (typed variadic)
+- Variadic parameters must be the last parameter
+- Cannot use `vararg` as a variable type
+- The `va_list` struct layout is platform-specific (x86_64 shown above)
+- Type promotions follow C rules (e.g., `float` → `double`, `char` → `int`)
+
+**Example: Custom Printf Wrapper**
+
+```zl
+wrap @printf(fmt: ptr<u8>, args: vararg<_>) >> i32;
+
+struct va_list {
+    gp_offset u32,
+    fp_offset u32,
+    overflow_arg_area ptr<void>,
+    reg_save_area ptr<void>
+}
+
+fun log_message(level: ptr<u8>, fmt: ptr<u8>, args: vararg<_>) >> void {
+    @printf("[%s] ", level);
+    
+    ?? Unfortunately, can't forward varargs directly
+    ?? Need to re-implement formatting or use printf directly
+    @printf(fmt);
+    @printf("\n");
+}
+```
+
 ### Recursion
 
 ```zl
