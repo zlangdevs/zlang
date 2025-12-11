@@ -26,6 +26,13 @@ pub const PendingGoto = struct {
     goto_block: c.LLVMBasicBlockRef,
 };
 
+pub const TypedVarargInfo = struct {
+    param_name: []const u8,
+    ptr_var: []const u8,
+    count_var: []const u8,
+    element_type: []const u8,
+};
+
 const ElementResult = struct {
     element_ptr: c.LLVMValueRef,
     element_type: c.LLVMTypeRef,
