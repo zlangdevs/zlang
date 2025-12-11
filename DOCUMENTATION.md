@@ -410,12 +410,75 @@ wrap @printf(fmt: ptr<u8>, args: vararg<_>) >> i32;
 
 **Typed Variadic Arguments**
 
-You can specify a type constraint for variadic arguments:
+You can specify a type constraint for variadic arguments. Typed varargs (`vararg<T>`) are a pure ZLang feature that work differently from untyped varargs:
+
+**Untyped (`vararg<_>`)**: Uses C-style va_list, requires intrinsics, C-ABI compatible
+**Typed (`vararg<T>`)**: Simpler implementation using pointer + count, pure ZLang
 
 ```zl
-?? Only accepts i32 variadic arguments
-fun sum_integers(count: i32, nums: vararg<i32>) >> i32 {
-    ?? Implementation using intrinsics
+?? Example: Sum function with typed vararg
+fun sum_integers(nums: vararg<i32>) >> i32 {
+    i32 total = 0;
+    i32 count = @vararg_len(nums);
+    
+    for i32 i = 0; i < count; i++ {
+        total += @vararg_get(nums, i);
+    }
+    
+    return total;
+}
+
+fun main() >> i32 {
+    i32 result = sum_integers(10, 20, 30, 40);  ?? returns 100
+    @printf("Sum: %d\n", result);
+    return 0;
+}
+```
+
+**Typed Vararg Intrinsics**
+
+For `vararg<T>` parameters, use these simpler intrinsics:
+- `@vararg_len(vararg_param)` - Returns the number of arguments passed (as `i32`)
+- `@vararg_get(vararg_param, index)` - Gets the argument at the specified index (returns type `T`)
+
+**Key Differences**
+
+| Feature | `vararg<_>` (Untyped) | `vararg<T>` (Typed) |
+|---------|----------------------|---------------------|
+| **Compatibility** | C ABI compatible | Pure ZLang |
+| **Type Safety** | Runtime (manual type handling) | Compile-time (known type) |
+| **Access Method** | `va_list` + `@va_arg` | `@vararg_len` + `@vararg_get` |
+| **Setup Required** | `@va_start` / `@va_end` | None (automatic) |
+| **Performance** | Complex (ABI rules) | Simple (array access) |
+| **Use Case** | C interop (printf, etc.) | Pure ZLang functions |
+
+```zl
+?? Comparison: Untyped vs Typed
+
+?? Untyped vararg - for C compatibility
+wrap @printf(fmt: ptr<u8>, args: vararg<_>) >> i32;
+
+fun print_values_untyped(args: vararg<_>) >> void {
+    va_list vl;
+    @va_start(&vl);
+    for i32 i = 0; i < 3; i++ {  ?? Must know count somehow
+        i32 val = @va_arg(&vl, "i32");
+        @printf("%d ", val);
+    }
+    @va_end(&vl);
+}
+
+?? Typed vararg - simpler, ZLang-specific
+fun print_values_typed(values: vararg<i32>) >> void {
+    for i32 i = 0; i < @vararg_len(values); i++ {
+        i32 val = @vararg_get(values, i);
+        @printf("%d ", val);
+    }
+}
+
+fun main() >> i32 {
+    print_values_typed(10, 20, 30);  ?? Cleaner!
+    return 0;
 }
 ```
 

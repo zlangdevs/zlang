@@ -28,6 +28,7 @@ pub const CodeGenerator = struct {
     regular_functions: std.HashMap([]const u8, bool, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     function_return_types: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     function_vararg_types: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    typed_vararg_info: std.HashMap([]const u8, structs.TypedVarargInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     sret_functions: std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     current_function: ?c.LLVMValueRef,
     current_function_return_type: []const u8,
@@ -75,6 +76,7 @@ pub const CodeGenerator = struct {
             .regular_functions = std.HashMap([]const u8, bool, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .function_return_types = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .function_vararg_types = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .typed_vararg_info = std.HashMap([]const u8, structs.TypedVarargInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .sret_functions = std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .current_function = null,
             .current_function_return_type = "",
@@ -104,6 +106,7 @@ pub const CodeGenerator = struct {
         self.regular_functions.deinit();
         self.function_return_types.deinit();
         self.function_vararg_types.deinit();
+        self.typed_vararg_info.deinit();
         self.sret_functions.deinit();
         self.loop_context_stack.deinit(self.allocator);
         self.label_blocks.deinit();

@@ -1,9 +1,5 @@
-?? Test for variadic arguments
-
-?? Declare C printf function
 wrap @printf(fmt: ptr<u8>, args: vararg<_>) >> i32;
 
-?? Define va_list struct for x86_64
 struct va_list {
     gp_offset u32,
     fp_offset u32,
@@ -11,7 +7,6 @@ struct va_list {
     reg_save_area ptr<void>
 }
 
-?? Custom variadic function
 fun print_ints(count: i32, args: vararg<_>) >> void {
     va_list vl;
     @va_start(&vl);
@@ -24,16 +19,67 @@ fun print_ints(count: i32, args: vararg<_>) >> void {
     @va_end(&vl);
 }
 
+fun sum_ints(count: i32, args: vararg<_>) >> i32 {
+    va_list vl;
+    @va_start(&vl);
+    
+    i32 total = 0;
+    for i32 i = 0; i < count; i++ {
+        i32 val = @va_arg(&vl, "i32");
+        total += val;
+    }
+    @va_end(&vl);
+    return total;
+}
+
+fun print_floats(count: i32, args: vararg<_>) >> void {
+    va_list vl;
+    @va_start(&vl);
+    
+    for i32 i = 0; i < count; i++ {
+        f64 val = @va_arg(&vl, "f64");
+        @printf("%.1f ", val);
+    }
+    @printf("\n");
+    @va_end(&vl);
+}
+
+fun typed_sum(values: vararg<i32>) >> i32 {
+    i32 total = 0;
+    i32 count = @vararg_len(values);
+    for i32 i = 0; i < count; i++ {
+        total += @vararg_get(values, i);
+    }
+    return total;
+}
+
+fun typed_print(nums: vararg<i32>) >> void {
+    i32 count = @vararg_len(nums);
+    for i32 i = 0; i < count; i++ {
+        @printf("%d ", @vararg_get(nums, i));
+    }
+    @printf("\n");
+}
+
 fun main() >> i32 {
-    ?? Test printf with different types
     @printf("Hello, %s!\n", "World");
     @printf("Integer: (expected 42):%d\n", 42);
     @printf("Float: (expected 3.14):%.2f\n", 3.14);
     @printf("Mixed: %d, (expected 4.56):%.2f, %s\n", 123, 4.56, "test");
     
-    ?? Test custom variadic function
-    @printf("Custom vararg: ");
+    @printf("Untyped vararg (integers): ");
     print_ints(3, 10, 20, 30);
+    
+    i32 sum = sum_ints(4, 5, 10, 15, 20);
+    @printf("Untyped sum (expected 50):%d\n", sum);
+    
+    @printf("Untyped vararg (floats): ");
+    print_floats(3, 1.5, 2.5, 3.5);
+    
+    @printf("Typed vararg sum: (expected 50):%d\n", typed_sum(5, 10, 15, 20));
+    
+    @printf("Typed vararg print: ");
+    typed_print(100, 200, 300);
     
     return 0;
 }
