@@ -3357,6 +3357,38 @@ pub const CodeGenerator = struct {
         }
     }
 
+    pub fn emitLLVMIR(self: *CodeGenerator, base_name: []const u8, optimize: bool) ![]const u8 {
+        const ir_file = try std.fmt.allocPrint(self.allocator, "{s}.ll", .{base_name});
+        errdefer self.allocator.free(ir_file);
+
+        try self.writeToFile(ir_file);
+
+        if (optimize) {
+            var opt_args_list = std.ArrayList([]const u8){};
+            defer opt_args_list.deinit(self.allocator);
+
+            try opt_args_list.appendSlice(self.allocator, &[_][]const u8{
+                "opt",
+                "-O3",
+                ir_file,
+                "-o",
+                ir_file,
+            });
+
+            var opt_child_process = std.process.Child.init(opt_args_list.items, self.allocator);
+            opt_child_process.stdout_behavior = .Pipe;
+            opt_child_process.stderr_behavior = .Inherit;
+            try opt_child_process.spawn();
+
+            const result = try opt_child_process.wait();
+            if (result != .Exited or result.Exited != 0) {
+                return error.OptimizationFailed;
+            }
+        }
+
+        return ir_file;
+    }
+
     pub fn compileToExecutable(self: *CodeGenerator, output: []const u8, arch: []const u8, link_objects: []const []const u8, keep_ll: bool, optimize: bool, extra_flags: []const []const u8) !void {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
