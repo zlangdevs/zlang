@@ -7,6 +7,7 @@ const codegen = @import("codegen/llvm.zig");
 const utils = @import("codegen/utils.zig");
 const diagnostics = @import("diagnostics.zig");
 const help = @import("help.zig");
+const interpreter = @import("interpreter.zig");
 
 const allocator = std.heap.page_allocator;
 
@@ -33,24 +34,28 @@ pub const Context = struct {
     input_files: std.ArrayList([]const u8),
     link_objects: std.ArrayList([]const u8),
     extra_args: std.ArrayList([]const u8), // Extra flags passed to clang (for now to clang)
+    program_args: std.ArrayList([]const u8), // Arguments to pass to the program (for run mode)
     output: []const u8,
     arch: []const u8,
     keepll: bool,
     show_ast: bool,
     optimize: bool,
     verbose: bool,
+    run_mode: bool,
 
     pub fn init() Context {
         return Context{
             .input_files = std.ArrayList([]const u8){},
             .link_objects = std.ArrayList([]const u8){},
             .extra_args = std.ArrayList([]const u8){},
+            .program_args = std.ArrayList([]const u8){},
             .output = consts.DEFAULT_OUTPUT_NAME,
             .arch = "",
             .keepll = false,
             .show_ast = false,
             .optimize = false,
             .verbose = false,
+            .run_mode = false,
         };
     }
 
@@ -58,6 +63,7 @@ pub const Context = struct {
         self.input_files.deinit(alloc);
         self.link_objects.deinit(alloc);
         self.extra_args.deinit(alloc);
+        self.program_args.deinit(alloc);
     }
 
     pub fn print(self: *const Context) void {
@@ -397,7 +403,32 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
     errdefer context.deinit(allocator);
 
     var i: usize = 1;
+
+    // Check for 'run' subcommand
+    if (args.len > 1 and std.mem.eql(u8, args[1], "run")) {
+        context.run_mode = true;
+        i = 2; // Start parsing from index 2
+    }
+
+    var parsing_program_args = false;
+
     while (i < args.len) : (i += 1) {
+        // Check for -- separator (program arguments follow)
+        if (std.mem.eql(u8, args[i], "--")) {
+            parsing_program_args = true;
+            i += 1;
+            // Add all remaining args as program arguments
+            while (i < args.len) : (i += 1) {
+                try context.program_args.append(allocator, args[i]);
+            }
+            break;
+        }
+
+        if (parsing_program_args) {
+            try context.program_args.append(allocator, args[i]);
+            continue;
+        }
+
         switch (args[i][0]) {
             '-' => {
                 const flag = args[i];
@@ -936,13 +967,45 @@ pub fn main() !u8 {
         return 1;
     };
 
-    code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items) catch |err| {
-        std.debug.print("Error compiling to executable: {}\n", .{err});
-        return 1;
-    };
+    if (ctx.run_mode) {
+        // Run mode: Generate IR and execute with lli
+        if (!interpreter.checkLLIAvailable(allocator)) {
+            std.debug.print("Error: lli (LLVM interpreter) is not available.\n", .{});
+            std.debug.print("Please ensure LLVM is installed and lli is in your PATH.\n", .{});
+            return 1;
+        }
 
-    if (ctx.verbose) {
-        std.debug.print("Executable compiled to {s}\n", .{ctx.output});
+        const ir_file = code_generator.emitLLVMIR("__zlang_run_temp", ctx.optimize) catch |err| {
+            std.debug.print("Error emitting LLVM IR: {}\n", .{err});
+            return 1;
+        };
+        defer {
+            if (!ctx.keepll) {
+                std.fs.cwd().deleteFile(ir_file) catch {};
+            }
+            allocator.free(ir_file);
+        }
+
+        if (ctx.verbose) {
+            std.debug.print("Running {s} with lli...\n", .{ir_file});
+        }
+
+        const exit_code = interpreter.runWithLLI(allocator, ir_file, ctx.program_args.items) catch |err| {
+            std.debug.print("Error running with lli: {}\n", .{err});
+            return 1;
+        };
+
+        return exit_code;
+    } else {
+        // Compile mode: Generate executable
+        code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items) catch |err| {
+            std.debug.print("Error compiling to executable: {}\n", .{err});
+            return 1;
+        };
+
+        if (ctx.verbose) {
+            std.debug.print("Executable compiled to {s}\n", .{ctx.output});
+        }
+        return 0;
     }
-    return 0;
 }
