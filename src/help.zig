@@ -48,13 +48,14 @@ pub fn printHelp() void {
         \\
         \\{s}Commands:{s}
         \\  {s}build{s}       Compile a ZLang program (default)
+        \\  {s}run{s}         Run a ZLang program without saving executable
         \\  {s}wrap{s}        Generate ZLang wrappers for C headers
         \\  {s}help{s}        Show this help message
         \\
     , .{
         bold, reset, green, reset, yellow, reset,
         bold, reset, cyan,  reset, cyan,   reset,
-        cyan, reset,
+        cyan, reset, cyan,  reset,
     });
 
     std.debug.print(
