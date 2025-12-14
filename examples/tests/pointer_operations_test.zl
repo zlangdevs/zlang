@@ -69,5 +69,17 @@ fun main() >> i32 {
     if null_ptr == null { null_check = 1; }
     @printf("(expected 1):%d\n", null_check);
     
+    ?? Test 8: Pointer arithmetic with dereference
+    ?? reset pointer to array start to ensure predictable offsets
+    p = &numbers[0];
+    *(p + 1) = 999;
+    @printf("(expected 999):%d\n", numbers[1]);
+    
+    i32 temp = *(p + 2);
+    @printf("(expected 35):%d\n", temp);
+    
+    i32 temp2 = *(2 + p);
+    @printf("(expected 35):%d\n", temp2);
+    
     return 0;
 }
