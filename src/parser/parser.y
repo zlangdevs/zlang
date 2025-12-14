@@ -510,6 +510,16 @@ assignment:
         void* deref = zig_create_unary_op('*', $2);
         zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_compound_assignment(deref, $4, $3);
     }
+  | TOKEN_MULTIPLY TOKEN_LPAREN expression TOKEN_RPAREN TOKEN_ASSIGN expression {
+        void* inner_expr = $3;
+        void* deref = zig_create_unary_op('*', inner_expr);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_assignment(deref, $6);
+    }
+  | TOKEN_MULTIPLY TOKEN_LPAREN expression TOKEN_RPAREN TOKEN_REASSIGN expression {
+        void* inner_expr = $3;
+        void* deref = zig_create_unary_op('*', inner_expr);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_compound_assignment(deref, $6, $5);
+    }
 ;
 
 array_initializer:
