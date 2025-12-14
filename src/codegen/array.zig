@@ -68,8 +68,6 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
 
     const base_node = try collectArrayIndices(self, arr_ass.array, &collected_indices);
     var index_value = try self.generateExpression(arr_ass.index);
-    index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
-    try collected_indices.append(self.allocator, index_value);
 
     const array_name = try self.getBaseIdentifierName(base_node);
     defer self.allocator.free(array_name);
@@ -85,6 +83,11 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
     }
 
     if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
+        // For pointer indexing, cast to i64 like in pointer arithmetic
+        if (c.LLVMTypeOf(index_value) != c.LLVMInt64TypeInContext(self.context)) {
+            index_value = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
+        }
+        try collected_indices.append(self.allocator, index_value);
         const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_for_assign");
         const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
         const element_type = try self.getLLVMType(element_type_name);
@@ -98,6 +101,9 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
         return;
     }
 
+    // For arrays, cast to i32
+    index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
+    try collected_indices.append(self.allocator, index_value);
     var final_type = var_info.type_ref;
     for (0..collected_indices.items.len) |_| {
         final_type = c.LLVMGetElementType(@ptrCast(final_type));
@@ -265,21 +271,26 @@ pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayInde
     defer collected_indices.deinit(self.allocator);
 
     const base_node = try collectArrayIndices(self, arr_idx.array, &collected_indices);
-    const index_value = try self.generateExpression(arr_idx.index);
-    try collected_indices.append(self.allocator, index_value);
+    var index_value = try self.generateExpression(arr_idx.index);
 
     const array_name = try self.getBaseIdentifierName(base_node);
     defer self.allocator.free(array_name);
     const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
 
     if (std.mem.startsWith(u8, var_info.type_name, "simd<")) {
+        index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
+        try collected_indices.append(self.allocator, index_value);
         const simd_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_simd");
-        var simd_index_value = collected_indices.items[collected_indices.items.len - 1];
-        simd_index_value = self.castToType(simd_index_value, c.LLVMInt32TypeInContext(self.context));
+        const simd_index_value = collected_indices.items[collected_indices.items.len - 1];
         return c.LLVMBuildExtractElement(self.builder, simd_val, simd_index_value, "simd_extract");
     }
 
     if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
+        // For pointer indexing, cast to i64 like in pointer arithmetic
+        if (c.LLVMTypeOf(index_value) != c.LLVMInt64TypeInContext(self.context)) {
+            index_value = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
+        }
+        try collected_indices.append(self.allocator, index_value);
         const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr");
         const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
         const element_type = try self.getLLVMType(element_type_name);
@@ -288,6 +299,10 @@ pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayInde
         const element_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_index");
         return c.LLVMBuildLoad2(self.builder, element_type, element_ptr, "ptr_element");
     }
+
+    // For arrays, cast to i32
+    index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
+    try collected_indices.append(self.allocator, index_value);
 
     var final_type = var_info.type_ref;
     for (0..collected_indices.items.len) |_| {
