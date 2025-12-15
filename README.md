@@ -505,6 +505,7 @@ Key areas:
 - More optimization passes
 - Better error messages
 - IDE/editor plugins
+- Bugs documentation
 
 ## 📜 License
 
