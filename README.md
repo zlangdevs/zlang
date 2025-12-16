@@ -474,7 +474,7 @@ Native Binary
 
 - **Frontend**: Flex + Bison GLR parser
 - **Backend**: Custom Zig-based LLVM IR generator
-- **ABI**: Full System V ABI compatibility for C interop
+- **ABI**: Full System V ABI compatibility for C interop (WIP)
 
 ## 🔧 Building from Source
 
