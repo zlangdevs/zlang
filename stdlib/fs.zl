@@ -33,6 +33,7 @@ wrap @access(pathname: ptr<u8>, mode: i32) >> i32;
 ?? Standard C file I/O
 wrap @fopen(filename: ptr<u8>, mode: ptr<u8>) >> ptr<void>;
 wrap @fclose(stream: ptr<void>) >> i32;
+wrap @fprintf(fmt: ptr<u8>, args: vararg<_>) >> i32;
 wrap @fread(ptr: ptr<void>, size: u64, nmemb: u64, stream: ptr<void>) >> u64;
 wrap @fwrite(ptr: ptr<void>, size: u64, nmemb: u64, stream: ptr<void>) >> u64;
 wrap @fgets(s: ptr<u8>, size: i32, stream: ptr<void>) >> ptr<u8>;
