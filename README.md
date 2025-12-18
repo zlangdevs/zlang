@@ -22,7 +22,7 @@ fun main() >> i32 {
 - **🔒 Const Pointers** - Compile-time safety with read-only pointer guarantees
 - **🔄 Smart Loops** - Flexible `for` loops that work with any expression
 - **🧠 Brainfuck Integration** - Because why not? Embed Brainfuck code directly!
-- **🎨 Type Inference** - Auto-cast with `as _` for cleaner code
+- **🎨 Type Inference** - Auto-cast with `as _` for cleaner code 
 - **📦 Zero Runtime** - Compiles directly to LLVM IR, no runtime overhead
 
 ## 🚦 Quick Start
@@ -479,7 +479,7 @@ Native Binary
 ## 🔧 Building from Source
 
 Requirements:
-- Zig (0.15.1)
+- Zig (0.15.2)
 - Flex
 - Bison 3.x+
 - LLVM/Clang
