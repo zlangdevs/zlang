@@ -1322,7 +1322,7 @@ gdb ./program
 
 Planned features:
 - True generics/templates
-- Standard library
+- Standard library documentation
 - Package manager
 - Better error messages
 - IDE integration
