@@ -12,6 +12,7 @@ const array = @import("array.zig");
 const simd = @import("simd.zig");
 const enums = @import("enums.zig");
 const diagnostics = @import("../diagnostics.zig");
+const llvm_tools = @import("../llvm_tools.zig");
 
 const c_bindings = @import("c_bindings.zig");
 const c = c_bindings.c;
@@ -3459,30 +3460,46 @@ pub const CodeGenerator = struct {
         const obj_file = try std.fmt.allocPrint(arena_alloc, "{s}.o", .{output});
         defer arena_alloc.free(obj_file);
 
+        // Detect LLVM tools
+        const opt_tool = if (optimize) try llvm_tools.getLLVMToolPath(arena_alloc, .opt) else null;
+        const llc_tool = try llvm_tools.getLLVMToolPath(arena_alloc, .llc);
+        const clang_tool = try llvm_tools.getLLVMToolPath(arena_alloc, .clang);
+
+        if (llc_tool == null) {
+            std.debug.print("Error: llc not found. Please install LLVM tools.\n", .{});
+            std.debug.print("Tried: llc-20, llc-19, llc-18, ..., llc\n", .{});
+            return error.CompilationFailed;
+        }
+
         if (optimize) {
-            var opt_args_list = std.ArrayList([]const u8){};
-            try opt_args_list.appendSlice(arena_alloc, &[_][]const u8{
-                "opt",
-                "-O3",
-                ir_file,
-                "-o",
-                ir_file,
-            });
+            if (opt_tool == null) {
+                std.debug.print("Warning: opt not found. Skipping optimization pass.\n", .{});
+                std.debug.print("Tried: opt-20, opt-19, opt-18, ..., opt\n", .{});
+            } else {
+                var opt_args_list = std.ArrayList([]const u8){};
+                try opt_args_list.appendSlice(arena_alloc, &[_][]const u8{
+                    opt_tool.?,
+                    "-O3",
+                    ir_file,
+                    "-o",
+                    ir_file,
+                });
 
-            var opt_child_process = std.process.Child.init(opt_args_list.items, arena_alloc);
-            opt_child_process.stdout_behavior = .Pipe;
-            opt_child_process.stderr_behavior = .Inherit;
-            try opt_child_process.spawn();
+                var opt_child_process = std.process.Child.init(opt_args_list.items, arena_alloc);
+                opt_child_process.stdout_behavior = .Pipe;
+                opt_child_process.stderr_behavior = .Inherit;
+                try opt_child_process.spawn();
 
-            const result = try opt_child_process.wait();
-            if (result != .Exited or result.Exited != 0) {
-                return error.CompilationFailed;
+                const result = try opt_child_process.wait();
+                if (result != .Exited or result.Exited != 0) {
+                    return error.CompilationFailed;
+                }
             }
         }
 
         var llc_args_list = std.ArrayList([]const u8){};
         try llc_args_list.appendSlice(arena_alloc, &[_][]const u8{
-            "llc",
+            llc_tool.?,
             "-filetype=obj",
             "-relocation-model=pic",
             ir_file,
@@ -3563,9 +3580,14 @@ pub const CodeGenerator = struct {
         }
 
         if (!lld_success) {
-            // Fallback to clang
+            if (clang_tool == null) {
+                std.debug.print("Error: clang not found for linking. Please install clang.\n", .{});
+                std.debug.print("Tried: clang-20, clang-19, clang-18, ..., clang\n", .{});
+                return error.CompilationFailed;
+            }
+
             var clang_args_list = std.ArrayList([]const u8){};
-            try clang_args_list.appendSlice(arena_alloc, &[_][]const u8{ "clang", obj_file, "-o", output, "-lc" });
+            try clang_args_list.appendSlice(arena_alloc, &[_][]const u8{ clang_tool.?, obj_file, "-o", output, "-lc" });
 
             for (link_objects) |obj| {
                 try clang_args_list.append(arena_alloc, obj);
