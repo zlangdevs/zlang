@@ -10,7 +10,6 @@ const c = c_bindings.c;
 
 const CodeGenerator = @import("llvm.zig").CodeGenerator;
 
-/// Generate SIMD vector declaration (e.g., var v: simd<f32, 4>;)
 pub fn generateSimdDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.CodegenError!void {
     const inner = decl.type_name[5 .. decl.type_name.len - 1];
     var comma_pos: ?usize = null;
@@ -83,7 +82,6 @@ pub fn generateSimdDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.C
     }
 }
 
-/// Generate binary operation on SIMD vectors
 pub fn generateSimdBinaryOp(self: *CodeGenerator, op: u8, lhs: c.LLVMValueRef, rhs: c.LLVMValueRef) errors.CodegenError!c.LLVMValueRef {
     const lhs_type = c.LLVMTypeOf(lhs);
     const element_type = c.LLVMGetElementType(lhs_type);
@@ -136,7 +134,6 @@ pub fn generateSimdBinaryOp(self: *CodeGenerator, op: u8, lhs: c.LLVMValueRef, r
     };
 }
 
-/// Generate SIMD reduction operation (sum, product, min, max)
 pub fn generateSimdReduction(self: *CodeGenerator, operation: []const u8, simd_value: c.LLVMValueRef) errors.CodegenError!c.LLVMValueRef {
     const simd_type = c.LLVMTypeOf(simd_value);
     const element_type = c.LLVMGetElementType(simd_type);
@@ -180,15 +177,13 @@ pub fn generateSimdReduction(self: *CodeGenerator, operation: []const u8, simd_v
     return result;
 }
 
-/// Handle SIMD element assignment (e.g., simd_vec[i] = value)
 pub fn handleSimdAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignment) errors.CodegenError!bool {
     const array_name = try self.getBaseIdentifierName(arr_ass.array);
     defer self.allocator.free(array_name);
     const var_info = CodeGenerator.getVariable(self, array_name) orelse return false;
 
-    // Check if this is a SIMD vector assignment
     if (!std.mem.startsWith(u8, var_info.type_name, "simd<")) {
-        return false; // Not a SIMD assignment
+        return false;
     }
 
     const simd_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_simd");
@@ -202,29 +197,23 @@ pub fn handleSimdAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignment) 
     return true;
 }
 
-/// Handle SIMD compound assignment (e.g., simd_vec[i] += value)
 pub fn generateSimdCompoundAssignment(self: *CodeGenerator, simd_cass: ast.SimdCompoundAssignment) errors.CodegenError!void {
     const simd_name = try self.getBaseIdentifierName(simd_cass.simd);
     defer self.allocator.free(simd_name);
     const var_info = CodeGenerator.getVariable(self, simd_name) orelse return errors.CodegenError.UndefinedVariable;
 
-    // Load the current SIMD vector
     const current_simd = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_simd");
 
-    // Get the index and cast to i32
     var index_value = try self.generateExpression(simd_cass.index);
     index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
 
-    // Extract the current element
     const current_element = c.LLVMBuildExtractElement(self.builder, current_simd, index_value, "extract_elem");
 
-    // Generate the RHS value
     const element_type = c.LLVMGetElementType(var_info.type_ref);
     const expected_ty_name = self.getTypeNameFromLLVMType(element_type);
     const rhs_raw = try self.generateExpressionWithContext(simd_cass.value, expected_ty_name);
     const rhs_val = try self.castWithRules(rhs_raw, element_type, simd_cass.value);
 
-    // Perform the compound operation using scalar operations
     const element_kind = c.LLVMGetTypeKind(element_type);
     const new_element = if (element_kind == c.LLVMFloatTypeKind or element_kind == c.LLVMDoubleTypeKind or element_kind == c.LLVMHalfTypeKind) blk: {
         break :blk switch (simd_cass.op) {
@@ -251,21 +240,18 @@ pub fn generateSimdCompoundAssignment(self: *CodeGenerator, simd_cass: ast.SimdC
         };
     } else return errors.CodegenError.UnsupportedOperation;
 
-    // Insert the new element back into the vector
     const updated_simd = c.LLVMBuildInsertElement(self.builder, current_simd, new_element, index_value, "simd_update");
 
-    // Store the updated vector
     _ = c.LLVMBuildStore(self.builder, updated_simd, var_info.value);
 }
 
-/// Handle SIMD array compound assignment in expressions
 pub fn handleSimdArrayCompoundAssignment(self: *CodeGenerator, arr_cass: ast.ArrayCompoundAssignment) errors.CodegenError!bool {
     const array_name = try self.getBaseIdentifierName(arr_cass.array);
     defer self.allocator.free(array_name);
     const var_info = CodeGenerator.getVariable(self, array_name) orelse return false;
 
     if (!std.mem.startsWith(u8, var_info.type_name, "simd<")) {
-        return false; // Not a SIMD vector
+        return false;
     }
 
     var index_value = try self.generateExpression(arr_cass.index);

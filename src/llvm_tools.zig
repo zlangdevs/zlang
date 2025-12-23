@@ -1,4 +1,5 @@
 const std = @import("std");
+const utils = @import("codegen/utils.zig");
 
 pub const LLVMTool = enum {
     llc,
@@ -38,7 +39,7 @@ pub fn findLLVMTool(allocator: std.mem.Allocator, tool: LLVMTool) !?ToolPath {
         if (try isToolAvailable(allocator, tool_name)) {
             if (suffix.len > 0) {
                 return ToolPath{
-                    .path = try allocator.dupe(u8, tool_name),
+                    .path = utils.dupe(u8, allocator, tool_name),
                     .owned = true,
                 };
             } else {
@@ -105,7 +106,7 @@ pub fn getLLVMToolPath(allocator: std.mem.Allocator, tool: LLVMTool) !?[]const u
     if (try findLLVMTool(allocator, tool)) |tool_path| {
         defer tool_path.deinit(allocator);
         if (tool_path.owned) {
-            return try allocator.dupe(u8, tool_path.path);
+            return utils.dupe(u8, allocator, tool_path.path);
         } else {
             return tool_path.path;
         }

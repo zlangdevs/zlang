@@ -33,8 +33,8 @@ const ModuleInfo = struct {
 pub const Context = struct {
     input_files: std.ArrayList([]const u8),
     link_objects: std.ArrayList([]const u8),
-    extra_args: std.ArrayList([]const u8), // Extra flags passed to clang (for now to clang)
-    program_args: std.ArrayList([]const u8), // Arguments to pass to the program (for run mode)
+    extra_args: std.ArrayList([]const u8),
+    program_args: std.ArrayList([]const u8),
     output: []const u8,
     arch: []const u8,
     keepll: bool,
@@ -104,7 +104,7 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
             }
         },
         .use_stmt => |use_stmt| {
-            dependencies.append(std.heap.page_allocator, use_stmt.module_path) catch {};
+            dependencies.append(allocator, use_stmt.module_path) catch {};
         },
         else => {
             switch (node.data) {
@@ -155,11 +155,11 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
 }
 
 fn getStdlibPath(alloc: std.mem.Allocator) ![]const u8 {
-    // Check ZSTDPATH environment variable first
+
     if (std.process.getEnvVarOwned(alloc, "ZSTDPATH")) |zstdpath| {
         return zstdpath;
     } else |_| {
-        // Fall back to stdlib directory relative to compiler binary
+
         const exe_path = try std.fs.selfExePathAlloc(alloc);
         defer alloc.free(exe_path);
         const exe_dir = std.fs.path.dirname(exe_path) orelse ".";
@@ -185,7 +185,6 @@ fn resolveStdModule(module_name: []const u8, alloc: std.mem.Allocator, has_zstdp
 
     const full_path = std.fs.path.join(alloc, &[_][]const u8{ stdlib_path, module_file }) catch return null;
 
-    // Check if file exists
     const file = std.fs.cwd().openFile(full_path, .{}) catch {
         alloc.free(full_path);
         return null;
@@ -196,13 +195,13 @@ fn resolveStdModule(module_name: []const u8, alloc: std.mem.Allocator, has_zstdp
 }
 
 fn resolveModulePath(base_path: []const u8, module_name: []const u8, alloc: std.mem.Allocator) anyerror!?[]const u8 {
-    // Check if this is a standard library import
+
     if (std.mem.startsWith(u8, module_name, "std.")) {
         var has_zstdpath: bool = false;
         if (resolveStdModule(module_name, alloc, &has_zstdpath)) |std_path| {
             return std_path;
         }
-        // If std module resolution failed, print error and return null
+
         std.debug.print("\x1b[31mError:\x1b[0m Standard library module '\x1b[33m{s}\x1b[0m' not found.\n", .{module_name});
 
         if (!has_zstdpath) {
@@ -281,17 +280,14 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
     var to_process = std.ArrayList([]const u8){};
     defer to_process.deinit(alloc);
 
-    // Add initial input files
     for (ctx.input_files.items) |input_file| {
         try to_process.append(alloc, input_file);
     }
 
-    // Process modules and their dependencies
     var i: usize = 0;
     while (i < to_process.items.len) : (i += 1) {
         const current_file = to_process.items[i];
 
-        // Skip if already loaded
         if (loaded_modules.contains(current_file)) {
             continue;
         }
@@ -299,7 +295,6 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
         const module = try parseModuleFile(current_file, alloc);
         try loaded_modules.put(utils.dupe(u8, alloc, current_file), {});
 
-        // Resolve and add dependencies
         for (module.dependencies.items) |dep| {
             if (try resolveModulePath(current_file, dep, alloc)) |dep_path| {
                 if (!loaded_modules.contains(dep_path)) {
@@ -391,8 +386,9 @@ pub fn read_file(file_name: []const u8) anyerror![]const u8 {
             return errors.ReadFileError.AccessDenied;
         };
         defer file.close();
-        const buffer = try file.readToEndAlloc(allocator, consts.MAX_BUFF_SIZE);
-        return buffer;
+        const buffer = utils.alloc(u8, allocator, consts.MAX_BUFF_SIZE);
+        const bytes_read = try file.readAll(buffer);
+        return buffer[0..bytes_read];
     }
 
     return errors.ReadFileError.InvalidPath;
@@ -404,20 +400,19 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
 
     var i: usize = 1;
 
-    // Check for 'run' subcommand
     if (args.len > 1 and std.mem.eql(u8, args[1], "run")) {
         context.run_mode = true;
-        i = 2; // Start parsing from index 2
+        i = 2;
     }
 
     var parsing_program_args = false;
 
     while (i < args.len) : (i += 1) {
-        // Check for -- separator (program arguments follow)
+
         if (std.mem.eql(u8, args[i], "--")) {
             parsing_program_args = true;
             i += 1;
-            // Add all remaining args as program arguments
+
             while (i < args.len) : (i += 1) {
                 try context.program_args.append(allocator, args[i]);
             }
@@ -457,25 +452,25 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     try context.extra_args.append(allocator, flag);
                     context.output = "output.o";
                 } else if (std.mem.startsWith(u8, flag, "-l") and flag.len > 2) {
-                    // pass-through library flag like -lGL, -lm, etc.
+
                     try context.extra_args.append(allocator, flag);
                 } else if (std.mem.startsWith(u8, flag, "-L") and flag.len > 2) {
-                    // pass-through library search path like -L/usr/lib
+
                     try context.extra_args.append(allocator, flag);
                 } else if (std.mem.eql(u8, flag, "-l") or std.mem.eql(u8, flag, "-L")) {
-                    // Support separated form: -l GL  or  -L /usr/lib
+
                     i += 1;
                     if (i >= args.len) return errors.CLIError.InvalidArgument;
                     const combined = try std.fmt.allocPrint(allocator, "{s}{s}", .{ flag, args[i] });
                     defer allocator.free(combined);
                     try context.extra_args.append(allocator, combined);
                 } else if (std.mem.startsWith(u8, flag, "-Wl,")) {
-                    // Pass through linker options like -Wl,-rpath,/path or others
+
                     try context.extra_args.append(allocator, flag);
                 } else if (std.mem.eql(u8, flag, "-help") or std.mem.eql(u8, flag, "--help")) {
                     return errors.CLIError.NoHelp;
                 } else {
-                    // Forward any other unknown flags directly to clang/linker
+
                     try context.extra_args.append(allocator, flag);
                 }
             },
@@ -523,8 +518,6 @@ fn collectZlFilesFromDir(alloc: std.mem.Allocator, dir_path: []const u8, files_l
         }
     }
 }
-
-// ===== C header wrapper generator =====
 
 fn isSpace(c: u8) bool {
     return c == ' ' or c == '\t' or c == '\n' or c == '\r';
@@ -759,7 +752,6 @@ fn parseAndWriteWrapper(alloc: std.mem.Allocator, stmt_in: []const u8) !?[]const
     const close = std.mem.lastIndexOfScalar(u8, stmt, ')') orelse return null;
     if (close <= open) return null;
 
-    // disallow complex nested parentheses in params for now
     const inner = stmt[open + 1 .. close];
     if (std.mem.indexOfScalar(u8, inner, '(') != null or std.mem.indexOfScalar(u8, inner, ')') != null) return null;
     var k: isize = @as(isize, @intCast(open)) - 1;
@@ -779,12 +771,12 @@ fn parseAndWriteWrapper(alloc: std.mem.Allocator, stmt_in: []const u8) !?[]const
     defer params_buf.deinit(alloc);
     const inner_trim = trimSpaces(inner);
     if (!(inner_trim.len == 0 or std.mem.eql(u8, inner_trim, "void"))) {
-        if (std.mem.indexOf(u8, inner_trim, "...") != null) return null; // skip variadic, not supported by zlang yet:(
+        if (std.mem.indexOf(u8, inner_trim, "...") != null) return null;
         var it = std.mem.splitScalar(u8, inner_trim, ',');
         while (it.next()) |raw_param| {
             const p = stripTrailingParamName(raw_param);
             const zt_maybe = try mapCTypeToZType(alloc, p);
-            if (zt_maybe == null) return null; // give up on this function
+            if (zt_maybe == null) return null;
             try params_buf.append(alloc, zt_maybe.?);
         }
     }
@@ -900,7 +892,7 @@ pub fn main() !u8 {
     defer ctx.deinit(allocator);
 
     const ast_root = parseMultiFile(&ctx, allocator) catch {
-        // Error already reported in parseModuleFile
+
         return 1;
     };
 
@@ -909,7 +901,6 @@ pub fn main() !u8 {
         ast.printASTTree(ast_root);
     }
 
-    // Generate LLVM IR and compile to executable
     var code_generator = codegen.CodeGenerator.init(allocator) catch |err| {
         const error_msg = switch (err) {
             error.ModuleCreationFailed => "Failed to create LLVM module.",
@@ -968,7 +959,7 @@ pub fn main() !u8 {
     };
 
     if (ctx.run_mode) {
-        // Run mode: Generate IR and execute with lli
+
         if (!interpreter.checkLLIAvailable(allocator)) {
             std.debug.print("Error: lli (LLVM interpreter) is not available.\n", .{});
             std.debug.print("Please ensure LLVM is installed and lli is in your PATH.\n", .{});
@@ -997,7 +988,7 @@ pub fn main() !u8 {
 
         return exit_code;
     } else {
-        // Compile mode: Generate executable
+
         code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items) catch |err| {
             std.debug.print("Error compiling to executable: {}\n", .{err});
             return 1;

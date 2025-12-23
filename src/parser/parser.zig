@@ -4,11 +4,10 @@ const errors = @import("../errors.zig");
 const utils = @import("../codegen/utils.zig");
 
 var global_allocator: std.mem.Allocator = undefined;
-// Track last parse error location for diagnostics
+
 var last_error_line: usize = 0;
 var last_error_col: usize = 0;
 
-// External functions from generated parser
 extern fn yyparse() c_int;
 extern fn zlang_lex_init(scanner: *?*anyopaque) c_int;
 extern fn zlang_lex_destroy(scanner: ?*anyopaque) c_int;
@@ -18,7 +17,6 @@ extern fn fclose(file: ?*anyopaque) c_int;
 extern fn zlang_get_lineno(scanner: ?*anyopaque) c_int;
 extern fn zlang_reset_lexer_state() void;
 
-// Global variables used by Bison parser
 export var current_scanner: ?*anyopaque = null;
 extern var ast_root: ?*anyopaque;
 export var parse_line: c_int = 0;
@@ -43,7 +41,6 @@ const ParameterList = struct {
     }
 };
 
-// Helper struct to manage lists
 const NodeList = struct {
     items: std.ArrayList(*ast.Node),
 
@@ -54,7 +51,6 @@ const NodeList = struct {
     }
 };
 
-// C-callable functions for AST creation
 export fn zig_create_program() ?*anyopaque {
     const program_data = ast.NodeData{
         .program = ast.Program{
@@ -1092,30 +1088,24 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!
     last_error_line = 0;
     last_error_col = 0;
 
-    // Initialize scanner
     if (zlang_lex_init(&current_scanner) != 0) {
         return errors.ParseError.LexerInitFailed;
     }
     defer _ = zlang_lex_destroy(current_scanner);
 
-    // Reset lexer state to avoid pollution from previous parses
     zlang_reset_lexer_state();
 
-    // Create null-terminated input
     const null_terminated_input = try allocator.dupeZ(u8, input);
     defer allocator.free(null_terminated_input);
 
-    // Create file handle from memory
     const file = fmemopen(null_terminated_input.ptr, input.len, "r");
     if (file == null) {
         return errors.ParseError.FileOpenFailed;
     }
     defer _ = fclose(file);
 
-    // Set input for scanner
     zlang_set_in(file, current_scanner);
 
-    // Parse
     const result = yyparse();
     if (result != 0) {
         last_error_line = @intCast(@as(usize, @intCast(zlang_get_lineno(current_scanner))));
