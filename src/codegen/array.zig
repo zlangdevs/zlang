@@ -10,7 +10,6 @@ const c = c_bindings.c;
 
 const CodeGenerator = @import("llvm.zig").CodeGenerator;
 
-/// Check if a node contains an array index operation
 pub fn containsArrayIndex(self: *CodeGenerator, node: *ast.Node) !bool {
     switch (node.data) {
         .array_index => return true,
@@ -19,7 +18,6 @@ pub fn containsArrayIndex(self: *CodeGenerator, node: *ast.Node) !bool {
     }
 }
 
-/// Extract the ArrayIndex from a node
 pub fn extractArrayIndex(self: *CodeGenerator, node: *ast.Node) !ast.ArrayIndex {
     switch (node.data) {
         .array_index => |arr_idx| return arr_idx,
@@ -28,7 +26,6 @@ pub fn extractArrayIndex(self: *CodeGenerator, node: *ast.Node) !ast.ArrayIndex 
     }
 }
 
-/// Collect array indices recursively from nested array accesses
 pub fn collectArrayIndices(self: *CodeGenerator, node: *ast.Node, indices: *std.ArrayList(c.LLVMValueRef)) !*ast.Node {
     switch (node.data) {
         .array_index => |arr_idx| {
@@ -42,7 +39,6 @@ pub fn collectArrayIndices(self: *CodeGenerator, node: *ast.Node, indices: *std.
     }
 }
 
-/// Generate assignment to a field of an array element (e.g., array[i].field = value)
 pub fn generateArrayElementFieldAssignment(self: *CodeGenerator, array_index: ast.ArrayIndex, field_path: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
     const array_name = try self.getBaseIdentifierName(array_index.array);
     defer self.allocator.free(array_name);
@@ -61,7 +57,6 @@ pub fn generateArrayElementFieldAssignment(self: *CodeGenerator, array_index: as
     try self.generateRecursiveFieldAssignment(array_element_ptr, element_type, struct_name, field_path, value_expr);
 }
 
-/// Generate array element assignment (e.g., array[i] = value)
 pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignment) errors.CodegenError!void {
     var collected_indices = std.ArrayList(c.LLVMValueRef){};
     defer collected_indices.deinit(self.allocator);
@@ -83,7 +78,7 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
     }
 
     if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
-        // For pointer indexing, cast to i64 like in pointer arithmetic
+
         if (c.LLVMTypeOf(index_value) != c.LLVMInt64TypeInContext(self.context)) {
             index_value = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
         }
@@ -101,7 +96,6 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
         return;
     }
 
-    // For arrays, cast to i32
     index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
     try collected_indices.append(self.allocator, index_value);
     var final_type = var_info.type_ref;
@@ -127,7 +121,6 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
     _ = c.LLVMBuildStore(self.builder, final_val, element_ptr);
 }
 
-/// Generate array reassignment (reassign entire array)
 pub fn generateArrayReassignment(self: *CodeGenerator, array_name: []const u8, value_expr: *ast.Node) errors.CodegenError!void {
     const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
 
@@ -175,7 +168,6 @@ pub fn generateArrayReassignment(self: *CodeGenerator, array_name: []const u8, v
     }
 }
 
-/// Generate array declaration (e.g., var arr: arr<i32, 10>;)
 pub fn generateArrayDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.CodegenError!void {
     const inner = decl.type_name[4 .. decl.type_name.len - 1];
     var comma_pos: ?usize = null;
@@ -265,7 +257,6 @@ pub fn generateArrayDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.
     }
 }
 
-/// Handle array index access in expressions (e.g., array[i])
 pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayIndex) errors.CodegenError!c.LLVMValueRef {
     var collected_indices = std.ArrayList(c.LLVMValueRef){};
     defer collected_indices.deinit(self.allocator);
@@ -286,7 +277,7 @@ pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayInde
     }
 
     if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
-        // For pointer indexing, cast to i64 like in pointer arithmetic
+
         if (c.LLVMTypeOf(index_value) != c.LLVMInt64TypeInContext(self.context)) {
             index_value = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
         }
@@ -300,7 +291,6 @@ pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayInde
         return c.LLVMBuildLoad2(self.builder, element_type, element_ptr, "ptr_element");
     }
 
-    // For arrays, cast to i32
     index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
     try collected_indices.append(self.allocator, index_value);
 

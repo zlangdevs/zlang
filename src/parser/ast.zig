@@ -113,7 +113,7 @@ pub const VarDecl = struct {
 
 pub const FunctionCall = struct {
     name: []const u8,
-    is_libc: bool, // true if starts with @
+    is_libc: bool,
     args: std.ArrayList(*Node),
 };
 

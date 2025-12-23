@@ -156,11 +156,10 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
     }
     cg.pending_gotos.clearRetainingCapacity();
 
-    // Reset scopes for new function (keep global scope)
     variables.clearCurrentFunctionScopes(cg);
-    // Create a new function-level scope for this function
+
     try variables.pushScope(cg);
-    // Add parameters to the function-level scope
+
     var param_idx: usize = 0;
     for (func.parameters.items) |param| {
         if (utils.isVarArgType(param.type_name)) {
@@ -276,7 +275,7 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
     for (c_func.parameters.items, 0..) |param, i| {
         if (utils.isVarArgType(param.type_name)) {
             if (i != c_func.parameters.items.len - 1) {
-                return errors.CodegenError.TypeMismatch; // vararg must be last
+                return errors.CodegenError.TypeMismatch;
             }
             is_varargs = true;
             continue;
@@ -358,13 +357,11 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
         if (call.args.items.len != 2) return errors.CodegenError.TypeMismatch;
         const vl_ptr = try cg.generateExpression(call.args.items[0]);
 
-        // Expect second arg to be string literal type name
         const type_arg = call.args.items[1];
         if (type_arg.data != .string_literal) return errors.CodegenError.TypeMismatch;
         const type_name = type_arg.data.string_literal.value;
         const target_type = try cg.getLLVMType(type_name);
 
-        // Define va_list struct type: { i32, i32, i8*, i8* }
         const i32_ty = c.LLVMInt32TypeInContext(cg.context);
         const i8_ptr_ty = c.LLVMPointerType(c.LLVMInt8TypeInContext(cg.context), 0);
         var struct_elems = [_]c.LLVMTypeRef{ i32_ty, i32_ty, i8_ptr_ty, i8_ptr_ty };
@@ -376,7 +373,6 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
         const type_kind = c.LLVMGetTypeKind(target_type);
         const is_float = type_kind == c.LLVMFloatTypeKind or type_kind == c.LLVMDoubleTypeKind;
 
-        // Basic Blocks
         const current_block = c.LLVMGetInsertBlock(cg.builder);
         const func = c.LLVMGetBasicBlockParent(current_block);
         const in_reg_bb = c.LLVMAppendBasicBlockInContext(cg.context, func, "va_arg_in_reg");
@@ -391,14 +387,12 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
         const fits_in_reg = c.LLVMBuildICmp(cg.builder, c.LLVMIntULT, offset, limit, "fits_in_reg");
         _ = c.LLVMBuildCondBr(cg.builder, fits_in_reg, in_reg_bb, in_mem_bb);
 
-        // In Reg
         c.LLVMPositionBuilderAtEnd(cg.builder, in_reg_bb);
         const reg_save_area_ptr = c.LLVMBuildStructGEP2(cg.builder, va_list_ty, vl, 3, "reg_save_area_ptr");
         const reg_save_area = c.LLVMBuildLoad2(cg.builder, i8_ptr_ty, reg_save_area_ptr, "reg_save_area");
         var idx_list = [_]c.LLVMValueRef{offset};
         const reg_addr = c.LLVMBuildGEP2(cg.builder, c.LLVMInt8TypeInContext(cg.context), reg_save_area, &idx_list, 1, "reg_addr");
 
-        // Cast reg_addr to pointer to target type (or i64/double)
         const reg_val_ptr = c.LLVMBuildBitCast(cg.builder, reg_addr, c.LLVMPointerType(target_type, 0), "reg_val_ptr");
         const reg_val = c.LLVMBuildLoad2(cg.builder, target_type, reg_val_ptr, "reg_val");
 
@@ -406,7 +400,6 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
         _ = c.LLVMBuildStore(cg.builder, next_offset, offset_ptr);
         _ = c.LLVMBuildBr(cg.builder, cont_bb);
 
-        // In Mem
         c.LLVMPositionBuilderAtEnd(cg.builder, in_mem_bb);
         const overflow_arg_area_ptr = c.LLVMBuildStructGEP2(cg.builder, va_list_ty, vl, 2, "overflow_arg_area_ptr");
         const overflow_arg_area = c.LLVMBuildLoad2(cg.builder, i8_ptr_ty, overflow_arg_area_ptr, "overflow_arg_area");
@@ -414,14 +407,12 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
         const mem_val_ptr = c.LLVMBuildBitCast(cg.builder, overflow_arg_area, c.LLVMPointerType(target_type, 0), "mem_val_ptr");
         const mem_val = c.LLVMBuildLoad2(cg.builder, target_type, mem_val_ptr, "mem_val");
 
-        // Align overflow area to 8 bytes and advance
         const step = c.LLVMConstInt(c.LLVMInt64TypeInContext(cg.context), 8, 0);
         var idx_step = [_]c.LLVMValueRef{step};
         const next_overflow = c.LLVMBuildGEP2(cg.builder, c.LLVMInt8TypeInContext(cg.context), overflow_arg_area, &idx_step, 1, "next_overflow");
         _ = c.LLVMBuildStore(cg.builder, next_overflow, overflow_arg_area_ptr);
         _ = c.LLVMBuildBr(cg.builder, cont_bb);
 
-        // Cont
         c.LLVMPositionBuilderAtEnd(cg.builder, cont_bb);
         const phi = c.LLVMBuildPhi(cg.builder, target_type, "va_arg_result");
         var phi_vals = [_]c.LLVMValueRef{ reg_val, mem_val };
@@ -536,12 +527,12 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                 if (cg.regular_functions.get(call.name) == null) {
                     if (cg.c_function_declarations.get(call.name)) |is_wrapped| {
                         if (!is_wrapped) {
-                            // Pure C function declared with "fun @name" cannot be called without @
+
                             return errors.CodegenError.UndefinedFunction;
                         }
                     }
                 }
-                // visibility check for wrapper defined in another module
+
                 if (cg.function_to_module.get(call.name)) |target_mod| {
                     if (!cg.canAccess(cg.current_module_name, target_mod)) {
                         return errors.CodegenError.UndefinedFunction;
@@ -600,7 +591,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                         c.LLVMBuildCall2(@ptrCast(cg.builder), fn_ty, @ptrCast(callee_ptr), null, 0, "call");
                     return res;
                 }
-                // If there is an extern with this name in another module, require visibility
+
                 if (cg.function_to_module.get(call.name)) |target_mod2| {
                     if (!cg.canAccess(cg.current_module_name, target_mod2)) {
                         return errors.CodegenError.UndefinedFunction;
@@ -810,18 +801,18 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                     }
                 }
             } else {
-                // Variadic argument
+
                 if (cg.function_vararg_types.get(call.name)) |var_type| {
                     if (std.mem.eql(u8, var_type, "_")) {
-                        // Default C promotions
+
                         const arg_type = c.LLVMTypeOf(arg_value);
                         const arg_kind = c.LLVMGetTypeKind(arg_type);
-                        if (arg_kind == c.LLVMFloatTypeKind) { // float -> double
+                        if (arg_kind == c.LLVMFloatTypeKind) {
                             const double_type = c.LLVMDoubleTypeInContext(cg.context);
                             arg_value = c.LLVMBuildFPExt(cg.builder, arg_value, double_type, "fpext");
                         } else if (arg_kind == c.LLVMIntegerTypeKind) {
                             const width = c.LLVMGetIntTypeWidth(arg_type);
-                            if (width < 32) { // promote < i32 to i32
+                            if (width < 32) {
                                 const i32_type = c.LLVMInt32TypeInContext(cg.context);
                                 arg_value = c.LLVMBuildSExt(cg.builder, arg_value, i32_type, "sext");
                             }
@@ -835,10 +826,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
         }
 
         if (call.is_libc) {
-            // prepareArgumentForLibcCall is already called above for varargs, or not needed for fixed params if castToType handles it
-            // But keeping it for safety if it does specific things
-            // Actually, prepareArgumentForLibcCall does promotions.
-            // We should only call it if we haven't already handled it.
+
         }
 
         try args.append(cg.allocator, arg_value);

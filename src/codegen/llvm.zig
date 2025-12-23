@@ -507,7 +507,6 @@ pub const CodeGenerator = struct {
                                 return errors.CodegenError.TypeMismatch;
                             }
 
-                            // Check if this is ptr<const T> (const pointee, not const pointer)
                             if (un.operand.data == .identifier) {
                                 const ptr_name = un.operand.data.identifier.name;
                                 if (CodeGenerator.getVariable(self, ptr_name)) |var_info| {
@@ -708,14 +707,12 @@ pub const CodeGenerator = struct {
                             const struct_name = std.mem.span(c.LLVMGetStructName(var_type));
                             const struct_decl = self.getStructDecl(struct_name) orelse return errors.CodegenError.TypeMismatch;
 
-                            // Zero-initialize all fields
                             for (struct_decl.fields.items, 0..) |field, i| {
                                 const field_ptr = try self.getStructFieldPointer(var_type, alloca, @intCast(i));
                                 const zero_value = utils.getDefaultValueForType(self, field.type_name);
                                 _ = c.LLVMBuildStore(self.builder, zero_value, field_ptr);
                             }
 
-                            // Apply default values if they exist
                             for (struct_decl.fields.items, 0..) |field, i| {
                                 if (field.default_value) |default_val| {
                                     const field_ptr = try self.getStructFieldPointer(var_type, alloca, @intCast(i));
@@ -767,7 +764,6 @@ pub const CodeGenerator = struct {
                                 return errors.CodegenError.TypeMismatch;
                             }
 
-                            // Check if this is ptr<const T> (const pointee, not const pointer)
                             if (un.operand.data == .identifier) {
                                 const ptr_name = un.operand.data.identifier.name;
                                 if (CodeGenerator.getVariable(self, ptr_name)) |var_info| {
@@ -1101,13 +1097,13 @@ pub const CodeGenerator = struct {
             .array_assignment => |arr_ass| {
                 const array_name = try self.getBaseIdentifierName(arr_ass.array);
                 defer self.allocator.free(array_name);
-                // Try SIMD assignment first, fall back to array assignment
+
                 if (!try simd.handleSimdAssignment(self, arr_ass)) {
                     try array.generateArrayAssignment(self, arr_ass);
                 }
             },
             .array_compound_assignment => |arr_cass| {
-                // Try SIMD compound assignment first
+
                 if (try simd.handleSimdArrayCompoundAssignment(self, arr_cass)) {
                     return;
                 }
@@ -1238,8 +1234,7 @@ pub const CodeGenerator = struct {
                 try enums.generateEnumDeclaration(self, enum_decl);
             },
             .struct_decl => {
-                // Struct declarations are only valid at top level, not in statements
-                // This case should not be reached for valid code
+
             },
             .unary_op => {
                 _ = try self.generateExpression(stmt);
@@ -1776,7 +1771,6 @@ pub const CodeGenerator = struct {
             }
         }
 
-        // Allow pointer-to-pointer conversions (including null/void* to typed pointer)
         if (fk == c.LLVMPointerTypeKind and tk == c.LLVMPointerTypeKind) {
             return self.castToType(val, target_type);
         }
@@ -2226,7 +2220,6 @@ pub const CodeGenerator = struct {
         if (w1 > w2) return t1;
         if (w2 > w1) return t2;
 
-        // Same width
         if (utils.isUnsignedType(t1)) return t1;
         if (utils.isUnsignedType(t2)) return t2;
 
@@ -2354,7 +2347,7 @@ pub const CodeGenerator = struct {
             },
             .qualified_identifier => {
                 const qual_id = expr.data.qualified_identifier;
-                // Try to load enum value first
+
                 if (try enums.tryLoadEnumValue(self, qual_id)) |enum_value| {
                     return enum_value;
                 }
@@ -2449,7 +2442,6 @@ pub const CodeGenerator = struct {
                         }
                     }
 
-                    // Fallback to old method
                     const pointee_type = c.LLVMGetElementType(result_type);
                     const pointee_type_kind = c.LLVMGetTypeKind(pointee_type);
                     if (pointee_type_kind == c.LLVMStructTypeKind) {
@@ -2867,7 +2859,7 @@ pub const CodeGenerator = struct {
                 return self.generateBinaryOp(b);
             },
             .method_call => |method| {
-                // Convert method call to function call: obj.method(args) -> method(obj, args)
+
                 var args = std.ArrayList(*ast.Node){};
                 defer args.deinit(self.allocator);
                 try args.append(self.allocator, method.object);
@@ -2894,12 +2886,10 @@ pub const CodeGenerator = struct {
                 const simd_value = try self.generateExpression(simd_method.simd);
                 const simd_type = c.LLVMTypeOf(simd_value);
 
-                // Verify this is actually a SIMD vector type
                 if (c.LLVMGetTypeKind(simd_type) != c.LLVMVectorTypeKind) {
                     return errors.CodegenError.TypeMismatch;
                 }
 
-                // Handle SIMD reduction operations
                 if (std.mem.eql(u8, simd_method.method_name, "sum") or
                     std.mem.eql(u8, simd_method.method_name, "product") or
                     std.mem.eql(u8, simd_method.method_name, "min") or
@@ -2911,13 +2901,11 @@ pub const CodeGenerator = struct {
                 return errors.CodegenError.UnsupportedOperation;
             },
             .array_initializer => |_| {
-                // Array initializers need context to determine type
-                // This case should typically be handled by generateExpressionWithContext
+
                 return errors.CodegenError.TypeMismatch;
             },
             .simd_initializer => |_| {
-                // SIMD initializers need context to determine type
-                // This case should typically be handled by generateExpressionWithContext
+
                 return errors.CodegenError.TypeMismatch;
             },
             else => return errors.CodegenError.TypeMismatch,
@@ -3460,7 +3448,6 @@ pub const CodeGenerator = struct {
         const obj_file = try std.fmt.allocPrint(arena_alloc, "{s}.o", .{output});
         defer arena_alloc.free(obj_file);
 
-        // Detect LLVM tools
         const opt_tool = if (optimize) try llvm_tools.getLLVMToolPath(arena_alloc, .opt) else null;
         const llc_tool = try llvm_tools.getLLVMToolPath(arena_alloc, .llc);
         const clang_tool = try llvm_tools.getLLVMToolPath(arena_alloc, .clang);
@@ -3527,7 +3514,6 @@ pub const CodeGenerator = struct {
             return error.CompilationFailed;
         }
 
-        // Try to link with ld.lld first
         var lld_success = false;
         const crt1_exists = blk: {
             std.fs.cwd().access("/usr/lib/crt1.o", .{}) catch break :blk false;
