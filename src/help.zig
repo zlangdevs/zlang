@@ -89,7 +89,7 @@ pub fn printHelp() void {
         \\  zlang wrap mylib.h -o mylib.zl
         \\  zlang -o myapp main.zl -lSDL2
         \\
-        \\{s}For more information, visit:{s} {s}https://github.com/zlang-org/zlang{s}
+        \\{s}For more information, visit:{s} {s}https://github.com/zlang-dev/zlang{s}
         \\
     , .{
         bold, reset,

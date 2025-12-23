@@ -21,14 +21,19 @@ fn getLineContent(allocator: std.mem.Allocator, file_path: []const u8, line_num:
     const file = std.fs.cwd().openFile(file_path, .{}) catch return null;
     defer file.close();
 
-    const content = file.readToEndAlloc(allocator, 1024 * 1024) catch return null;
-    defer allocator.free(content);
+    const content_buffer = utils.alloc(u8, allocator, 1024 * 1024);
+    const bytes_read = file.readAll(content_buffer) catch {
+        allocator.free(content_buffer);
+        return null;
+    };
+    const content = content_buffer[0..bytes_read];
+    defer allocator.free(content_buffer);
 
     var it = std.mem.splitScalar(u8, content, '\n');
     var current_line: usize = 1;
     while (it.next()) |line| {
         if (current_line == line_num) {
-            return try allocator.dupe(u8, line);
+            return utils.dupe(u8, allocator, line);
         }
         current_line += 1;
     }

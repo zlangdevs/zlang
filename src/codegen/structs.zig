@@ -74,7 +74,7 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
                     const element_ptr = c.LLVMBuildGEP2(cg.builder, current_type, current_value, &indices[0], 2, "array_element_ptr");
                     break :blk ElementResult{ .element_ptr = element_ptr, .element_type = element_type };
                 } else if (var_type_kind == c.LLVMPointerTypeKind) {
-                    // For pointer types, we need to dereference and then index
+
                     const element_type = c.LLVMGetElementType(current_type);
                     const loaded_ptr = c.LLVMBuildLoad2(cg.builder, current_type, current_value, "loaded_ptr");
                     var indices = [_]c.LLVMValueRef{index_expr};
@@ -95,7 +95,7 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
                     current_type_name = std.mem.sliceTo(name_ptr, 0);
                 }
             } else if (var_type_kind == c.LLVMPointerTypeKind and std.mem.startsWith(u8, current_type_name, "ptr<")) {
-                // For pointer dereferencing, extract the inner type name
+
                 current_type_name = current_type_name[4 .. current_type_name.len - 1];
             }
             path = path[close_bracket_pos + 1 ..];
@@ -160,11 +160,10 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
 
             const field_ptr = try getStructFieldPointer(cg, struct_type, current_value, field_index);
 
-            // Get the actual field type (works for both structs and unions)
             const field_type = try getFieldType(cg, struct_type, field_index);
 
             if (field_name_len < path.len) {
-                // There's more path to process after this field
+
                 const field_type_kind = c.LLVMGetTypeKind(field_type);
                 if (field_type_kind == c.LLVMStructTypeKind) {
                     current_value = field_ptr;
@@ -173,11 +172,11 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
                     if (name_ptr == null) return errors.CodegenError.TypeMismatch;
                     current_type_name = std.mem.sliceTo(name_ptr, 0);
                 } else if (field_type_kind == c.LLVMPointerTypeKind) {
-                    // For pointer fields followed by array access, load the pointer value
+
                     const loaded_ptr = c.LLVMBuildLoad2(cg.builder, field_type, field_ptr, "loaded_field_ptr");
                     current_value = loaded_ptr;
                     current_type = field_type;
-                    // Get field type name from struct declaration
+
                     const field_decl = cg.struct_declarations.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
                     const field_info = field_decl.fields.items[field_index];
                     current_type_name = field_info.type_name;
@@ -210,7 +209,7 @@ pub fn generateStructFieldAssignment(cg: *llvm.CodeGenerator, struct_name: []con
 }
 
 pub fn getStructFieldPointer(cg: *llvm.CodeGenerator, struct_type: c.LLVMTypeRef, struct_value: c.LLVMValueRef, field_index: c_uint) errors.CodegenError!c.LLVMValueRef {
-    // Check if this is a union by examining the struct name
+
     const struct_name_ptr = c.LLVMGetStructName(struct_type);
     var is_union = false;
     if (struct_name_ptr) |name_ptr| {
@@ -221,12 +220,12 @@ pub fn getStructFieldPointer(cg: *llvm.CodeGenerator, struct_type: c.LLVMTypeRef
     }
 
     if (is_union) {
-        // For unions, all fields are at offset 0, just get pointer to the union body at index 0
+
         var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0) };
         const union_body_ptr = c.LLVMBuildGEP2(@ptrCast(cg.builder), struct_type, struct_value, &indices[0], 2, "union_body_ptr");
         return union_body_ptr;
     } else {
-        // For structs, use the actual field index
+
         var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), field_index, 0) };
         return c.LLVMBuildGEP2(@ptrCast(cg.builder), struct_type, struct_value, &indices[0], 2, "struct_field_ptr");
     }
@@ -238,13 +237,13 @@ pub fn getFieldType(cg: *llvm.CodeGenerator, struct_type: c.LLVMTypeRef, field_i
         const name = std.mem.sliceTo(name_ptr, 0);
         if (cg.struct_declarations.get(name)) |decl| {
             if (decl.is_union) {
-                // For unions, get the actual field type from the declaration
+
                 if (field_index >= decl.fields.items.len) return errors.CodegenError.TypeMismatch;
                 return try utils.getLLVMType(cg, decl.fields.items[field_index].type_name);
             }
         }
     }
-    // For regular structs, use LLVM's type info
+
     return c.LLVMStructGetTypeAtIndex(struct_type, field_index);
 }
 
@@ -315,7 +314,7 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
                     const element_ptr = c.LLVMBuildGEP2(cg.builder, current_type, current_value, &indices[0], 2, "array_element_ptr");
                     break :blk ElementResult{ .element_ptr = element_ptr, .element_type = element_type };
                 } else if (var_type_kind == c.LLVMPointerTypeKind) {
-                    // For pointer types, we need to dereference and then index
+
                     const element_type = c.LLVMGetElementType(current_type);
                     const loaded_ptr = c.LLVMBuildLoad2(cg.builder, current_type, current_value, "loaded_ptr");
                     var indices = [_]c.LLVMValueRef{index_expr};
@@ -336,7 +335,7 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
                     current_type_name = std.mem.sliceTo(name_ptr, 0);
                 }
             } else if (var_type_kind == c.LLVMPointerTypeKind and std.mem.startsWith(u8, current_type_name, "ptr<")) {
-                // For pointer dereferencing, extract the inner type name
+
                 current_type_name = current_type_name[4 .. current_type_name.len - 1];
             }
             path = path[close_bracket_pos + 1 ..];
@@ -381,7 +380,6 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
 
             const field_ptr = try getStructFieldPointer(cg, struct_type, current_value, field_index);
 
-            // Get the actual field type (works for both structs and unions)
             const field_type = try getFieldType(cg, struct_type, field_index);
 
             if (dot_pos != null) {
@@ -413,22 +411,20 @@ pub fn generateStructFieldAccess(cg: *llvm.CodeGenerator, struct_var_info: Varia
 }
 
 pub fn generateStructType(cg: *llvm.CodeGenerator, struct_decl: ast.StructDecl) errors.CodegenError!void {
-    // Create the named struct type first (opaque)
+
     const struct_name_z = utils.dupeZ(cg.allocator, struct_decl.name);
     defer cg.allocator.free(struct_name_z);
     const struct_type = c.LLVMStructCreateNamed(@ptrCast(cg.context), struct_name_z.ptr);
 
-    // Register the struct type BEFORE resolving field types (allows self-referential structs)
     try cg.struct_types.put(struct_decl.name, @ptrCast(struct_type));
     try cg.struct_declarations.put(struct_decl.name, struct_decl);
 
-    // Now resolve field types (can reference the struct itself)
     var field_types = std.ArrayList(c.LLVMTypeRef){};
     defer field_types.deinit(cg.allocator);
     var field_map = std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(cg.allocator);
 
     if (struct_decl.is_union) {
-        // For unions, find the largest field type and use that as the body
+
         var max_size: c_ulonglong = 0;
         var max_align: c_uint = 1;
         var largest_type: ?c.LLVMTypeRef = null;
@@ -447,24 +443,22 @@ pub fn generateStructType(cg: *llvm.CodeGenerator, struct_decl: ast.StructDecl) 
             try field_map.put(field.name, @intCast(i));
         }
 
-        // Union body is a single element of the largest type
         if (largest_type) |lt| {
             var union_body = [_]c.LLVMTypeRef{lt};
             c.LLVMStructSetBody(struct_type, &union_body[0], 1, 0);
         } else {
-            // Empty union - use i8
+
             var union_body = [_]c.LLVMTypeRef{c.LLVMInt8TypeInContext(cg.context)};
             c.LLVMStructSetBody(struct_type, &union_body[0], 1, 0);
         }
     } else {
-        // Regular struct - all fields laid out sequentially
+
         for (struct_decl.fields.items, 0..) |field, i| {
             const field_type = try utils.getLLVMType(cg, field.type_name);
             try field_types.append(cg.allocator, @ptrCast(field_type));
             try field_map.put(field.name, @intCast(i));
         }
 
-        // Set the struct body with resolved field types
         c.LLVMStructSetBody(struct_type, field_types.items.ptr, @intCast(field_types.items.len), 0);
     }
 
@@ -505,7 +499,6 @@ pub fn generateStructInitializer(cg: *llvm.CodeGenerator, struct_init: ast.Struc
             @as(c_uint, @intCast(idx));
         const field_ptr = try getStructFieldPointer(cg, struct_type, struct_ptr, field_index);
 
-        // Get the actual field type (works for both structs and unions)
         const field_type = try getFieldType(cg, struct_type, field_index);
 
         const field_type_kind = c.LLVMGetTypeKind(field_type);
@@ -529,8 +522,5 @@ pub fn getLLVMStructType(cg: *llvm.CodeGenerator, struct_name: []const u8) !c.LL
         return existing;
     }
 
-    // Look for the struct declaration in the AST
-    // This is a simplified approach - in a real implementation we'd need to
-    // build a symbol table for struct declarations during code generation
     return errors.CodegenError.TypeMismatch;
 }

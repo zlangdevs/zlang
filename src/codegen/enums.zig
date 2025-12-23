@@ -9,7 +9,6 @@ const c = c_bindings.c;
 
 const CodeGenerator = @import("llvm.zig").CodeGenerator;
 
-/// Generate enum declaration with global constants
 pub fn generateEnumDeclaration(self: *CodeGenerator, enum_decl: ast.EnumDecl) errors.CodegenError!void {
     var current_value: i32 = 0;
     for (enum_decl.values.items) |enum_value| {
@@ -45,7 +44,6 @@ pub fn generateEnumDeclaration(self: *CodeGenerator, enum_decl: ast.EnumDecl) er
     }
 }
 
-/// Process global enums in function nodes
 pub fn processGlobalEnums(self: *CodeGenerator, func_node: *ast.Node) errors.CodegenError!void {
     switch (func_node.data) {
         .function => |func| {
@@ -57,7 +55,6 @@ pub fn processGlobalEnums(self: *CodeGenerator, func_node: *ast.Node) errors.Cod
     }
 }
 
-/// Recursively find and process enum declarations in statements
 pub fn findAndProcessEnums(self: *CodeGenerator, node: *ast.Node) errors.CodegenError!void {
     switch (node.data) {
         .enum_decl => |enum_decl| {
@@ -87,8 +84,6 @@ pub fn findAndProcessEnums(self: *CodeGenerator, node: *ast.Node) errors.Codegen
     }
 }
 
-/// Try to load an enum value from a qualified identifier (e.g., Color.RED)
-/// Returns null if not an enum value
 pub fn tryLoadEnumValue(self: *CodeGenerator, qual_id: ast.QualifiedIdentifier) errors.CodegenError!?c.LLVMValueRef {
     if (qual_id.base.data != .identifier) {
         return null;

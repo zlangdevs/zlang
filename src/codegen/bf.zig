@@ -361,7 +361,6 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
 
     const current_function = cg.current_function orelse return errors.CodegenError.TypeMismatch;
 
-    // --- 1. Setup Brainfuck environment ---
     const cell_type = c.LLVMIntTypeInContext(cg.context, @intCast(ctx.cell_size));
     const i32_type = c.LLVMInt32TypeInContext(cg.context);
     const i8_type = c.LLVMInt8TypeInContext(cg.context);
@@ -374,7 +373,6 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
     const ptr = c.LLVMBuildAlloca(cg.builder, i32_type, "bf_ptr");
     _ = c.LLVMBuildStore(cg.builder, c.LLVMConstInt(i32_type, 0, 0), ptr);
 
-    // Initialize tape with zeros
     const memset_func = try cg.declareLibcFunction("memset");
     const tape_i8_ptr = c.LLVMBuildBitCast(cg.builder, tape, i8_ptr_type, "tape_i8_ptr");
     const cell_size_bytes = @divTrunc(ctx.cell_size, 8);
@@ -387,9 +385,8 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
     };
     _ = c.LLVMBuildCall2(cg.builder, c.LLVMGlobalGetValueType(memset_func), memset_func, &memset_args[0], 3, "");
 
-    // --- 2. Load variables into tape ---
     for (ctx.requests.items) |req| {
-        // Handle array element access using array_index field
+
         const var_info = if (req.array_index) |index| blk: {
             const array_var_info = cg.getVariable(req.var_name) orelse return errors.CodegenError.UndefinedVariable;
             const array_type_kind = c.LLVMGetTypeKind(array_var_info.type_ref);
@@ -399,7 +396,6 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
             const array_length = c.LLVMGetArrayLength(array_var_info.type_ref);
             if (index >= array_length) return errors.CodegenError.UndefinedVariable;
 
-            // Get pointer to the specific array element
             const index_val = c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), @as(c_ulonglong, @intCast(index)), 0);
             var gep_indices: [2]c.LLVMValueRef = .{
                 c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0),
@@ -410,7 +406,7 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
             break :blk structs.VariableInfo{
                 .value = element_ptr,
                 .type_ref = element_type,
-                .type_name = array_var_info.type_name, // Use array's type name for now
+                .type_name = array_var_info.type_name,
             };
         } else cg.getVariable(req.var_name) orelse {
             return errors.CodegenError.UndefinedVariable;
@@ -424,11 +420,10 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
         const var_size_bits = c.LLVMGetIntTypeWidth(var_info.type_ref);
         const var_value = c.LLVMBuildLoad2(cg.builder, var_info.type_ref, var_info.value, "var_value");
 
-        // Calculate how many cells this variable needs
         const cells_needed: usize = (var_size_bits + @as(c_uint, @intCast(ctx.cell_size)) - 1) / @as(c_uint, @intCast(ctx.cell_size));
 
         if (cells_needed == 1) {
-            // Variable fits in one cell - store directly
+
             const cell_index = c.LLVMConstInt(i32_type, @as(c_ulonglong, @intCast(req.load_idx)), 0);
             var gep_indices: [1]c.LLVMValueRef = .{cell_index};
             const cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &gep_indices[0], 1, "cell_ptr");
@@ -442,7 +437,7 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
 
             _ = c.LLVMBuildStore(cg.builder, cell_value, cell_ptr);
         } else {
-            // Variable needs multiple cells - split by cell_size chunks (big-endian)
+
             var cell_idx: usize = 0;
             while (cell_idx < cells_needed) : (cell_idx += 1) {
                 const cell_index = req.load_idx + @as(i32, @intCast(cell_idx));
@@ -450,12 +445,11 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
                 var gep_indices: [1]c.LLVMValueRef = .{byte_index};
                 const cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &gep_indices[0], 1, "cell_ptr");
 
-                // Extract the chunk for this cell (big-endian: most significant chunk first)
                 const chunk_pos = cells_needed - 1 - cell_idx;
                 const shift_amount = c.LLVMConstInt(var_info.type_ref, @intCast(chunk_pos * @as(usize, @intCast(ctx.cell_size))), 0);
                 var cell_value: c.LLVMValueRef = undefined;
                 if (@as(c_uint, @intCast(chunk_pos * @as(usize, @intCast(ctx.cell_size)))) >= var_size_bits) {
-                    // This chunk is beyond the variable size, store 0
+
                     cell_value = c.LLVMConstInt(cell_type, 0, 0);
                 } else {
                     const shifted_value = c.LLVMBuildLShr(cg.builder, var_value, shift_amount, "shifted");
@@ -467,7 +461,6 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
         }
     }
 
-    // --- 3. Execute Brainfuck code ---
     const putchar_func = try cg.declareLibcFunction("putchar");
     const getchar_func = try cg.declareLibcFunction("getchar");
 
@@ -538,7 +531,7 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
             },
             .loop_end => {
                 if (loop_stack.items.len == 0) {
-                    return errors.CodegenError.UnsupportedOperation; // Unmatched ]
+                    return errors.CodegenError.UnsupportedOperation;
                 }
                 const loop_blocks = loop_stack.pop();
                 _ = c.LLVMBuildBr(cg.builder, loop_blocks.?.cond);
@@ -577,9 +570,8 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
         }
     }
 
-    // --- 4. Sync variables back from tape ---
     for (ctx.requests.items) |req| {
-        // Handle array element access using array_index field for sync back
+
         const var_info = if (req.array_index) |index| blk: {
             const array_var_info = cg.getVariable(req.var_name) orelse continue;
             const array_type_kind = c.LLVMGetTypeKind(array_var_info.type_ref);
@@ -589,7 +581,6 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
             const array_length = c.LLVMGetArrayLength(array_var_info.type_ref);
             if (index >= array_length) continue;
 
-            // Get pointer to the specific array element
             const index_val = c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), @as(c_ulonglong, @intCast(index)), 0);
             var gep_indices: [2]c.LLVMValueRef = .{
                 c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0),
@@ -600,7 +591,7 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
             break :blk structs.VariableInfo{
                 .value = element_ptr,
                 .type_ref = element_type,
-                .type_name = array_var_info.type_name, // Use array's type name for now
+                .type_name = array_var_info.type_name,
             };
         } else cg.getVariable(req.var_name) orelse continue;
 
@@ -613,7 +604,7 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
         const cells_needed: usize = (var_size_bits + @as(c_uint, @intCast(ctx.cell_size)) - 1) / @as(c_uint, @intCast(ctx.cell_size));
 
         if (cells_needed == 1) {
-            // Variable fits in one cell - load directly
+
             const cell_index = c.LLVMConstInt(i32_type, @as(c_ulonglong, @intCast(req.load_idx)), 0);
             var gep_indices: [1]c.LLVMValueRef = .{cell_index};
             const cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &gep_indices[0], 1, "cell_ptr");
@@ -623,16 +614,16 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
             if (var_size_bits == ctx.cell_size) {
                 reconstructed_value = cell_val;
             } else if (var_size_bits < ctx.cell_size) {
-                // Truncate cell value to variable size
+
                 reconstructed_value = c.LLVMBuildTrunc(cg.builder, cell_val, var_info.type_ref, "trunc_from_cell");
             } else {
-                // Zero-extend cell value to variable size
+
                 reconstructed_value = c.LLVMBuildZExt(cg.builder, cell_val, var_info.type_ref, "zext_from_cell");
             }
 
             _ = c.LLVMBuildStore(cg.builder, reconstructed_value, var_info.value);
         } else {
-            // Variable needs multiple cells - reconstruct from chunks (big-endian)
+
             var reconstructed_value = c.LLVMConstInt(var_info.type_ref, 0, 0);
 
             var cell_idx: usize = 0;
@@ -643,26 +634,23 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
                 const cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &gep_indices[0], 1, "cell_ptr");
                 const cell_val = c.LLVMBuildLoad2(cg.builder, cell_type, cell_ptr, "cell_val");
 
-                // Zero-extend the cell value to the variable type
                 const extended_cell_val = c.LLVMBuildZExt(cg.builder, cell_val, var_info.type_ref, "extended");
 
-                // For big-endian: cell_idx corresponds to chunk at position (cells_needed - 1 - cell_idx)
                 const chunk_pos = cells_needed - 1 - cell_idx;
                 const shift_amount = c.LLVMConstInt(var_info.type_ref, @intCast(chunk_pos * @as(usize, @intCast(ctx.cell_size))), 0);
 
                 if (@as(c_uint, @intCast(chunk_pos * @as(usize, @intCast(ctx.cell_size)))) < var_size_bits) {
                     if (shift_amount == c.LLVMConstInt(var_info.type_ref, 0, 0)) {
-                        // Least significant chunk - just OR it
+
                         reconstructed_value = c.LLVMBuildOr(cg.builder, reconstructed_value, extended_cell_val, "combined");
                     } else {
-                        // Shift to the correct position and combine
+
                         const shifted_cell_val = c.LLVMBuildShl(cg.builder, extended_cell_val, shift_amount, "shifted");
                         reconstructed_value = c.LLVMBuildOr(cg.builder, reconstructed_value, shifted_cell_val, "combined");
                     }
                 }
             }
 
-            // Store the reconstructed value back to the variable
             _ = c.LLVMBuildStore(cg.builder, reconstructed_value, var_info.value);
         }
     }
@@ -670,9 +658,8 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
     return c.LLVMConstInt(i32_type, 0, 0);
 }
 
-// Helper function to free allocated variable names in requests
 fn freeExpandedRequests(allocator: std.mem.Allocator, requests: []const BfLoadRequest) void {
-    // No longer need to free synthetic names since we don't create them
+
     _ = allocator;
     _ = requests;
 }

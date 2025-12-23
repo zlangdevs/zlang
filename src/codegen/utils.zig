@@ -54,7 +54,6 @@ pub const LibcFunctionSignature = struct {
     is_varargs: bool = false,
 };
 
-// Temporary thing untill we have std lib
 pub const LIBC_FUNCTIONS = std.StaticStringMap(LibcFunctionSignature).initComptime(.{
     .{ "printf", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type}, .is_varargs = true } },
     .{ "puts", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.char_ptr_type} } },
@@ -184,7 +183,6 @@ pub fn getDefaultValueForType(cg: *codegen.CodeGenerator, type_name: []const u8)
     return c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0);
 }
 
-/// Check if a type is ptr<const T>
 pub fn isConstPointer(type_name: []const u8) bool {
     if (!std.mem.startsWith(u8, type_name, "ptr<") or !std.mem.endsWith(u8, type_name, ">")) {
         return false;
@@ -194,7 +192,6 @@ pub fn isConstPointer(type_name: []const u8) bool {
     return std.mem.startsWith(u8, trimmed, "const ");
 }
 
-/// Strip "const " from beginning of type name
 pub fn stripConst(type_name: []const u8) []const u8 {
     const trimmed = std.mem.trim(u8, type_name, " \t");
     if (std.mem.startsWith(u8, trimmed, "const ")) {
@@ -221,9 +218,9 @@ pub fn getVarArgType(type_name: []const u8) ?[]const u8 {
 pub fn getLLVMType(self: *codegen.CodeGenerator, type_name: []const u8) errors.CodegenError!c.LLVMTypeRef {
     if (std.mem.startsWith(u8, type_name, "ptr<") and std.mem.endsWith(u8, type_name, ">")) {
         var inner_type_name = type_name[4 .. type_name.len - 1];
-        // Strip const if present (ptr<const T> syntax)
+
         inner_type_name = stripConst(inner_type_name);
-        // detect function type inside ptr<ret(args)> without changing grammar
+
         if (std.mem.indexOfScalar(u8, inner_type_name, '(')) |lp| if (std.mem.lastIndexOfScalar(u8, inner_type_name, ')')) |rp| if (rp > lp) {
             const ret_part = std.mem.trim(u8, inner_type_name[0..lp], " \t");
             const args_part_full = inner_type_name[lp + 1 .. rp];
@@ -353,7 +350,7 @@ pub fn isFloatType(type_name: []const u8) bool {
 pub fn getIntWidth(type_name: []const u8) u32 {
     if (std.mem.eql(u8, type_name, "bool")) return 1;
     if (type_name.len < 2) return 0;
-    // Skip 'i' or 'u'
+
     const width_str = type_name[1..];
     return std.fmt.parseInt(u32, width_str, 10) catch 0;
 }
