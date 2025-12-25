@@ -785,6 +785,7 @@ u16 x = 10;
 u16 result = 0;
 
 brainfuck {
+    ?cell_size 16?
     ?load x 0?         ?? Load x into cell 0
     ?load result 1?    ?? Load result into cell 1
     [->+<]            ?? Add x to result
