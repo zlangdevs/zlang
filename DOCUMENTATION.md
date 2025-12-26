@@ -18,7 +18,7 @@ Complete language reference and advanced usage guide.
 ## Compiler Usage
 
 ### Basic Compilation
-
+`
 ```bash
 zlang <input.zl>
 ```
@@ -982,7 +982,7 @@ fun @strcat(dest: ptr<u8>, src: ptr<u8>) >> ptr<u8>;
 
 ### System V ABI Compliance
 
-ZLang fully supports System V ABI for Linux/Unix:
+ZLang partly supports System V ABI for Linux/Unix:
 
 **Small Structs** (≤16 bytes)
 ```zl
