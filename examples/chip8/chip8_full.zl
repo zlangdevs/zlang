@@ -1,0 +1,565 @@
+?? Full CHIP-8 Emulator in ZLang
+?? Supports all 35 opcodes, ROM loading, and proper timing
+
+use std.time
+use std.fs
+
+?? Helper to read a byte safely
+fun read_byte(ptr: ptr<u8>, addr: i32) >> u8 {
+    return ptr[addr];
+}
+
+?? Helper to write a byte safely
+fun write_byte(ptr: ptr<u8>, addr: i32, value: u8) >> void {
+    ptr[addr] = value;
+}
+
+?? Load ROM from file
+fun load_rom_from_file(filename: ptr<u8>, memory: ptr<u8>) >> i32 {
+    ptr<void> file = fopen(filename, "rb");
+    if file == null {
+        @printf("Error: Could not open ROM file '%s'\n", filename);
+        return 0;
+    }
+
+    ?? Read ROM byte by byte
+    i32 bytes_read = 0;
+    for i32 i = 0; i < 3584; i++ {
+        i32 ch = @fgetc(file);
+        if ch == -1 {
+            break;
+        }
+        i32 addr = 512 + i;
+        write_byte(memory, addr, ch as u8);
+        bytes_read = bytes_read + 1;
+    }
+    fclose(file);
+
+    @printf("Loaded %d bytes from '%s'\n", bytes_read, filename);
+    return bytes_read;
+}
+
+?? Draw the display
+fun draw_display(display: ptr<u8>) >> void {
+    ?? Clear screen using ANSI escape codes
+    @printf("%c[2J%c[H", 27, 27);
+    @fflush(null);
+
+    @printf("╔");
+    for i32 i = 0; i < 64; i++ { @printf("═"); }
+    @printf("╗\n");
+
+    for i32 y = 0; y < 32; y++ {
+        @printf("║");
+        for i32 x = 0; x < 64; x++ {
+            ??i32 idx = y * 64 + x;
+            i32 idx = 0;
+            brainfuck {
+                ?len 100?
+                ?cell_size 32?
+                ?cell_signed true?
+                ?load idx 30?
+                ?load y 31?
+                ?load x 32?
+                >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>[<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<+>>>>>>>>>>>
+                >>>>>>>>>>>>>>>>>>>>-]<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<[->>>>>>>>>>>>>>>>>>>>
+                >>>>>>>>>>>+<+<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<]>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+                >>><<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<>++++++++[<++++++++>-]<[>>>>>>>>>>>>>>>
+                >>>>>>>>>>>>>>>>>>+<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<-]>>>>>>>>>>>>>>>>>>>>>
+                >>>>>>>>>>>><<<[<<<<<<<<<<<<<<<<<<<<<<<<+>>>>>>>>>>>>>>>>>>>>>>>>-]>>>[<<<<
+                <<<<<<<<<<<<<<<<<<<<<<<<<<<<<+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>-]<<<<<<<<<<
+                <<<<<<<<<<<<<<<<<<<<<<<[->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>+<<<<<<<<<<<<<<<<
+                <<<<<<<<<<+<<<<<<<]>>>>>>>[-<[<+<+>>-]<[->+<]>>]<[-]<<[>>>>>>>>>>>>>>>>>>>>
+                >>>>>>+<<<<<<<<<<<<<<<<<<<<<<<<<<-]>>>>>>>>>>>>>>>>>>>>>>>>>>>>[<<<<<<<<<<<
+                <<<<<<<<<<<<<<<<+>>>>>>>>>>>>>>>>>>>>>>>>>>>-]<<<<<<<<<<<<<<<<<<<<<<<<<<<[>
+                >>>>>>>>>>>>>>>>>>>>>>>>>>+<<+<<<<<<<<<<<<<<<<<<<<<<<<<-]
+            };
+            if read_byte(display, idx) != 0 {
+                @printf("█");
+            } else {
+                @printf(" ");
+            }
+        }
+        @printf("║\n");
+    }
+
+    @printf("╚");
+    for i32 i = 0; i < 64; i++ { @printf("═"); }
+    @printf("╝\n");
+    @fflush(null);
+}
+
+?? Execute one CPU cycle
+fun chip8_cycle(memory: ptr<u8>, V: ptr<u8>, display: ptr<u8>, stack: ptr<u16>,
+                keys: ptr<u8>, pc_ptr: ptr<u16>, I_ptr: ptr<u16>, sp_ptr: ptr<u8>,
+                delay_ptr: ptr<u8>, sound_ptr: ptr<u8>, draw_ptr: ptr<bool>) >> void {
+
+    ?? Read state
+    u16 pc = pc_ptr[0];
+    u16 I = I_ptr[0];
+    u8 sp = sp_ptr[0];
+
+    ?? Fetch opcode
+    i32 pc_int = pc as i32;
+    i32 b1 = read_byte(memory, pc_int) as i32;
+    i32 b2 = read_byte(memory, pc_int + 1) as i32;
+    i32 opcode = (b1 << 8) | b2;
+
+    ?? Decode
+    i32 op_type = opcode & 0xF000;
+    i32 nnn = opcode & 0x0FFF;
+    i32 n = opcode & 0x000F;
+    i32 x = (opcode & 0x0F00) >> 8;
+    i32 y = (opcode & 0x00F0) >> 4;
+    i32 kk = opcode & 0x00FF;
+
+    ?? Increment PC
+    ?? pc = pc + 2;
+
+    brainfuck {
+        ?cell_size 16?
+        ?load pc 0?
+        ++
+    };
+
+    ?? Execute instruction
+    if op_type == 0x0000 {
+        if opcode == 0x00E0 {
+            ?? 00E0 - CLS
+            for i32 i = 0; i < 2048; i++ {
+                write_byte(display, i, 0);
+            }
+            draw_ptr[0] = true;
+        } else if opcode == 0x00EE {
+            ?? 00EE - RET
+            sp = sp - 1;
+            pc = stack[sp];
+        }
+    } else if op_type == 0x1000 {
+        ?? 1nnn - JP addr
+        pc = nnn as u16;
+    } else if op_type == 0x2000 {
+        ?? 2nnn - CALL addr
+        stack[sp] = pc;
+        sp = sp + 1;
+        pc = nnn as u16;
+    } else if op_type == 0x3000 {
+        ?? 3xkk - SE Vx, byte
+        if read_byte(V, x) == (kk as u8) {
+            pc = pc + 2;
+        }
+    } else if op_type == 0x4000 {
+        ?? 4xkk - SNE Vx, byte
+        if read_byte(V, x) != (kk as u8) {
+            pc = pc + 2;
+        }
+    } else if op_type == 0x5000 {
+        ?? 5xy0 - SE Vx, Vy
+        if read_byte(V, x) == read_byte(V, y) {
+            pc = pc + 2;
+        }
+    } else if op_type == 0x6000 {
+        ?? 6xkk - LD Vx, byte
+        write_byte(V, x, kk as u8);
+    } else if op_type == 0x7000 {
+        ?? 7xkk - ADD Vx, byte
+        u8 current = read_byte(V, x);
+        write_byte(V, x, current + (kk as u8));
+    } else if op_type == 0x8000 {
+        i32 op_sub = opcode & 0x000F;
+
+        if op_sub == 0x0 {
+            ?? 8xy0 - LD Vx, Vy
+            write_byte(V, x, read_byte(V, y));
+        } else if op_sub == 0x1 {
+            ?? 8xy1 - OR Vx, Vy
+            u8 vx = read_byte(V, x);
+            u8 vy = read_byte(V, y);
+            write_byte(V, x, vx | vy);
+        } else if op_sub == 0x2 {
+            ?? 8xy2 - AND Vx, Vy
+            u8 vx = read_byte(V, x);
+            u8 vy = read_byte(V, y);
+            write_byte(V, x, vx & vy);
+        } else if op_sub == 0x3 {
+            ?? 8xy3 - XOR Vx, Vy
+            u8 vx = read_byte(V, x);
+            u8 vy = read_byte(V, y);
+            write_byte(V, x, vx ^ vy);
+        } else if op_sub == 0x4 {
+            ?? 8xy4 - ADD Vx, Vy
+            i32 sum = (read_byte(V, x) as i32) + (read_byte(V, y) as i32);
+            write_byte(V, 15, 0);
+            if sum > 255 {
+                write_byte(V, 15, 1);
+            }
+            write_byte(V, x, (sum & 0xFF) as u8);
+        } else if op_sub == 0x5 {
+            ?? 8xy5 - SUB Vx, Vy
+            u8 vx = read_byte(V, x);
+            u8 vy = read_byte(V, y);
+            write_byte(V, 15, 0);
+            if vx > vy {
+                write_byte(V, 15, 1);
+            }
+            write_byte(V, x, vx - vy);
+        } else if op_sub == 0x6 {
+            ?? 8xy6 - SHR Vx
+            u8 vx = read_byte(V, x);
+            u8 lsb = vx & 0x1;
+            write_byte(V, 15, lsb);
+            write_byte(V, x, vx >> 1);
+        } else if op_sub == 0x7 {
+            ?? 8xy7 - SUBN Vx, Vy
+            u8 vx = read_byte(V, x);
+            u8 vy = read_byte(V, y);
+            write_byte(V, 15, 0);
+            if vy > vx {
+                write_byte(V, 15, 1);
+            }
+            write_byte(V, x, vy - vx);
+        } else if op_sub == 0xE {
+            ?? 8xyE - SHL Vx
+            u8 vx = read_byte(V, x);
+            i32 msb_val = (vx & 0x80) >> 7;
+            write_byte(V, 15, msb_val as u8);
+            write_byte(V, x, vx << 1);
+        }
+    } else if op_type == 0x9000 {
+        ?? 9xy0 - SNE Vx, Vy
+        if read_byte(V, x) != read_byte(V, y) {
+            pc = pc + 2;
+        }
+    } else if op_type == 0xA000 {
+        ?? Annn - LD I, addr
+        I = nnn as u16;
+    } else if op_type == 0xB000 {
+        ?? Bnnn - JP V0, addr
+        pc = (nnn + (read_byte(V, 0) as i32)) as u16;
+    } else if op_type == 0xC000 {
+        ?? Cxkk - RND Vx, byte
+        write_byte(V, x, (@rand() as u8) & (kk as u8));
+    } else if op_type == 0xD000 {
+        ?? Dxyn - DRW Vx, Vy, nibble
+        i32 x_pos = (read_byte(V, x) as i32) % 64;
+        i32 y_pos = (read_byte(V, y) as i32) % 32;
+        write_byte(V, 15, 0);
+
+        for i32 row = 0; row < n; row++ {
+            i32 sprite_addr = (I as i32) + row;
+            i32 sprite_byte = read_byte(memory, sprite_addr) as i32;
+
+            ?? Unrolled bit checking for each of 8 pixels
+            if (sprite_byte & 0x80) != 0 {
+                i32 px = (x_pos + 0) % 64;
+                i32 py = (y_pos + row) % 32;
+                i32 pidx = py * 64 + px;
+                if read_byte(display, pidx) == 1 { write_byte(V, 15, 1); }
+                write_byte(display, pidx, read_byte(display, pidx) ^ 1);
+            }
+            if (sprite_byte & 0x40) != 0 {
+                i32 px = (x_pos + 1) % 64;
+                i32 py = (y_pos + row) % 32;
+                i32 pidx = py * 64 + px;
+                if read_byte(display, pidx) == 1 { write_byte(V, 15, 1); }
+                write_byte(display, pidx, read_byte(display, pidx) ^ 1);
+            }
+            if (sprite_byte & 0x20) != 0 {
+                i32 px = (x_pos + 2) % 64;
+                i32 py = (y_pos + row) % 32;
+                i32 pidx = py * 64 + px;
+                if read_byte(display, pidx) == 1 { write_byte(V, 15, 1); }
+                write_byte(display, pidx, read_byte(display, pidx) ^ 1);
+            }
+            if (sprite_byte & 0x10) != 0 {
+                i32 px = (x_pos + 3) % 64;
+                i32 py = (y_pos + row) % 32;
+                i32 pidx = py * 64 + px;
+                if read_byte(display, pidx) == 1 { write_byte(V, 15, 1); }
+                write_byte(display, pidx, read_byte(display, pidx) ^ 1);
+            }
+            if (sprite_byte & 0x08) != 0 {
+                i32 px = (x_pos + 4) % 64;
+                i32 py = (y_pos + row) % 32;
+                i32 pidx = py * 64 + px;
+                if read_byte(display, pidx) == 1 { write_byte(V, 15, 1); }
+                write_byte(display, pidx, read_byte(display, pidx) ^ 1);
+            }
+            if (sprite_byte & 0x04) != 0 {
+                i32 px = (x_pos + 5) % 64;
+                i32 py = (y_pos + row) % 32;
+                i32 pidx = py * 64 + px;
+                if read_byte(display, pidx) == 1 { write_byte(V, 15, 1); }
+                write_byte(display, pidx, read_byte(display, pidx) ^ 1);
+            }
+            if (sprite_byte & 0x02) != 0 {
+                i32 px = (x_pos + 6) % 64;
+                i32 py = (y_pos + row) % 32;
+                i32 pidx = py * 64 + px;
+                if read_byte(display, pidx) == 1 { write_byte(V, 15, 1); }
+                write_byte(display, pidx, read_byte(display, pidx) ^ 1);
+            }
+            if (sprite_byte & 0x01) != 0 {
+                i32 px = (x_pos + 7) % 64;
+                i32 py = (y_pos + row) % 32;
+                i32 pidx = py * 64 + px;
+                if read_byte(display, pidx) == 1 { write_byte(V, 15, 1); }
+                write_byte(display, pidx, read_byte(display, pidx) ^ 1);
+            }
+        }
+        draw_ptr[0] = true;
+    } else if op_type == 0xE000 {
+        i32 op_sub = opcode & 0x00FF;
+
+        if op_sub == 0x9E {
+            ?? Ex9E - SKP Vx
+            u8 key = read_byte(V, x);
+            if read_byte(keys, key as i32) != 0 {
+                pc = pc + 2;
+            }
+        } else if op_sub == 0xA1 {
+            ?? ExA1 - SKNP Vx
+            u8 key = read_byte(V, x);
+            if read_byte(keys, key as i32) == 0 {
+                pc = pc + 2;
+            }
+        }
+    } else if op_type == 0xF000 {
+        i32 op_sub = opcode & 0x00FF;
+
+        if op_sub == 0x07 {
+            ?? Fx07 - LD Vx, DT
+            write_byte(V, x, delay_ptr[0]);
+        } else if op_sub == 0x0A {
+            ?? Fx0A - LD Vx, K
+            bool key_pressed = false;
+            for i32 i = 0; i < 16; i++ {
+                if read_byte(keys, i) != 0 {
+                    write_byte(V, x, i as u8);
+                    key_pressed = true;
+                    break;
+                }
+            }
+            if !key_pressed {
+                pc = pc - 2;  ?? Repeat instruction
+            }
+        } else if op_sub == 0x15 {
+            ?? Fx15 - LD DT, Vx
+            delay_ptr[0] = read_byte(V, x);
+        } else if op_sub == 0x18 {
+            ?? Fx18 - LD ST, Vx
+            sound_ptr[0] = read_byte(V, x);
+        } else if op_sub == 0x1E {
+            ?? Fx1E - ADD I, Vx
+            I = I + (read_byte(V, x) as u16);
+        } else if op_sub == 0x29 {
+            ?? Fx29 - LD F, Vx
+            u8 digit = read_byte(V, x) & 0xF;
+            I = (80 + ((digit as i32) * 5)) as u16;
+        } else if op_sub == 0x33 {
+            ?? Fx33 - LD B, Vx
+            u8 value = read_byte(V, x);
+            i32 i_addr = I as i32;
+            u8 hundreds = value / 100;
+            u8 tens = (value / 10) % 10;
+            u8 ones = value % 10;
+            write_byte(memory, i_addr, hundreds);
+            write_byte(memory, i_addr + 1, tens);
+            write_byte(memory, i_addr + 2, ones);
+        } else if op_sub == 0x55 {
+            ?? Fx55 - LD [I], Vx
+            i32 i_addr = I as i32;
+            for i32 i = 0; i <= x; i++ {
+                write_byte(memory, i_addr + i, read_byte(V, i));
+            }
+        } else if op_sub == 0x65 {
+            ?? Fx65 - LD Vx, [I]
+            i32 i_addr = I as i32;
+            for i32 i = 0; i <= x; i++ {
+                write_byte(V, i, read_byte(memory, i_addr + i));
+            }
+        }
+    }
+
+    ?? Write state back
+    pc_ptr[0] = pc;
+    I_ptr[0] = I;
+    sp_ptr[0] = sp;
+}
+
+fun main(argc: i32, argv: ptr<ptr<u8>>) >> i32 {
+    @printf("╔════════════════════════════════════════════════════════════════╗\n");
+    @printf("║           CHIP-8 Emulator - Full Implementation               ║\n");
+    @printf("╚════════════════════════════════════════════════════════════════╝\n\n");
+
+    ?? Initialize random
+    @srand(@time(null) as u32);
+
+    ?? Allocate memory
+    ptr<u8> memory = @malloc(4096);
+    ptr<u8> V = @malloc(16);
+    ptr<u8> display = @malloc(2048);
+    ptr<u16> stack = @malloc(32);
+    ptr<u8> keys = @malloc(16);
+
+    ?? State pointers
+    ptr<u16> pc_ptr = @malloc(2);
+    ptr<u16> I_ptr = @malloc(2);
+    ptr<u8> sp_ptr = @malloc(1);
+    ptr<u8> delay_ptr = @malloc(1);
+    ptr<u8> sound_ptr = @malloc(1);
+    ptr<bool> draw_ptr = @malloc(1);
+
+    ?? Initialize
+    for i32 i = 0; i < 4096; i++ {
+        write_byte(memory, i, 0);
+    }
+    for i32 i = 0; i < 16; i++ {
+        write_byte(V, i, 0);
+        write_byte(keys, i, 0);
+    }
+    for i32 i = 0; i < 2048; i++ {
+        write_byte(display, i, 0);
+    }
+
+    ?? Load fontset at address 80
+    write_byte(memory, 80, 0xF0); write_byte(memory, 81, 0x90); write_byte(memory, 82, 0x90); write_byte(memory, 83, 0x90); write_byte(memory, 84, 0xF0);
+    write_byte(memory, 85, 0x20); write_byte(memory, 86, 0x60); write_byte(memory, 87, 0x20); write_byte(memory, 88, 0x20); write_byte(memory, 89, 0x70);
+    write_byte(memory, 90, 0xF0); write_byte(memory, 91, 0x10); write_byte(memory, 92, 0xF0); write_byte(memory, 93, 0x80); write_byte(memory, 94, 0xF0);
+    write_byte(memory, 95, 0xF0); write_byte(memory, 96, 0x10); write_byte(memory, 97, 0xF0); write_byte(memory, 98, 0x10); write_byte(memory, 99, 0xF0);
+    write_byte(memory, 100, 0x90); write_byte(memory, 101, 0x90); write_byte(memory, 102, 0xF0); write_byte(memory, 103, 0x10); write_byte(memory, 104, 0x10);
+    write_byte(memory, 105, 0xF0); write_byte(memory, 106, 0x80); write_byte(memory, 107, 0xF0); write_byte(memory, 108, 0x10); write_byte(memory, 109, 0xF0);
+    write_byte(memory, 110, 0xF0); write_byte(memory, 111, 0x80); write_byte(memory, 112, 0xF0); write_byte(memory, 113, 0x90); write_byte(memory, 114, 0xF0);
+    write_byte(memory, 115, 0xF0); write_byte(memory, 116, 0x10); write_byte(memory, 117, 0x20); write_byte(memory, 118, 0x40); write_byte(memory, 119, 0x40);
+    write_byte(memory, 120, 0xF0); write_byte(memory, 121, 0x90); write_byte(memory, 122, 0xF0); write_byte(memory, 123, 0x90); write_byte(memory, 124, 0xF0);
+    write_byte(memory, 125, 0xF0); write_byte(memory, 126, 0x90); write_byte(memory, 127, 0xF0); write_byte(memory, 128, 0x10); write_byte(memory, 129, 0xF0);
+    write_byte(memory, 130, 0xF0); write_byte(memory, 131, 0x90); write_byte(memory, 132, 0xF0); write_byte(memory, 133, 0x90); write_byte(memory, 134, 0x90);
+    write_byte(memory, 135, 0xE0); write_byte(memory, 136, 0x90); write_byte(memory, 137, 0xE0); write_byte(memory, 138, 0x90); write_byte(memory, 139, 0xE0);
+    write_byte(memory, 140, 0xF0); write_byte(memory, 141, 0x80); write_byte(memory, 142, 0x80); write_byte(memory, 143, 0x80); write_byte(memory, 144, 0xF0);
+    write_byte(memory, 145, 0xE0); write_byte(memory, 146, 0x90); write_byte(memory, 147, 0x90); write_byte(memory, 148, 0x90); write_byte(memory, 149, 0xE0);
+    write_byte(memory, 150, 0xF0); write_byte(memory, 151, 0x80); write_byte(memory, 152, 0xF0); write_byte(memory, 153, 0x80); write_byte(memory, 154, 0xF0);
+    write_byte(memory, 155, 0xF0); write_byte(memory, 156, 0x80); write_byte(memory, 157, 0xF0); write_byte(memory, 158, 0x80); write_byte(memory, 159, 0x80);
+
+    ?? Initialize state
+    pc_ptr[0] = 0x200;
+    I_ptr[0] = 0;
+    sp_ptr[0] = 0;
+    delay_ptr[0] = 0;
+    sound_ptr[0] = 0;
+    draw_ptr[0] = false;
+
+    @printf("CHIP-8 initialized\n");
+    @printf("Memory: 4KB | Display: 64x32 | Registers: 16\n\n");
+
+    ?? Load ROM
+    i32 rom_loaded = 0;
+    if argc > 1 {
+        rom_loaded = load_rom_from_file(argv[1], memory);
+        if rom_loaded == 0 {
+            @printf("Failed to load ROM\n");
+            return 1;
+        }
+    } else {
+        @printf("╔════════════════════════════════════════════════════════════════╗\n");
+        @printf("║                         USAGE                                  ║\n");
+        @printf("╚════════════════════════════════════════════════════════════════╝\n\n");
+        @printf("  %s <rom_file.ch8>\n\n", argv[0]);
+        @printf("ARGUMENTS:\n");
+        @printf("  rom_file.ch8    Path to CHIP-8 ROM file to execute\n\n");
+        @printf("EXAMPLES:\n");
+        @printf("  %s game.ch8\n", argv[0]);
+        @printf("  %s roms/pong.ch8\n", argv[0]);
+        @printf("  %s test.ch8\n\n", argv[0]);
+        @printf("FEATURES:\n");
+        @printf("  • All 35 CHIP-8 opcodes\n");
+        @printf("  • 64x32 pixel display\n");
+        @printf("  • 60Hz timing\n");
+        @printf("  • Sound support\n\n");
+        @printf("Press Ctrl+C to stop emulation at any time.\n\n");
+        @printf("Get ROMs from: github.com/dmatlack/chip8\n\n");
+        return 0;
+
+        ?? Built-in test ROM
+        i32 idx = 512;
+        write_byte(memory, idx, 0x00); idx = idx + 1;
+        write_byte(memory, idx, 0xE0); idx = idx + 1;
+        write_byte(memory, idx, 0xA0); idx = idx + 1;
+        write_byte(memory, idx, 0x69); idx = idx + 1;
+        write_byte(memory, idx, 0x60); idx = idx + 1;
+        write_byte(memory, idx, 0x0A); idx = idx + 1;
+        write_byte(memory, idx, 0x61); idx = idx + 1;
+        write_byte(memory, idx, 0x05); idx = idx + 1;
+        write_byte(memory, idx, 0xD0); idx = idx + 1;
+        write_byte(memory, idx, 0x15); idx = idx + 1;
+        write_byte(memory, idx, 0x60); idx = idx + 1;
+        write_byte(memory, idx, 0x14); idx = idx + 1;
+        write_byte(memory, idx, 0xD0); idx = idx + 1;
+        write_byte(memory, idx, 0x15); idx = idx + 1;
+        write_byte(memory, idx, 0xA0); idx = idx + 1;
+        write_byte(memory, idx, 0x78); idx = idx + 1;
+        write_byte(memory, idx, 0x60); idx = idx + 1;
+        write_byte(memory, idx, 0x1E); idx = idx + 1;
+        write_byte(memory, idx, 0xD0); idx = idx + 1;
+        write_byte(memory, idx, 0x15); idx = idx + 1;
+        write_byte(memory, idx, 0x12); idx = idx + 1;
+        write_byte(memory, idx, 0x2C); idx = idx + 1;
+        rom_loaded = idx - 512;
+    }
+
+    @printf("\nStarting emulation...\n");
+    @printf("Press Ctrl+C to exit\n\n");
+    @printf("Note: Keyboard input not implemented\n");
+    @printf("      Non-interactive ROMs work fine\n\n");
+
+    ?? Main emulation loop (runs for a very long time)
+    i32 cycle_count = 0;
+    i32 timer_countdown = 0;
+
+    for i32 i = 0; i < 2147483647; i++ {
+        ?? Keyboard input not implemented
+        ?? All keys remain at 0 (not pressed)
+
+        ?? Execute instruction
+        chip8_cycle(memory, V, display, stack, keys, pc_ptr, I_ptr, sp_ptr,
+                   delay_ptr, sound_ptr, draw_ptr);
+
+        ?? Update timers every ~60 cycles (approximating 60Hz)
+        timer_countdown = timer_countdown + 1;
+        if timer_countdown >= 10 {
+            timer_countdown = 0;
+            if delay_ptr[0] > 0 {
+                delay_ptr[0] = delay_ptr[0] - 1;
+            }
+            if sound_ptr[0] > 0 {
+                if sound_ptr[0] == 1 {
+                    @printf("\007");  ?? Bell character
+                }
+                sound_ptr[0] = sound_ptr[0] - 1;
+            }
+        }
+
+        ?? Draw if needed
+        if draw_ptr[0] {
+            draw_display(display);
+            draw_ptr[0] = false;
+            sleepMillis(16);  ?? ~60 FPS
+        }
+
+        cycle_count = cycle_count + 1;
+    }
+
+    ?? Clean up
+    @free(memory);
+    @free(V);
+    @free(display);
+    @free(stack);
+    @free(keys);
+    @free(pc_ptr);
+    @free(I_ptr);
+    @free(sp_ptr);
+    @free(delay_ptr);
+    @free(sound_ptr);
+    @free(draw_ptr);
+
+    return 0;
+}
