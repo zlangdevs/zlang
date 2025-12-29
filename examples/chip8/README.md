@@ -132,7 +132,6 @@ Due to ZLang compiler issues discovered during development:
 1. **Helper functions for memory access**: `read_byte()` and `write_byte()` avoid direct array indexing bugs
 2. **Unrolled sprite drawing**: Each of 8 bits checked individually to avoid shift operation type issues
 3. **State via pointers**: All state passed as pointer parameters to avoid global/struct field bugs
-4. **Careful type casting**: Explicit casts between u8, u16, i32 to satisfy type checker
 
 ### Performance
 
