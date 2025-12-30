@@ -30,6 +30,10 @@ fun square(n: i32) >> i32 {  // ZLang wrapper function
     return @square(n);       // Calls the external C function
 }
 ```
+Alternative way to wrap a function:
+```
+wrap @square(n: i32) >> i32;
+```
 
 ### cfunc.c
 ```c
