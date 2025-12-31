@@ -70,12 +70,25 @@ pub fn printHelp() void {
         \\  {s}-l<lib>{s}      Link with library
         \\  {s}-L<path>{s}     Add library search path
         \\
+        \\{s}Brainfuck Mode:{s}
+        \\  {s}-b{s}            Compile pure Brainfuck (.b/.bf files, 8-bit cells)
+        \\  {s}-b8{s}           Compile Brainfuck with 8-bit cells
+        \\  {s}-b16{s}          Compile Brainfuck with 16-bit cells
+        \\  {s}-b32{s}          Compile Brainfuck with 32-bit cells
+        \\  {s}-b64{s}          Compile Brainfuck with 64-bit cells
+        \\
     , .{
         bold,   reset,
         yellow, reset,
         yellow, reset,
         yellow, reset,
         yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        bold,   reset,
         yellow, reset,
         yellow, reset,
         yellow, reset,
@@ -88,6 +101,8 @@ pub fn printHelp() void {
         \\  zlang main.zl
         \\  zlang wrap mylib.h -o mylib.zl
         \\  zlang -o myapp main.zl -lSDL2
+        \\  zlang -b mandelbrot.bf -o mandelbrot
+        \\  zlang -b32 program.b -o output
         \\
         \\{s}For more information, visit:{s} {s}https://github.com/zlang-dev/zlang{s}
         \\

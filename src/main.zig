@@ -42,6 +42,8 @@ pub const Context = struct {
     optimize: bool,
     verbose: bool,
     run_mode: bool,
+    brainfuck_mode: bool,
+    bf_cell_size: i32,
 
     pub fn init() Context {
         return Context{
@@ -56,6 +58,8 @@ pub const Context = struct {
             .optimize = false,
             .verbose = false,
             .run_mode = false,
+            .brainfuck_mode = false,
+            .bf_cell_size = 8,
         };
     }
 
@@ -427,7 +431,27 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
         switch (args[i][0]) {
             '-' => {
                 const flag = args[i];
-                if (std.mem.eql(u8, flag, "-keepll")) {
+                if (std.mem.eql(u8, flag, "-b")) {
+                    context.brainfuck_mode = true;
+                    context.bf_cell_size = 8;
+                    context.optimize = true;
+                } else if (std.mem.eql(u8, flag, "-b8")) {
+                    context.brainfuck_mode = true;
+                    context.bf_cell_size = 8;
+                    context.optimize = true;
+                } else if (std.mem.eql(u8, flag, "-b16")) {
+                    context.brainfuck_mode = true;
+                    context.bf_cell_size = 16;
+                    context.optimize = true;
+                } else if (std.mem.eql(u8, flag, "-b32")) {
+                    context.brainfuck_mode = true;
+                    context.bf_cell_size = 32;
+                    context.optimize = true;
+                } else if (std.mem.eql(u8, flag, "-b64")) {
+                    context.brainfuck_mode = true;
+                    context.bf_cell_size = 64;
+                    context.optimize = true;
+                } else if (std.mem.eql(u8, flag, "-keepll")) {
                     context.keepll = true;
                 } else if (std.mem.eql(u8, flag, "-dast")) {
                     context.show_ast = true;
@@ -452,31 +476,28 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     try context.extra_args.append(allocator, flag);
                     context.output = "output.o";
                 } else if (std.mem.startsWith(u8, flag, "-l") and flag.len > 2) {
-
                     try context.extra_args.append(allocator, flag);
                 } else if (std.mem.startsWith(u8, flag, "-L") and flag.len > 2) {
-
                     try context.extra_args.append(allocator, flag);
                 } else if (std.mem.eql(u8, flag, "-l") or std.mem.eql(u8, flag, "-L")) {
-
                     i += 1;
                     if (i >= args.len) return errors.CLIError.InvalidArgument;
                     const combined = try std.fmt.allocPrint(allocator, "{s}{s}", .{ flag, args[i] });
                     defer allocator.free(combined);
                     try context.extra_args.append(allocator, combined);
                 } else if (std.mem.startsWith(u8, flag, "-Wl,")) {
-
                     try context.extra_args.append(allocator, flag);
                 } else if (std.mem.eql(u8, flag, "-help") or std.mem.eql(u8, flag, "--help")) {
                     return errors.CLIError.NoHelp;
                 } else {
-
                     try context.extra_args.append(allocator, flag);
                 }
             },
             else => {
                 const arg = args[i];
                 if (std.mem.endsWith(u8, arg, ".zl")) {
+                    try context.input_files.append(allocator, arg);
+                } else if (std.mem.endsWith(u8, arg, ".b") or std.mem.endsWith(u8, arg, ".bf")) {
                     try context.input_files.append(allocator, arg);
                 } else {
                     const stat = std.fs.cwd().statFile(arg) catch |err| {
@@ -500,6 +521,68 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
         errors.CLIError.NoInputPath
     else
         context;
+}
+
+fn compileBrainfuck(ctx: *Context, alloc: std.mem.Allocator) !u8 {
+    const bf = @import("codegen/bf.zig");
+    const c_bindings = @import("codegen/c_bindings.zig");
+    const c = c_bindings.c;
+    
+    const input_file = ctx.input_files.items[0];
+    const bf_code = read_file(input_file) catch |err| {
+        std.debug.print("Error reading file {s}: {}\n", .{ input_file, err });
+        return 1;
+    };
+
+    var code_generator = codegen.CodeGenerator.init(alloc) catch |err| {
+        const error_msg = switch (err) {
+            error.ModuleCreationFailed => "Failed to create LLVM module.",
+            error.BuilderCreationFailed => "Failed to create LLVM builder.",
+            error.OutOfMemory => "Out of memory during codegen initialization.",
+            else => "Unknown codegen initialization error.",
+        };
+        std.debug.print("Error initializing codegen: {s}\n", .{error_msg});
+        return 1;
+    };
+    defer code_generator.deinit();
+
+    const main_func_type = c.LLVMFunctionType(
+        c.LLVMInt32TypeInContext(code_generator.context),
+        null,
+        0,
+        0,
+    );
+    const main_func = c.LLVMAddFunction(code_generator.module, "main", main_func_type);
+    code_generator.current_function = main_func;
+
+    const entry_block = c.LLVMAppendBasicBlockInContext(
+        code_generator.context,
+        main_func,
+        "entry",
+    );
+    c.LLVMPositionBuilderAtEnd(code_generator.builder, entry_block);
+
+    const bf_context_str = try std.fmt.allocPrint(alloc, "?cell_size {d}?\n?len 30000?\n{s}", .{ ctx.bf_cell_size, bf_code });
+    defer alloc.free(bf_context_str);
+
+    const bf_ast = ast.Brainfuck{ .code = bf_context_str };
+    _ = bf.generateBrainfuck(&code_generator, bf_ast) catch |err| {
+        std.debug.print("Error generating brainfuck code: {}\n", .{err});
+        return 1;
+    };
+
+    const ret_val = c.LLVMConstInt(c.LLVMInt32TypeInContext(code_generator.context), 0, 0);
+    _ = c.LLVMBuildRet(code_generator.builder, ret_val);
+
+    code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items) catch |err| {
+        std.debug.print("Error compiling to executable: {}\n", .{err});
+        return 1;
+    };
+
+    if (ctx.verbose) {
+        std.debug.print("Brainfuck executable compiled to {s}\n", .{ctx.output});
+    }
+    return 0;
 }
 
 fn collectZlFilesFromDir(alloc: std.mem.Allocator, dir_path: []const u8, files_list: *std.ArrayList([]const u8)) !void {
@@ -890,6 +973,20 @@ pub fn main() !u8 {
         return 1;
     };
     defer ctx.deinit(allocator);
+
+    if (ctx.brainfuck_mode) {
+        if (ctx.input_files.items.len == 0) {
+            std.debug.print("Error: No input file specified for brainfuck mode\n", .{});
+            return 1;
+        }
+        const input_file = ctx.input_files.items[0];
+        const has_valid_ext = std.mem.endsWith(u8, input_file, ".b") or std.mem.endsWith(u8, input_file, ".bf");
+        if (!has_valid_ext) {
+            std.debug.print("Error: Brainfuck mode requires input file with .b or .bf extension\n", .{});
+            return 1;
+        }
+        return compileBrainfuck(&ctx, allocator);
+    }
 
     const ast_root = parseMultiFile(&ctx, allocator) catch {
 
