@@ -78,7 +78,6 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
     }
 
     if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
-
         if (c.LLVMTypeOf(index_value) != c.LLVMInt64TypeInContext(self.context)) {
             index_value = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
         }
@@ -277,7 +276,6 @@ pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayInde
     }
 
     if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
-
         if (c.LLVMTypeOf(index_value) != c.LLVMInt64TypeInContext(self.context)) {
             index_value = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
         }

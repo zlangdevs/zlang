@@ -527,7 +527,6 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                 if (cg.regular_functions.get(call.name) == null) {
                     if (cg.c_function_declarations.get(call.name)) |is_wrapped| {
                         if (!is_wrapped) {
-
                             return errors.CodegenError.UndefinedFunction;
                         }
                     }
@@ -801,10 +800,8 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                     }
                 }
             } else {
-
                 if (cg.function_vararg_types.get(call.name)) |var_type| {
                     if (std.mem.eql(u8, var_type, "_")) {
-
                         const arg_type = c.LLVMTypeOf(arg_value);
                         const arg_kind = c.LLVMGetTypeKind(arg_type);
                         if (arg_kind == c.LLVMFloatTypeKind) {
@@ -825,9 +822,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
             }
         }
 
-        if (call.is_libc) {
-
-        }
+        if (call.is_libc) {}
 
         try args.append(cg.allocator, arg_value);
         param_offset += 1;
