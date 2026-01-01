@@ -183,6 +183,8 @@ const BfOp = union(enum) {
     loop_end,
     set_zero,
     linear_loop: std.ArrayList(LinearLoopOp),
+    scan_left,
+    scan_right,
 };
 
 fn parseBrainfuckOps(allocator: std.mem.Allocator, code: []const u8) !std.ArrayList(BfOp) {
@@ -254,7 +256,585 @@ fn freeBfOps(allocator: std.mem.Allocator, ops: []const BfOp) void {
     }
 }
 
-fn optimizeOps(allocator: std.mem.Allocator, initial_ops: []const BfOp) !std.ArrayList(BfOp) {
+fn checkScanLoop(body: []const BfOp) ?i32 {
+    if (body.len != 1) return null;
+    if (body[0] == .inc_ptr) {
+        const offset = body[0].inc_ptr;
+        if (offset == 1 or offset == -1) return offset;
+    }
+    return null;
+}
+
+const ComptimeInterpreter = struct {
+    tape: []i64,
+    ptr: usize,
+    allocator: std.mem.Allocator,
+    max_iterations: usize,
+    iterations: usize,
+    output: std.ArrayList(u8),
+    jump_table: []usize,
+
+    fn init(allocator: std.mem.Allocator, tape_size: usize) !ComptimeInterpreter {
+        const tape = try allocator.alloc(i64, tape_size);
+        @memset(tape, 0);
+        return ComptimeInterpreter{
+            .tape = tape,
+            .ptr = 0,
+            .allocator = allocator,
+            .max_iterations = 0,
+            .iterations = 0,
+            .output = std.ArrayList(u8){},
+            .jump_table = &[_]usize{},
+        };
+    }
+
+    fn deinit(self: *ComptimeInterpreter) void {
+        self.allocator.free(self.tape);
+        self.output.deinit(self.allocator);
+        if (self.jump_table.len > 0) {
+            self.allocator.free(self.jump_table);
+        }
+    }
+
+    fn buildJumpTable(self: *ComptimeInterpreter, ops: []const BfOp) !void {
+        self.jump_table = try self.allocator.alloc(usize, ops.len);
+        @memset(self.jump_table, 0);
+
+        var stack = std.ArrayList(usize){};
+        defer stack.deinit(self.allocator);
+
+        for (ops, 0..) |op, i| {
+            if (op == .loop_start) {
+                try stack.append(self.allocator, i);
+            } else if (op == .loop_end) {
+                if (stack.items.len > 0) {
+                    const start = stack.pop().?;
+                    self.jump_table[start] = i;
+                    self.jump_table[i] = start;
+                }
+            }
+        }
+    }
+
+    fn execute(self: *ComptimeInterpreter, ops: []const BfOp, capture_output: bool) !bool {
+        try self.buildJumpTable(ops);
+
+        var pc: usize = 0;
+
+        while (pc < ops.len) {
+            self.iterations += 1;
+
+            const op = ops[pc];
+            switch (op) {
+                .inc_ptr => |val| {
+                    const new_ptr = @as(i64, @intCast(self.ptr)) + val;
+                    if (new_ptr < 0 or new_ptr >= self.tape.len) return false;
+                    self.ptr = @intCast(new_ptr);
+                    pc += 1;
+                },
+                .add_val => |val| {
+                    self.tape[self.ptr] +%= val;
+                    pc += 1;
+                },
+                .output => {
+                    if (capture_output) {
+                        const byte: u8 = @truncate(@as(u64, @bitCast(self.tape[self.ptr])));
+                        try self.output.append(self.allocator, byte);
+                        pc += 1;
+                    } else {
+                        return false;
+                    }
+                },
+                .input => return false,
+                .set_zero => {
+                    self.tape[self.ptr] = 0;
+                    pc += 1;
+                },
+                .loop_start => {
+                    if (self.tape[self.ptr] == 0) {
+                        pc = self.jump_table[pc] + 1;
+                    } else {
+                        if (pc + 2 < ops.len) {
+                            if (ops[pc + 2] == .loop_end) {
+                                if (ops[pc + 1] == .add_val) {
+                                    const val = ops[pc + 1].add_val;
+                                    if (val == 1 or val == -1) {
+                                        self.tape[self.ptr] = 0;
+                                        pc += 3;
+                                        continue;
+                                    }
+                                } else if (ops[pc + 1] == .inc_ptr) {
+                                    const dir = ops[pc + 1].inc_ptr;
+                                    if (dir == 1) {
+                                        while (self.ptr < self.tape.len - 1 and self.tape[self.ptr] != 0) {
+                                            self.ptr += 1;
+                                            self.iterations += 1;
+                                        }
+                                        pc += 3;
+                                        continue;
+                                    } else if (dir == -1) {
+                                        while (self.ptr > 0 and self.tape[self.ptr] != 0) {
+                                            self.ptr -= 1;
+                                            self.iterations += 1;
+                                        }
+                                        pc += 3;
+                                        continue;
+                                    }
+                                }
+                            } else if (pc + 3 < ops.len and ops[pc + 3] == .loop_end) {
+                                if (ops[pc + 1] == .inc_ptr and ops[pc + 2] == .add_val) {
+                                    const offset = ops[pc + 1].inc_ptr;
+                                    const factor = ops[pc + 2].add_val;
+                                    const new_ptr = @as(i64, @intCast(self.ptr)) + offset;
+                                    if (new_ptr >= 0 and new_ptr < self.tape.len) {
+                                        const target_ptr: usize = @intCast(new_ptr);
+                                        const count = self.tape[self.ptr];
+                                        self.tape[target_ptr] +%= count *% factor;
+                                        self.tape[self.ptr] = 0;
+                                        pc += 4;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        pc += 1;
+                    }
+                },
+                .loop_end => {
+                    if (self.tape[self.ptr] != 0) {
+                        pc = self.jump_table[pc] + 1;
+                    } else {
+                        pc += 1;
+                    }
+                },
+                .linear_loop => return false,
+                .scan_left, .scan_right => return false,
+            }
+        }
+        return true;
+    }
+
+    fn getNonZeroRegion(self: *const ComptimeInterpreter) ?struct { start: usize, end: usize } {
+        var start: ?usize = null;
+        var end: usize = 0;
+
+        for (self.tape, 0..) |val, i| {
+            if (val != 0) {
+                if (start == null) start = i;
+                end = i;
+            }
+        }
+
+        if (start) |s| {
+            return .{ .start = s, .end = end };
+        }
+        return null;
+    }
+};
+
+fn generateDiffOps(allocator: std.mem.Allocator, initial_state: []const i64, final_state: []const i64, initial_ptr: usize, final_ptr: usize) !std.ArrayList(BfOp) {
+    var result = std.ArrayList(BfOp){};
+    errdefer result.deinit(allocator);
+
+    var current_ptr: i32 = @intCast(initial_ptr);
+
+    for (initial_state, 0..) |initial_val, i| {
+        const final_val = final_state[i];
+        const diff = final_val - initial_val;
+        if (diff == 0) continue;
+
+        const target_ptr: i32 = @intCast(i);
+        const move = target_ptr - current_ptr;
+        if (move != 0) {
+            try result.append(allocator, .{ .inc_ptr = move });
+            current_ptr = target_ptr;
+        }
+
+        try result.append(allocator, .{ .add_val = @intCast(diff) });
+    }
+
+    const target_final_ptr: i32 = @intCast(final_ptr);
+    if (target_final_ptr != current_ptr) {
+        try result.append(allocator, .{ .inc_ptr = target_final_ptr - current_ptr });
+    }
+
+    return result;
+}
+
+fn isInputUsed(ops: []const BfOp, input_index: usize) bool {
+    if (input_index >= ops.len) return false;
+
+    var i = input_index + 1;
+    while (i < ops.len) : (i += 1) {
+        const op = ops[i];
+        switch (op) {
+            .add_val => |val| {
+                if (val != 0) return true;
+            },
+            .output => return true,
+            .inc_ptr => {},
+            .set_zero => return false,
+            .loop_start => {
+                if (i + 2 < ops.len and ops[i + 2] == .loop_end) {
+                    if (ops[i + 1] == .add_val) {
+                        const val = ops[i + 1].add_val;
+                        if (val == 1 or val == -1) {
+                            i += 2;
+                            continue;
+                        }
+                    }
+                }
+                return true;
+            },
+            .input => return false,
+            else => return true,
+        }
+    }
+    return false;
+}
+
+fn findFirstRealInput(ops: []const BfOp) ?usize {
+    for (ops, 0..) |op, i| {
+        if (op == .input) {
+            if (isInputUsed(ops, i)) {
+                return i;
+            }
+        }
+    }
+    return null;
+}
+
+fn tryFullProgramPrecompute(allocator: std.mem.Allocator, ops: []const BfOp) !?[]const u8 {
+    const first_real_input = findFirstRealInput(ops);
+
+    if (first_real_input) |input_pos| {
+        if (input_pos == 0) {
+            if (ops.len > 1) {
+                const after_first_input = ops[1..];
+                const next_real_input = findFirstRealInput(after_first_input);
+
+                if (next_real_input == null) {
+                    return null;
+                }
+            }
+            return null;
+        }
+
+        if (input_pos < ops.len) {
+            const after_input = ops[input_pos + 1 ..];
+            const next_real_input = findFirstRealInput(after_input);
+
+            if (next_real_input == null) {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    var has_input_op = false;
+    for (ops) |op| {
+        if (op == .input) {
+            has_input_op = true;
+            break;
+        }
+    }
+    if (has_input_op) return null;
+
+    std.debug.print("Applying compile-time optimization... (Ctrl+C to cancel)\n", .{});
+
+    var interpreter = try ComptimeInterpreter.init(allocator, 30000);
+    defer interpreter.deinit();
+
+    const success = interpreter.execute(ops, true) catch return null;
+    if (!success) return null;
+
+    if (interpreter.output.items.len == 0) return null;
+
+    std.debug.print("Compile-time optimization complete! Pre-computed {} bytes of output.\n", .{interpreter.output.items.len});
+
+    const output_copy = try allocator.dupe(u8, interpreter.output.items);
+    return output_copy;
+}
+
+fn tryComptimeOptimizeSingleSegment(allocator: std.mem.Allocator, ops: []const BfOp) !?std.ArrayList(BfOp) {
+    if (ops.len == 0) return null;
+
+    var interpreter = try ComptimeInterpreter.init(allocator, 30000);
+    defer interpreter.deinit();
+
+    const initial_tape = try allocator.alloc(i64, interpreter.tape.len);
+    defer allocator.free(initial_tape);
+    @memcpy(initial_tape, interpreter.tape);
+    const initial_ptr = interpreter.ptr;
+
+    const success = interpreter.execute(ops, false) catch return null;
+    if (!success) return null;
+
+    const min_iterations_needed = 15;
+    if (interpreter.iterations < min_iterations_needed) return null;
+
+    var optimized = try generateDiffOps(allocator, initial_tape, interpreter.tape, initial_ptr, interpreter.ptr);
+
+    if (optimized.items.len == 0) {
+        optimized.deinit(allocator);
+        return null;
+    }
+
+    const estimated_optimized_cost = optimized.items.len * 2;
+    if (interpreter.iterations < estimated_optimized_cost + 10) {
+        optimized.deinit(allocator);
+        return null;
+    }
+
+    return optimized;
+}
+
+const PrecomputedProgram = struct {
+    output: []const u8,
+};
+
+fn trySplitAndPrecompute(allocator: std.mem.Allocator, ops: []const BfOp) !?std.ArrayList(BfOp) {
+    const first_real_input = findFirstRealInput(ops) orelse return null;
+
+    if (first_real_input == 0) return null;
+
+    const prefix = ops[0..first_real_input];
+    const suffix = ops[first_real_input..];
+
+    if (prefix.len < 10) return null;
+
+    var suffix_has_more_inputs = false;
+    for (suffix[1..]) |op| {
+        if (op == .input) {
+            suffix_has_more_inputs = true;
+            break;
+        }
+    }
+
+    if (!suffix_has_more_inputs and suffix.len > 1000) {
+        return null;
+    }
+
+    std.debug.print("Found unused inputs before position {}. Pre-computing prefix... (Ctrl+C to cancel)\n", .{first_real_input});
+
+    var interpreter = try ComptimeInterpreter.init(allocator, 30000);
+    defer interpreter.deinit();
+
+    const success = interpreter.execute(prefix, true) catch return null;
+    if (!success) return null;
+
+    std.debug.print("Prefix pre-computed! {} bytes of output, continuing with remaining code...\n", .{interpreter.output.items.len});
+
+    var result = std.ArrayList(BfOp){};
+    errdefer result.deinit(allocator);
+
+    for (interpreter.output.items) |byte| {
+        try result.append(allocator, .{ .add_val = @intCast(byte) });
+        try result.append(allocator, .output);
+        if (byte != 0) {
+            try result.append(allocator, .{ .add_val = -@as(i32, @intCast(byte)) });
+        }
+    }
+
+    const initial_tape = try allocator.alloc(i64, interpreter.tape.len);
+    defer allocator.free(initial_tape);
+    @memcpy(initial_tape, interpreter.tape);
+    const initial_ptr = interpreter.ptr;
+
+    if (initial_ptr != 0) {
+        try result.append(allocator, .{ .inc_ptr = @intCast(initial_ptr) });
+    }
+
+    for (initial_tape, 0..) |val, i| {
+        if (val == 0) continue;
+        const offset: i32 = @intCast(i);
+        const current_offset = initial_ptr;
+        const move = offset - @as(i32, @intCast(current_offset));
+        if (move != 0) {
+            try result.append(allocator, .{ .inc_ptr = move });
+        }
+        try result.append(allocator, .{ .add_val = @intCast(val) });
+        if (move != 0) {
+            try result.append(allocator, .{ .inc_ptr = -move });
+        }
+    }
+
+    for (suffix) |op| {
+        try result.append(allocator, op);
+    }
+
+    return result;
+}
+
+fn trySkipUnusedInputAndOptimize(allocator: std.mem.Allocator, ops: []const BfOp) !?std.ArrayList(BfOp) {
+    const first_real_input = findFirstRealInput(ops);
+    if (first_real_input == null) return null;
+
+    const input_pos = first_real_input.?;
+    if (input_pos >= ops.len) return null;
+
+    const before_input = ops[0..input_pos];
+    const after_input = ops[input_pos + 1 ..];
+
+    const next_real_input = findFirstRealInput(after_input);
+    if (next_real_input != null) return null;
+
+    if (after_input.len == 0) return null;
+
+    std.debug.print("Skipping unused input at position {} and pre-computing rest... (Ctrl+C to cancel)\n", .{input_pos});
+
+    var interpreter = try ComptimeInterpreter.init(allocator, 30000);
+    defer interpreter.deinit();
+
+    const success_before = interpreter.execute(before_input, false) catch return null;
+    if (!success_before) return null;
+
+    const state_after_before = try allocator.alloc(i64, interpreter.tape.len);
+    defer allocator.free(state_after_before);
+    @memcpy(state_after_before, interpreter.tape);
+    const ptr_after_before = interpreter.ptr;
+
+    const success_after = interpreter.execute(after_input, true) catch return null;
+    if (!success_after) return null;
+
+    std.debug.print("Pre-computed {} bytes of output, recreating memory state...\n", .{interpreter.output.items.len});
+
+    var result = std.ArrayList(BfOp){};
+    errdefer result.deinit(allocator);
+
+    for (interpreter.output.items) |byte| {
+        try result.append(allocator, .{ .add_val = @intCast(byte) });
+        try result.append(allocator, .output);
+        if (byte != 0) {
+            try result.append(allocator, .{ .add_val = -@as(i32, @intCast(byte)) });
+        }
+    }
+
+    if (ptr_after_before != 0) {
+        try result.append(allocator, .{ .inc_ptr = @intCast(ptr_after_before) });
+    }
+
+    var current_ptr: i32 = @intCast(ptr_after_before);
+    for (interpreter.tape, 0..) |val, i| {
+        const diff = val - state_after_before[i];
+        if (diff == 0) continue;
+
+        const target_ptr: i32 = @intCast(i);
+        const move = target_ptr - current_ptr;
+        if (move != 0) {
+            try result.append(allocator, .{ .inc_ptr = move });
+            current_ptr = target_ptr;
+        }
+
+        try result.append(allocator, .{ .add_val = @intCast(diff) });
+    }
+
+    const final_ptr: i32 = @intCast(interpreter.ptr);
+    if (final_ptr != current_ptr) {
+        try result.append(allocator, .{ .inc_ptr = final_ptr - current_ptr });
+    }
+
+    return result;
+}
+
+fn tryComptimeOptimization(allocator: std.mem.Allocator, ops: []const BfOp, optimize_enabled: bool) !?std.ArrayList(BfOp) {
+    if (!optimize_enabled) return null;
+    if (ops.len == 0) return null;
+
+    if (try tryFullProgramPrecompute(allocator, ops)) |precomputed_output| {
+        defer allocator.free(precomputed_output);
+        var result = std.ArrayList(BfOp){};
+        for (precomputed_output) |byte| {
+            try result.append(allocator, .{ .add_val = @intCast(byte) });
+            try result.append(allocator, .output);
+            if (byte != 0) {
+                try result.append(allocator, .{ .add_val = -@as(i32, @intCast(byte)) });
+            }
+        }
+        return result;
+    }
+
+    if (try trySkipUnusedInputAndOptimize(allocator, ops)) |optimized| {
+        return optimized;
+    }
+
+    if (try trySplitAndPrecompute(allocator, ops)) |split_result| {
+        return split_result;
+    }
+
+    if (ops.len > 100) {
+        std.debug.print("Applying segmented compile-time optimization... (Ctrl+C to cancel)\n", .{});
+    }
+
+    var segments = std.ArrayList(std.ArrayList(BfOp)){};
+    defer {
+        for (segments.items) |*seg| seg.deinit(allocator);
+        segments.deinit(allocator);
+    }
+
+    var current_segment = std.ArrayList(BfOp){};
+    errdefer current_segment.deinit(allocator);
+    var has_io = false;
+
+    for (ops) |op| {
+        if (op == .input or op == .output) {
+            has_io = true;
+            if (current_segment.items.len > 0) {
+                try segments.append(allocator, current_segment);
+                current_segment = std.ArrayList(BfOp){};
+            }
+            var io_segment = std.ArrayList(BfOp){};
+            try io_segment.append(allocator, op);
+            try segments.append(allocator, io_segment);
+        } else {
+            try current_segment.append(allocator, op);
+        }
+    }
+
+    if (current_segment.items.len > 0) {
+        try segments.append(allocator, current_segment);
+    }
+
+    if (!has_io) {
+        if (ops.len > 10000) return null;
+        return try tryComptimeOptimizeSingleSegment(allocator, ops);
+    }
+
+    var optimized_total = std.ArrayList(BfOp){};
+    errdefer optimized_total.deinit(allocator);
+
+    var optimized_count: usize = 0;
+
+    for (segments.items) |segment| {
+        if (segment.items.len > 0 and (segment.items[0] == .input or segment.items[0] == .output)) {
+            try optimized_total.append(allocator, segment.items[0]);
+            continue;
+        }
+
+        if (try tryComptimeOptimizeSingleSegment(allocator, segment.items)) |optimized_seg| {
+            optimized_count += 1;
+            for (optimized_seg.items) |op| {
+                try optimized_total.append(allocator, op);
+            }
+            var mut_seg = optimized_seg;
+            mut_seg.deinit(allocator);
+        } else {
+            for (segment.items) |op| {
+                try optimized_total.append(allocator, op);
+            }
+        }
+    }
+
+    if (optimized_count == 0) {
+        optimized_total.deinit(allocator);
+        return null;
+    }
+
+    return optimized_total;
+}
+
+fn optimizeOps(allocator: std.mem.Allocator, initial_ops: []const BfOp, enable_comptime: bool) !std.ArrayList(BfOp) {
     var contracted = std.ArrayList(BfOp){};
     defer contracted.deinit(allocator);
     var i: usize = 0;
@@ -297,6 +877,13 @@ fn optimizeOps(allocator: std.mem.Allocator, initial_ops: []const BfOp) !std.Arr
             },
         }
     }
+
+    if (enable_comptime) {
+        if (try tryComptimeOptimization(allocator, contracted.items, enable_comptime)) |comptime_ops| {
+            return comptime_ops;
+        }
+    }
+
     var optimized = std.ArrayList(BfOp){};
     errdefer {
         freeBfOps(allocator, optimized.items);
@@ -307,14 +894,6 @@ fn optimizeOps(allocator: std.mem.Allocator, initial_ops: []const BfOp) !std.Arr
     while (i < ops.len) {
         const op = ops[i];
         if (op == .loop_start) {
-            if (i + 2 < ops.len and ops[i + 1] == .add_val and ops[i + 2] == .loop_end) {
-                const val = ops[i + 1].add_val;
-                if (val == 1 or val == -1) {
-                    try optimized.append(allocator, .set_zero);
-                    i += 3;
-                    continue;
-                }
-            }
             var depth: i32 = 1;
             var j = i + 1;
             var possible_linear = true;
@@ -327,12 +906,35 @@ fn optimizeOps(allocator: std.mem.Allocator, initial_ops: []const BfOp) !std.Arr
                 }
                 if (depth == 0) break;
             }
-            if (depth == 0 and possible_linear) {
+
+            if (depth == 0) {
                 const body = ops[i + 1 .. j];
-                if (try checkLinearLoop(allocator, body)) |factors| {
-                    try optimized.append(allocator, .{ .linear_loop = factors });
+
+                if (body.len == 1 and body[0] == .add_val) {
+                    const val = body[0].add_val;
+                    if (val == 1 or val == -1) {
+                        try optimized.append(allocator, .set_zero);
+                        i = j + 1;
+                        continue;
+                    }
+                }
+
+                if (checkScanLoop(body)) |direction| {
+                    if (direction == 1) {
+                        try optimized.append(allocator, .scan_right);
+                    } else {
+                        try optimized.append(allocator, .scan_left);
+                    }
                     i = j + 1;
                     continue;
+                }
+
+                if (possible_linear) {
+                    if (try checkLinearLoop(allocator, body)) |factors| {
+                        try optimized.append(allocator, .{ .linear_loop = factors });
+                        i = j + 1;
+                        continue;
+                    }
                 }
             }
         }
@@ -343,7 +945,7 @@ fn optimizeOps(allocator: std.mem.Allocator, initial_ops: []const BfOp) !std.Arr
     return optimized;
 }
 
-pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
+pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck, enable_comptime_opt: bool) !c.LLVMValueRef {
     var ctx = ParseBfContext(cg.allocator, bf.code);
     defer {
         freeExpandedRequests(cg.allocator, ctx.requests.items);
@@ -353,7 +955,7 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
     try expandArrayLoads(cg, &ctx);
     var ops = try parseBrainfuckOps(cg.allocator, ctx.code);
     defer ops.deinit(cg.allocator);
-    var optimized_ops = try optimizeOps(cg.allocator, ops.items);
+    var optimized_ops = try optimizeOps(cg.allocator, ops.items, enable_comptime_opt);
     defer {
         freeBfOps(cg.allocator, optimized_ops.items);
         optimized_ops.deinit(cg.allocator);
@@ -386,7 +988,6 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
     _ = c.LLVMBuildCall2(cg.builder, c.LLVMGlobalGetValueType(memset_func), memset_func, &memset_args[0], 3, "");
 
     for (ctx.requests.items) |req| {
-
         const var_info = if (req.array_index) |index| blk: {
             const array_var_info = cg.getVariable(req.var_name) orelse return errors.CodegenError.UndefinedVariable;
             const array_type_kind = c.LLVMGetTypeKind(array_var_info.type_ref);
@@ -423,7 +1024,6 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
         const cells_needed: usize = (var_size_bits + @as(c_uint, @intCast(ctx.cell_size)) - 1) / @as(c_uint, @intCast(ctx.cell_size));
 
         if (cells_needed == 1) {
-
             const cell_index = c.LLVMConstInt(i32_type, @as(c_ulonglong, @intCast(req.load_idx)), 0);
             var gep_indices: [1]c.LLVMValueRef = .{cell_index};
             const cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &gep_indices[0], 1, "cell_ptr");
@@ -437,7 +1037,6 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
 
             _ = c.LLVMBuildStore(cg.builder, cell_value, cell_ptr);
         } else {
-
             var cell_idx: usize = 0;
             while (cell_idx < cells_needed) : (cell_idx += 1) {
                 const cell_index = req.load_idx + @as(i32, @intCast(cell_idx));
@@ -449,7 +1048,6 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
                 const shift_amount = c.LLVMConstInt(var_info.type_ref, @intCast(chunk_pos * @as(usize, @intCast(ctx.cell_size))), 0);
                 var cell_value: c.LLVMValueRef = undefined;
                 if (@as(c_uint, @intCast(chunk_pos * @as(usize, @intCast(ctx.cell_size)))) >= var_size_bits) {
-
                     cell_value = c.LLVMConstInt(cell_type, 0, 0);
                 } else {
                     const shifted_value = c.LLVMBuildLShr(cg.builder, var_value, shift_amount, "shifted");
@@ -567,11 +1165,54 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
                 }
                 _ = c.LLVMBuildStore(cg.builder, cell_zero, cell_ptr);
             },
+            .scan_right => {
+                const scan_cond_bb = c.LLVMAppendBasicBlockInContext(cg.context, current_function, "scan_right_cond");
+                const scan_body_bb = c.LLVMAppendBasicBlockInContext(cg.context, current_function, "scan_right_body");
+                const scan_exit_bb = c.LLVMAppendBasicBlockInContext(cg.context, current_function, "scan_right_exit");
+
+                _ = c.LLVMBuildBr(cg.builder, scan_cond_bb);
+                c.LLVMPositionBuilderAtEnd(cg.builder, scan_cond_bb);
+
+                const ptr_val = c.LLVMBuildLoad2(cg.builder, i32_type, ptr, "ptr_val");
+                var indices: [1]c.LLVMValueRef = .{ptr_val};
+                const cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &indices[0], 1, "cell_ptr");
+                const cell_val = c.LLVMBuildLoad2(cg.builder, cell_type, cell_ptr, "cell_val");
+                const cond = c.LLVMBuildICmp(cg.builder, c.LLVMIntNE, cell_val, cell_zero, "scan_cond");
+                _ = c.LLVMBuildCondBr(cg.builder, cond, scan_body_bb, scan_exit_bb);
+
+                c.LLVMPositionBuilderAtEnd(cg.builder, scan_body_bb);
+                const new_ptr_val = c.LLVMBuildAdd(cg.builder, ptr_val, c.LLVMConstInt(i32_type, 1, 0), "inc_ptr");
+                _ = c.LLVMBuildStore(cg.builder, new_ptr_val, ptr);
+                _ = c.LLVMBuildBr(cg.builder, scan_cond_bb);
+
+                c.LLVMPositionBuilderAtEnd(cg.builder, scan_exit_bb);
+            },
+            .scan_left => {
+                const scan_cond_bb = c.LLVMAppendBasicBlockInContext(cg.context, current_function, "scan_left_cond");
+                const scan_body_bb = c.LLVMAppendBasicBlockInContext(cg.context, current_function, "scan_left_body");
+                const scan_exit_bb = c.LLVMAppendBasicBlockInContext(cg.context, current_function, "scan_left_exit");
+
+                _ = c.LLVMBuildBr(cg.builder, scan_cond_bb);
+                c.LLVMPositionBuilderAtEnd(cg.builder, scan_cond_bb);
+
+                const ptr_val = c.LLVMBuildLoad2(cg.builder, i32_type, ptr, "ptr_val");
+                var indices: [1]c.LLVMValueRef = .{ptr_val};
+                const cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &indices[0], 1, "cell_ptr");
+                const cell_val = c.LLVMBuildLoad2(cg.builder, cell_type, cell_ptr, "cell_val");
+                const cond = c.LLVMBuildICmp(cg.builder, c.LLVMIntNE, cell_val, cell_zero, "scan_cond");
+                _ = c.LLVMBuildCondBr(cg.builder, cond, scan_body_bb, scan_exit_bb);
+
+                c.LLVMPositionBuilderAtEnd(cg.builder, scan_body_bb);
+                const new_ptr_val = c.LLVMBuildSub(cg.builder, ptr_val, c.LLVMConstInt(i32_type, 1, 0), "dec_ptr");
+                _ = c.LLVMBuildStore(cg.builder, new_ptr_val, ptr);
+                _ = c.LLVMBuildBr(cg.builder, scan_cond_bb);
+
+                c.LLVMPositionBuilderAtEnd(cg.builder, scan_exit_bb);
+            },
         }
     }
 
     for (ctx.requests.items) |req| {
-
         const var_info = if (req.array_index) |index| blk: {
             const array_var_info = cg.getVariable(req.var_name) orelse continue;
             const array_type_kind = c.LLVMGetTypeKind(array_var_info.type_ref);
@@ -604,7 +1245,6 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
         const cells_needed: usize = (var_size_bits + @as(c_uint, @intCast(ctx.cell_size)) - 1) / @as(c_uint, @intCast(ctx.cell_size));
 
         if (cells_needed == 1) {
-
             const cell_index = c.LLVMConstInt(i32_type, @as(c_ulonglong, @intCast(req.load_idx)), 0);
             var gep_indices: [1]c.LLVMValueRef = .{cell_index};
             const cell_ptr = c.LLVMBuildGEP2(cg.builder, cell_type, tape, &gep_indices[0], 1, "cell_ptr");
@@ -614,16 +1254,13 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
             if (var_size_bits == ctx.cell_size) {
                 reconstructed_value = cell_val;
             } else if (var_size_bits < ctx.cell_size) {
-
                 reconstructed_value = c.LLVMBuildTrunc(cg.builder, cell_val, var_info.type_ref, "trunc_from_cell");
             } else {
-
                 reconstructed_value = c.LLVMBuildZExt(cg.builder, cell_val, var_info.type_ref, "zext_from_cell");
             }
 
             _ = c.LLVMBuildStore(cg.builder, reconstructed_value, var_info.value);
         } else {
-
             var reconstructed_value = c.LLVMConstInt(var_info.type_ref, 0, 0);
 
             var cell_idx: usize = 0;
@@ -641,10 +1278,8 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
 
                 if (@as(c_uint, @intCast(chunk_pos * @as(usize, @intCast(ctx.cell_size)))) < var_size_bits) {
                     if (shift_amount == c.LLVMConstInt(var_info.type_ref, 0, 0)) {
-
                         reconstructed_value = c.LLVMBuildOr(cg.builder, reconstructed_value, extended_cell_val, "combined");
                     } else {
-
                         const shifted_cell_val = c.LLVMBuildShl(cg.builder, extended_cell_val, shift_amount, "shifted");
                         reconstructed_value = c.LLVMBuildOr(cg.builder, reconstructed_value, shifted_cell_val, "combined");
                     }
@@ -659,7 +1294,6 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck) !c.LLVMValueRef {
 }
 
 fn freeExpandedRequests(allocator: std.mem.Allocator, requests: []const BfLoadRequest) void {
-
     _ = allocator;
     _ = requests;
 }

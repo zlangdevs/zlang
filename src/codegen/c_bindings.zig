@@ -1,4 +1,3 @@
-
 pub const c = @cImport({
     @cInclude("llvm-c/Core.h");
     @cInclude("llvm-c/IRReader.h");
