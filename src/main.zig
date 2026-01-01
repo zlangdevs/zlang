@@ -159,11 +159,9 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
 }
 
 fn getStdlibPath(alloc: std.mem.Allocator) ![]const u8 {
-
     if (std.process.getEnvVarOwned(alloc, "ZSTDPATH")) |zstdpath| {
         return zstdpath;
     } else |_| {
-
         const exe_path = try std.fs.selfExePathAlloc(alloc);
         defer alloc.free(exe_path);
         const exe_dir = std.fs.path.dirname(exe_path) orelse ".";
@@ -199,7 +197,6 @@ fn resolveStdModule(module_name: []const u8, alloc: std.mem.Allocator, has_zstdp
 }
 
 fn resolveModulePath(base_path: []const u8, module_name: []const u8, alloc: std.mem.Allocator) anyerror!?[]const u8 {
-
     if (std.mem.startsWith(u8, module_name, "std.")) {
         var has_zstdpath: bool = false;
         if (resolveStdModule(module_name, alloc, &has_zstdpath)) |std_path| {
@@ -412,7 +409,6 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
     var parsing_program_args = false;
 
     while (i < args.len) : (i += 1) {
-
         if (std.mem.eql(u8, args[i], "--")) {
             parsing_program_args = true;
             i += 1;
@@ -434,23 +430,18 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                 if (std.mem.eql(u8, flag, "-b")) {
                     context.brainfuck_mode = true;
                     context.bf_cell_size = 8;
-                    context.optimize = true;
                 } else if (std.mem.eql(u8, flag, "-b8")) {
                     context.brainfuck_mode = true;
                     context.bf_cell_size = 8;
-                    context.optimize = true;
                 } else if (std.mem.eql(u8, flag, "-b16")) {
                     context.brainfuck_mode = true;
                     context.bf_cell_size = 16;
-                    context.optimize = true;
                 } else if (std.mem.eql(u8, flag, "-b32")) {
                     context.brainfuck_mode = true;
                     context.bf_cell_size = 32;
-                    context.optimize = true;
                 } else if (std.mem.eql(u8, flag, "-b64")) {
                     context.brainfuck_mode = true;
                     context.bf_cell_size = 64;
-                    context.optimize = true;
                 } else if (std.mem.eql(u8, flag, "-keepll")) {
                     context.keepll = true;
                 } else if (std.mem.eql(u8, flag, "-dast")) {
@@ -527,7 +518,7 @@ fn compileBrainfuck(ctx: *Context, alloc: std.mem.Allocator) !u8 {
     const bf = @import("codegen/bf.zig");
     const c_bindings = @import("codegen/c_bindings.zig");
     const c = c_bindings.c;
-    
+
     const input_file = ctx.input_files.items[0];
     const bf_code = read_file(input_file) catch |err| {
         std.debug.print("Error reading file {s}: {}\n", .{ input_file, err });
@@ -566,7 +557,7 @@ fn compileBrainfuck(ctx: *Context, alloc: std.mem.Allocator) !u8 {
     defer alloc.free(bf_context_str);
 
     const bf_ast = ast.Brainfuck{ .code = bf_context_str };
-    _ = bf.generateBrainfuck(&code_generator, bf_ast) catch |err| {
+    _ = bf.generateBrainfuck(&code_generator, bf_ast, ctx.optimize) catch |err| {
         std.debug.print("Error generating brainfuck code: {}\n", .{err});
         return 1;
     };
@@ -989,7 +980,6 @@ pub fn main() !u8 {
     }
 
     const ast_root = parseMultiFile(&ctx, allocator) catch {
-
         return 1;
     };
 
@@ -1056,7 +1046,6 @@ pub fn main() !u8 {
     };
 
     if (ctx.run_mode) {
-
         if (!interpreter.checkLLIAvailable(allocator)) {
             std.debug.print("Error: lli (LLVM interpreter) is not available.\n", .{});
             std.debug.print("Please ensure LLVM is installed and lli is in your PATH.\n", .{});
@@ -1085,7 +1074,6 @@ pub fn main() !u8 {
 
         return exit_code;
     } else {
-
         code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items) catch |err| {
             std.debug.print("Error compiling to executable: {}\n", .{err});
             return 1;

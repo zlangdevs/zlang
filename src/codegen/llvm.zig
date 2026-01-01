@@ -48,6 +48,7 @@ pub const CodeGenerator = struct {
     current_line: usize,
     current_column: usize,
     module_paths: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    enable_comptime_bf_opt: bool,
 
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
         _ = c.LLVMInitializeNativeTarget();
@@ -96,6 +97,7 @@ pub const CodeGenerator = struct {
             .current_line = 0,
             .current_column = 0,
             .module_paths = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .enable_comptime_bf_opt = false,
         };
     }
 
@@ -1071,7 +1073,7 @@ pub const CodeGenerator = struct {
                 }
             },
             .brainfuck => |bf| {
-                _ = try self.generateBrainfuck(bf);
+                _ = try bfck.generateBrainfuck(self, bf, self.enable_comptime_bf_opt);
             },
             .if_stmt => |if_stmt| {
                 try self.generateIfStatement(if_stmt);
@@ -1103,7 +1105,6 @@ pub const CodeGenerator = struct {
                 }
             },
             .array_compound_assignment => |arr_cass| {
-
                 if (try simd.handleSimdArrayCompoundAssignment(self, arr_cass)) {
                     return;
                 }
@@ -1233,9 +1234,7 @@ pub const CodeGenerator = struct {
             .enum_decl => |enum_decl| {
                 try enums.generateEnumDeclaration(self, enum_decl);
             },
-            .struct_decl => {
-
-            },
+            .struct_decl => {},
             .unary_op => {
                 _ = try self.generateExpression(stmt);
             },
@@ -2859,7 +2858,6 @@ pub const CodeGenerator = struct {
                 return self.generateBinaryOp(b);
             },
             .method_call => |method| {
-
                 var args = std.ArrayList(*ast.Node){};
                 defer args.deinit(self.allocator);
                 try args.append(self.allocator, method.object);
@@ -2901,11 +2899,9 @@ pub const CodeGenerator = struct {
                 return errors.CodegenError.UnsupportedOperation;
             },
             .array_initializer => |_| {
-
                 return errors.CodegenError.TypeMismatch;
             },
             .simd_initializer => |_| {
-
                 return errors.CodegenError.TypeMismatch;
             },
             else => return errors.CodegenError.TypeMismatch,
@@ -3386,8 +3382,6 @@ pub const CodeGenerator = struct {
     }
 
     pub const convertToBool = utils.convertToBool;
-
-    pub const generateBrainfuck = bfck.generateBrainfuck;
 
     pub fn writeToFile(self: *CodeGenerator, filename: []const u8) !void {
         const filename_z = utils.dupeZ(self.allocator, filename);
