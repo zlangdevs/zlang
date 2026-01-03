@@ -93,6 +93,22 @@ Compiles a ZLang source file to an executable named `output` (default).
   zlang main.zl -arch x86_64-linux-gnu
   ```
 
+**Brainfuck Mode**
+
+- `-b` - Compile pure Brainfuck files (.b/.bf) with 8-bit cells (default)
+  ```bash
+  zlang -b mandelbrot.bf -o mandelbrot
+  ```
+
+- `-b8` - Compile Brainfuck with 8-bit cells
+- `-b16` - Compile Brainfuck with 16-bit cells
+- `-b32` - Compile Brainfuck with 32-bit cells
+- `-b64` - Compile Brainfuck with 64-bit cells
+  ```bash
+  zlang -b32 program.bf -o output    # 32-bit cell size
+  zlang -b64 bignum.b -optimize      # 64-bit optimized
+  ```
+
 ### Multi-File Compilation
 
 Compile multiple `.zl` files together:
@@ -796,6 +812,43 @@ brainfuck {
 **Directives**
 - `?load variable index?` - Load ZLang variable into Brainfuck cell
 - `?store variable index?` - Store Brainfuck cell into ZLang variable
+- `?cell_size N?` - Set cell size (8, 16, 32, or 64 bits)
+- `?len N?` - Set tape length (number of cells)
+
+### Standalone Brainfuck Compilation
+
+ZLang can compile pure Brainfuck programs directly to native executables:
+
+```bash
+# Compile .bf or .b files with default 8-bit cells
+zlang -b mandelbrot.bf -o mandelbrot
+
+# Specify cell size for larger values
+zlang -b8 program.bf -o output     # 8-bit cells (0-255)
+zlang -b16 program.bf -o output    # 16-bit cells (0-65535)
+zlang -b32 program.bf -o output    # 32-bit cells
+zlang -b64 program.bf -o output    # 64-bit cells
+
+# Combine with other flags
+zlang -b32 program.bf -o fast_bf -optimize -keepll
+```
+
+**How it works:**
+- The `-b` flags enable brainfuck-only mode
+- Input must be a `.b` or `.bf` file containing pure Brainfuck code
+- Compiles to LLVM IR, then to native machine code
+- Cell size affects the range of values each cell can hold
+- Default tape length is 30,000 cells
+- Standard Brainfuck I/O: `,` reads stdin byte, `.` writes stdout byte
+
+**Example:**
+```bash
+# Classic "Hello World" in Brainfuck
+echo '++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.' > hello.bf
+zlang -b hello.bf -o hello
+./hello
+# Output: Hello World!
+```
 
 ### Numeric Literals
 
