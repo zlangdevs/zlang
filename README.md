@@ -21,7 +21,7 @@ fun main() >> i32 {
 - **🏗️ Modern Type System** - Structs with default values, enums, generics, and more
 - **🔒 Const Pointers** - Compile-time safety with read-only pointer guarantees
 - **🔄 Smart Loops** - Flexible `for` loops that work with any expression
-- **🧠 Brainfuck Integration** - Because why not? Embed Brainfuck code directly!
+- **🧠 Brainfuck Integration** - Embed Brainfuck code directly or compile pure .bf files!
 - **🎨 Type Inference** - Auto-cast with `as _` for cleaner code 
 - **📦 Zero Runtime** - Compiles directly to LLVM IR, no runtime overhead
 
@@ -38,6 +38,10 @@ zig build
 
 # Compile with optimizations and specify output name, keep LLVM IR
 ./zig-out/bin/zlang myprogram.zl -o myprogram -optimize -keepll
+
+# Compile pure Brainfuck programs
+./zig-out/bin/zlang -b mandelbrot.bf -o mandelbrot
+./zig-out/bin/zlang -b32 program.bf -o output  # 32-bit cells
 ```
 
 ### Hello World
@@ -415,6 +419,23 @@ fun main() >> i32 {
 ```
 
 The Brainfuck compiler integrates directly into the language with special directives for loading/storing variables!
+
+### Standalone Brainfuck Compilation
+
+ZLang can also compile pure Brainfuck programs directly:
+
+```bash
+# Compile with default 8-bit cells
+zlang -b program.bf -o program
+
+# Specify cell size (8, 16, 32, or 64 bits)
+zlang -b8 program.bf -o program    # 8-bit cells (default)
+zlang -b16 program.bf -o program   # 16-bit cells
+zlang -b32 program.bf -o program   # 32-bit cells
+zlang -b64 program.bf -o program   # 64-bit cells
+```
+
+The `-b` flags enable brainfuck-only mode, compiling `.b` or `.bf` files directly to native executables via LLVM. This gives you highly optimized Brainfuck programs with configurable cell sizes!
 
 ### Numeric Literal Delimiters
 
