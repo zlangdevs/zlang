@@ -805,7 +805,6 @@ brainfuck {
     ?load x 0?         ?? Load x into cell 0
     ?load result 1?    ?? Load result into cell 1
     [->+<]            ?? Add x to result
-    ?store result 1?   ?? Store cell 1 back to result
 }
 ```
 
