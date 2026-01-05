@@ -15,44 +15,44 @@ fun main() >> i32 {
     @printf("=== Testing Enum Values ===\n");
     
     ?? Test 1: Qualified access (EnumName.value)
-    @printf("Color.RED = %d\n", Color.RED);
-    @printf("Color.GREEN = %d\n", Color.GREEN);
-    @printf("Color.BLUE = %d\n", Color.BLUE);
-    
+    @printf("(expected 0):%d\n", Color.RED);
+    @printf("(expected 10):%d\n", Color.GREEN);
+    @printf("(expected 11):%d\n", Color.BLUE);
+
     ?? Test 2: C-style direct access (just value name)
-    @printf("RED = %d\n", RED);
-    @printf("GREEN = %d\n", GREEN);
-    @printf("BLUE = %d\n", BLUE);
-    
+    @printf("(expected 0):%d\n", RED);
+    @printf("(expected 10):%d\n", GREEN);
+    @printf("(expected 11):%d\n", BLUE);
+
     ?? Test 3: Another enum with qualified access
-    @printf("Status.PENDING = %d\n", Status.PENDING);
-    @printf("Status.RUNNING = %d\n", Status.RUNNING);
-    @printf("Status.COMPLETED = %d\n", Status.COMPLETED);
-    @printf("Status.FAILED = %d\n", Status.FAILED);
-    
+    @printf("(expected 0):%d\n", Status.PENDING);
+    @printf("(expected 100):%d\n", Status.RUNNING);
+    @printf("(expected 101):%d\n", Status.COMPLETED);
+    @printf("(expected 200):%d\n", Status.FAILED);
+
     ?? Test 4: C-style access for second enum
-    @printf("PENDING = %d\n", PENDING);
-    @printf("RUNNING = %d\n", RUNNING);
-    @printf("COMPLETED = %d\n", COMPLETED);
-    @printf("FAILED = %d\n", FAILED);
-    
+    @printf("(expected 0):%d\n", PENDING);
+    @printf("(expected 100):%d\n", RUNNING);
+    @printf("(expected 101):%d\n", COMPLETED);
+    @printf("(expected 200):%d\n", FAILED);
+
     ?? Test 5: Use enum values in expressions
     i32 color_sum = RED + GREEN + BLUE;
-    @printf("color_sum (RED + GREEN + BLUE) = %d\n", color_sum);
-    
+    @printf("(expected 21):%d\n", color_sum);
+
     ?? Test 6: Use in comparisons
     i32 current_status = RUNNING;
     if (current_status == RUNNING) {
         @printf("Status is RUNNING\n");
     }
-    
+
     ?? Test 7: Use in variable initialization
     i32 my_color = BLUE;
-    @printf("my_color = %d\n", my_color);
-    
+    @printf("(expected 11):%d\n", my_color);
+
     ?? Test 8: Const variable with enum value
     const i32 DEFAULT_COLOR = GREEN;
-    @printf("DEFAULT_COLOR = %d\n", DEFAULT_COLOR);
+    @printf("(expected 10):%d\n", DEFAULT_COLOR);
     
     @printf("\n=== All enum tests passed! ===\n");
     return 0;

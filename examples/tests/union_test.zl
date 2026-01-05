@@ -4,10 +4,10 @@ union IntOrFloat {
 }
 
 union Value {
-    byte u8,
-    word u16,
-    dword u32,
-    qword u64
+    byte i8,
+    word i16,
+    dword i32,
+    qword i64
 }
 
 struct Tagged {
@@ -30,7 +30,7 @@ fun test_value_sizes() >> void {
     
     v.dword = 0;
     v.byte = 255;
-    @printf("(expected 255) byte: %u\n", v.byte);
+    @printf("(expected -1):%d\n", v.byte);
     
     v.dword = 0x12345678;
     @printf("(expected lower byte 120) byte: %u\n", v.byte);
