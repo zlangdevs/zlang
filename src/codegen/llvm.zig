@@ -2492,9 +2492,12 @@ pub const CodeGenerator = struct {
                 const parsed_str = try self.parse_escape(str.value);
                 defer self.allocator.free(parsed_str);
 
+                const str_with_null = try std.mem.concatWithSentinel(self.allocator, u8, &.{parsed_str}, 0);
+                defer self.allocator.free(str_with_null);
+
                 return c.LLVMBuildGlobalStringPtr(
                     self.builder,
-                    parsed_str.ptr,
+                    str_with_null.ptr,
                     "str",
                 );
             },
