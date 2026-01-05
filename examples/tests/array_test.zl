@@ -29,15 +29,15 @@ fun main() >> i32 {
     i32 val = myarr[0];
     myarr = {1, 1, 1, 1, 1};
     
-    @printf("myarr[0] (expected 1):%d\n", myarr[0]);
-    
+    @printf("(expected 1):%d\n", myarr[0]);
+
     myarr[4] = myarr[2] * 5 + 3;
-    @printf("myarr[2] (expected 8):%d\n", myarr[4]);
-    
+    @printf("(expected 8):%d\n", myarr[4]);
+
     ?? Test inferred array access
-    @printf("inferred_int[2] (expected 30):%d\n", inferred_int[2]);
-    @printf("inferred_str (expected zlang):%s\n", &inferred_str);
-    @printf("inferred_float[1] (expected 2.5):%.1f\n", inferred_float[1]);
+    @printf("(expected 30):%d\n", inferred_int[2]);
+    @printf("(expected zlang):%s\n", &inferred_str);
+    @printf("(expected 2.5):%.1f\n", inferred_float[1]);
     
     u32 sum = 0;
     arr<arr<arr<arr<i32, 5>, 5>, 5>, 5> field;
@@ -55,6 +55,6 @@ fun main() >> i32 {
             }
         }
     }
-    @printf("sum: (expected 5000):%d\n", sum);
+    @printf("(expected 5000):%d\n", sum);
     return 0;
 }
