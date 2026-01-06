@@ -409,6 +409,15 @@ wrap @some_c_lib_function(x: i32, y: f32) >> ptr<void>;
 
 The `wrap` keyword ensures proper System V ABI handling for struct parameters and return values.
 
+**Custom wrappers**
+```zl
+fun @cfunction() >> i32;
+fun cfunction() >> i32 {
+	...some preparations...
+	@cfunctions();
+}
+```
+
 ### Variadic Arguments
 
 **Declaring Variadic Functions**
