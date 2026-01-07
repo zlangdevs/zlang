@@ -203,6 +203,54 @@ const   struct  enum    wrap    use     null    as      goto
 - Applied to pointers: prevents modification through pointer (`const ptr<i32> p;`)
 - Provides compile-time safety and documents intent
 
+**Escape Characters**
+
+ZLang supports C-style escape sequences in string literals and character literals:
+
+| Escape Sequence | Description | ASCII Value |
+|----------------|-------------|-------------|
+| `\n` | Newline (Line Feed) | 10 |
+| `\t` | Horizontal Tab | 9 |
+| `\r` | Carriage Return | 13 |
+| `\'` | Single Quote | 39 |
+| `\"` | Double Quote | 34 |
+| `\\` | Backslash | 92 |
+| `\0` | Null Terminator | 0 |
+
+**Usage Examples:**
+
+```zl
+?? String literals with escape sequences
+arr<u8, 30> message = "Hello\tWorld\n";
+@printf("Line 1\nLine 2\n");
+@printf("Quote: \"Hello\"\n");
+
+?? Character literals with escape sequences
+arr<u8, 8> chars;
+chars[0] = '\\';   ?? Backslash
+chars[1] = '\"';   ?? Double quote
+chars[2] = '\'';   ?? Single quote
+chars[3] = '\n';   ?? Newline
+chars[4] = '\t';   ?? Tab
+chars[5] = '\r';   ?? Carriage return
+chars[6] = '\0';   ?? Null terminator
+
+?? Common use case: C-style null-terminated strings
+arr<u8, 6> str;
+str[0] = 'H';
+str[1] = 'e';
+str[2] = 'l';
+str[3] = 'l';
+str[4] = 'o';
+str[5] = '\0';     ?? Null terminator for C compatibility
+@printf("%s\n", &str);
+```
+
+**Notes:**
+- Escape sequences work in both string literals (`"..."`) and character literals (`'...'`)
+- Unknown escape sequences are treated as literal characters (e.g., `\x` becomes `\x`)
+- The null terminator `\0` is automatically added to string literals but must be manually added to character arrays when building strings
+
 ### Operators
 
 **Arithmetic**: `+`, `-`, `*`, `/`, `%`
