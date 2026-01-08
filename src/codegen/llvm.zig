@@ -3,6 +3,7 @@ const ast = @import("../parser/ast.zig");
 const errors = @import("../errors.zig");
 const utils = @import("utils.zig");
 const structs = @import("structs.zig");
+const strings = @import("strings.zig");
 const bfck = @import("bf.zig");
 const control_flow = @import("control_flow.zig");
 const variables = @import("variables.zig");
@@ -1833,37 +1834,7 @@ pub const CodeGenerator = struct {
         return errors.CodegenError.TypeMismatch;
     }
 
-    pub fn parse_escape(self: *CodeGenerator, str: []const u8) errors.CodegenError![]const u8 {
-        var transformed_string = std.ArrayList(u8){};
-        defer transformed_string.deinit(self.allocator);
-        var i: usize = 0;
-        while (i < str.len) : (i += 1) {
-            if (str[i] == '\\') {
-                i += 1;
-                if (i < str.len) {
-                    switch (str[i]) {
-                        'n' => transformed_string.append(self.allocator, '\n') catch return errors.CodegenError.OutOfMemory,
-                        't' => transformed_string.append(self.allocator, '\t') catch return errors.CodegenError.OutOfMemory,
-                        'r' => transformed_string.append(self.allocator, '\r') catch return errors.CodegenError.OutOfMemory,
-                        '\'' => transformed_string.append(self.allocator, '\'') catch return errors.CodegenError.OutOfMemory,
-                        '"' => transformed_string.append(self.allocator, '"') catch return errors.CodegenError.OutOfMemory,
-                        '0' => transformed_string.append(self.allocator, 0) catch return errors.CodegenError.OutOfMemory,
-                        '\\' => transformed_string.append(self.allocator, '\\') catch return errors.CodegenError.OutOfMemory,
-                        else => {
-                            transformed_string.append(self.allocator, '\\') catch return errors.CodegenError.OutOfMemory;
-                            transformed_string.append(self.allocator, str[i]) catch return errors.CodegenError.OutOfMemory;
-                        },
-                    }
-                } else {
-                    transformed_string.append(self.allocator, '\\') catch return errors.CodegenError.OutOfMemory;
-                }
-            } else {
-                transformed_string.append(self.allocator, str[i]) catch return errors.CodegenError.OutOfMemory;
-            }
-        }
-        try transformed_string.append(self.allocator, 0);
-        return transformed_string.toOwnedSlice(self.allocator);
-    }
+    pub const parse_escape = strings.parseEscape;
 
     fn prepareArgumentForLibcCall(self: *CodeGenerator, arg_value: c.LLVMValueRef, func_name: []const u8, arg_index: usize) c.LLVMValueRef {
         if (std.mem.eql(u8, func_name, "printf") or
@@ -2489,17 +2460,7 @@ pub const CodeGenerator = struct {
                 return c.LLVMConstNull(void_ptr_type);
             },
             .string_literal => |str| {
-                const parsed_str = try self.parse_escape(str.value);
-                defer self.allocator.free(parsed_str);
-
-                const str_with_null = try std.mem.concatWithSentinel(self.allocator, u8, &.{parsed_str}, 0);
-                defer self.allocator.free(str_with_null);
-
-                return c.LLVMBuildGlobalStringPtr(
-                    self.builder,
-                    str_with_null.ptr,
-                    "str",
-                );
+                return try strings.generateStringLiteral(self, str);
             },
             .unary_op => |un| {
                 switch (un.op) {
