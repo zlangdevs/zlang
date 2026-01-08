@@ -4,6 +4,7 @@ const errors = @import("../errors.zig");
 const utils = @import("utils.zig");
 const llvm = @import("llvm.zig");
 const variables = @import("variables.zig");
+const strings = @import("strings.zig");
 
 const c_bindings = @import("c_bindings.zig");
 const c = c_bindings.c;
@@ -266,7 +267,7 @@ pub fn assignStringLiteralToArrayField(cg: *llvm.CodeGenerator, field_ptr: c.LLV
     if (element_type_kind != c.LLVMIntegerTypeKind or c.LLVMGetIntTypeWidth(element_type) != 8) {
         return;
     }
-    const parsed_str = try cg.parse_escape(str_lit.value);
+    const parsed_str = try strings.parseEscape(cg.allocator, str_lit.value);
     defer cg.allocator.free(parsed_str);
     const str_len = parsed_str.len;
     const array_length = c.LLVMGetArrayLength(field_type);

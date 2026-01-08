@@ -4,6 +4,7 @@ const errors = @import("../errors.zig");
 const utils = @import("utils.zig");
 const structs = @import("structs.zig");
 const variables = @import("variables.zig");
+const strings = @import("strings.zig");
 
 const c_bindings = @import("c_bindings.zig");
 const c = c_bindings.c;
@@ -143,7 +144,7 @@ pub fn generateArrayReassignment(self: *CodeGenerator, array_name: []const u8, v
             if (element_type_kind != c.LLVMIntegerTypeKind or c.LLVMGetIntTypeWidth(element_type) != 8) {
                 return errors.CodegenError.TypeMismatch;
             }
-            const parsed_str = try self.parse_escape(str_lit.value);
+            const parsed_str = try strings.parseEscape(self.allocator, str_lit.value);
             defer self.allocator.free(parsed_str);
             const str_len = parsed_str.len;
             const array_type = var_info.type_ref;
@@ -192,7 +193,7 @@ pub fn generateArrayDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.
                         array_size = init_list.elements.items.len;
                     },
                     .string_literal => |str_lit| {
-                        const parsed_str = try self.parse_escape(str_lit.value);
+                        const parsed_str = try strings.parseEscape(self.allocator, str_lit.value);
                         defer self.allocator.free(parsed_str);
                         array_size = parsed_str.len;
                     },
@@ -236,7 +237,7 @@ pub fn generateArrayDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.
                     if (element_type_kind != c.LLVMIntegerTypeKind or c.LLVMGetIntTypeWidth(element_type) != 8) {
                         return errors.CodegenError.TypeMismatch;
                     }
-                    const parsed_str = try self.parse_escape(str_lit.value);
+                    const parsed_str = try strings.parseEscape(self.allocator, str_lit.value);
                     defer self.allocator.free(parsed_str);
                     for (parsed_str, 0..) |byte, idx| {
                         if (idx >= array_size) break;
