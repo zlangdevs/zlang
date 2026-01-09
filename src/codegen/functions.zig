@@ -532,8 +532,8 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                     }
                 }
 
-                if (cg.function_to_module.get(call.name)) |target_mod| {
-                    if (!cg.canAccess(cg.current_module_name, target_mod)) {
+                if (cg.module_manager.function_to_module.get(call.name)) |target_mod| {
+                    if (!cg.canAccess(cg.module_manager.current_module_name, target_mod)) {
                         return errors.CodegenError.UndefinedFunction;
                     }
                 }
@@ -591,8 +591,8 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall) err
                     return res;
                 }
 
-                if (cg.function_to_module.get(call.name)) |target_mod2| {
-                    if (!cg.canAccess(cg.current_module_name, target_mod2)) {
+                if (cg.module_manager.function_to_module.get(call.name)) |target_mod2| {
+                    if (!cg.canAccess(cg.module_manager.current_module_name, target_mod2)) {
                         return errors.CodegenError.UndefinedFunction;
                     }
                 }

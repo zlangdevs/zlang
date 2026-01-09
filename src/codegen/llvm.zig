@@ -4,6 +4,7 @@ const errors = @import("../errors.zig");
 const utils = @import("utils.zig");
 const structs = @import("structs.zig");
 const strings = @import("strings.zig");
+const modules = @import("modules.zig");
 const bfck = @import("bf.zig");
 const control_flow = @import("control_flow.zig");
 const variables = @import("variables.zig");
@@ -41,14 +42,11 @@ pub const CodeGenerator = struct {
     struct_types: std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     struct_fields: std.HashMap([]const u8, std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     struct_declarations: std.HashMap([]const u8, ast.StructDecl, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
-    function_to_module: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
-    module_dependencies: std.HashMap([]const u8, std.ArrayList([]const u8), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
-    current_module_name: []const u8,
+    module_manager: modules.ModuleManager,
     label_blocks: std.HashMap([]const u8, c.LLVMBasicBlockRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     pending_gotos: std.ArrayList(structs.PendingGoto),
     current_line: usize,
     current_column: usize,
-    module_paths: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     enable_comptime_bf_opt: bool,
 
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
@@ -90,14 +88,11 @@ pub const CodeGenerator = struct {
             .struct_types = std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .struct_fields = std.HashMap([]const u8, std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .struct_declarations = std.HashMap([]const u8, ast.StructDecl, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
-            .function_to_module = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
-            .module_dependencies = std.HashMap([]const u8, std.ArrayList([]const u8), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
-            .current_module_name = "",
+            .module_manager = modules.ModuleManager.init(allocator),
             .label_blocks = std.HashMap([]const u8, c.LLVMBasicBlockRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .pending_gotos = std.ArrayList(structs.PendingGoto){},
             .current_line = 0,
             .current_column = 0,
-            .module_paths = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .enable_comptime_bf_opt = false,
         };
     }
@@ -123,18 +118,7 @@ pub const CodeGenerator = struct {
         self.struct_fields.deinit();
         self.struct_declarations.deinit();
 
-        var deps_it = self.module_dependencies.iterator();
-        while (deps_it.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
-        self.module_dependencies.deinit();
-        var paths_it = self.module_paths.iterator();
-        while (paths_it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
-        }
-        self.module_paths.deinit();
-        self.function_to_module.deinit();
+        self.module_manager.deinit();
         for (self.variable_scopes.items) |*scope| {
             scope.deinit();
         }
@@ -145,16 +129,11 @@ pub const CodeGenerator = struct {
     }
 
     pub fn registerModule(self: *CodeGenerator, module_name: []const u8, full_path: []const u8, deps: []const []const u8) !void {
-        var list = std.ArrayList([]const u8){};
-        for (deps) |d| {
-            try list.append(self.allocator, utils.dupe(u8, self.allocator, d));
-        }
-        try self.module_dependencies.put(utils.dupe(u8, self.allocator, module_name), list);
-        try self.module_paths.put(utils.dupe(u8, self.allocator, module_name), utils.dupe(u8, self.allocator, full_path));
+        try self.module_manager.registerModule(module_name, full_path, deps);
     }
 
     fn reportError(self: *CodeGenerator, message: []const u8, hint: ?[]const u8) void {
-        const file_path = if (self.module_paths.get(self.current_module_name)) |p| p else "unknown";
+        const file_path = self.module_manager.getCurrentModulePath();
         diagnostics.printDiagnostic(self.allocator, .{
             .file_path = file_path,
             .line = self.current_line,
@@ -172,25 +151,15 @@ pub const CodeGenerator = struct {
     }
 
     pub fn registerFunctionModule(self: *CodeGenerator, func_name: []const u8, module_name: []const u8) !void {
-        try self.function_to_module.put(utils.dupe(u8, self.allocator, func_name), utils.dupe(u8, self.allocator, module_name));
+        try self.module_manager.registerFunctionModule(func_name, module_name);
     }
 
     pub fn setCurrentModuleByFunction(self: *CodeGenerator, func_name: []const u8) void {
-        if (self.function_to_module.get(func_name)) |m| {
-            self.current_module_name = m;
-        } else {
-            self.current_module_name = "";
-        }
+        self.module_manager.setCurrentModuleByFunction(func_name);
     }
 
     pub fn canAccess(self: *CodeGenerator, from_module: []const u8, target_module: []const u8) bool {
-        if (from_module.len == 0 or std.mem.eql(u8, from_module, target_module)) return true;
-        if (self.module_dependencies.get(from_module)) |list| {
-            for (list.items) |dep| {
-                if (std.mem.eql(u8, dep, target_module)) return true;
-            }
-        }
-        return false;
+        return self.module_manager.canAccess(from_module, target_module);
     }
 
     fn buildQualifiedName(self: *CodeGenerator, node: *ast.Node) ![]const u8 {
