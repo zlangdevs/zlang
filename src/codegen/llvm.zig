@@ -144,8 +144,139 @@ pub const CodeGenerator = struct {
         });
     }
 
-    fn reportErrorFmt(self: *CodeGenerator, comptime fmt: []const u8, args: anytype, hint: ?[]const u8) void {
+    pub fn reportErrorFmt(self: *CodeGenerator, comptime fmt: []const u8, args: anytype, hint: ?[]const u8) void {
         const msg = std.fmt.allocPrint(self.allocator, fmt, args) catch return;
+        defer self.allocator.free(msg);
+        self.reportError(msg, hint);
+    }
+
+    /// Convert an LLVM type to a human-readable string
+    pub fn typeToString(self: *CodeGenerator, llvm_type: c.LLVMTypeRef) []const u8 {
+        const type_kind = c.LLVMGetTypeKind(llvm_type);
+        
+        switch (type_kind) {
+            c.LLVMVoidTypeKind => return "void",
+            c.LLVMHalfTypeKind => return "f16",
+            c.LLVMFloatTypeKind => return "f32",
+            c.LLVMDoubleTypeKind => return "f64",
+            c.LLVMX86_FP80TypeKind => return "f80",
+            c.LLVMFP128TypeKind => return "f128",
+            c.LLVMPPC_FP128TypeKind => return "ppc_f128",
+            c.LLVMIntegerTypeKind => {
+                const bit_width = c.LLVMGetIntTypeWidth(llvm_type);
+                return std.fmt.allocPrint(self.allocator, "i{d}", .{bit_width}) catch "i?";
+            },
+            c.LLVMPointerTypeKind => {
+                return std.fmt.allocPrint(self.allocator, "ptr", .{}) catch "ptr";
+            },
+            c.LLVMArrayTypeKind => {
+                const element_type = c.LLVMGetElementType(llvm_type);
+                const array_len = c.LLVMGetArrayLength(llvm_type);
+                const element_type_str = self.typeToString(element_type);
+                const result = std.fmt.allocPrint(self.allocator, "arr<{s}, {d}>", .{element_type_str, array_len}) catch "arr<?, ?>";
+                if (type_kind == c.LLVMIntegerTypeKind or type_kind == c.LLVMPointerTypeKind) {
+                    // Only free if we allocated it
+                } else {
+                    self.allocator.free(element_type_str);
+                }
+                return result;
+            },
+            c.LLVMStructTypeKind => {
+                // Try to get the struct name
+                if (self.getStructTypeName(llvm_type)) |name| {
+                    return name;
+                } else |_| {
+                    return std.fmt.allocPrint(self.allocator, "struct<anonymous>", .{}) catch "struct";
+                }
+            },
+            c.LLVMVectorTypeKind => {
+                const element_type = c.LLVMGetElementType(llvm_type);
+                const vector_size = c.LLVMGetVectorSize(llvm_type);
+                const element_type_str = self.typeToString(element_type);
+                const result = std.fmt.allocPrint(self.allocator, "vec<{s}, {d}>", .{element_type_str, vector_size}) catch "vec<?, ?>";
+                if (c.LLVMGetTypeKind(element_type) != c.LLVMIntegerTypeKind and c.LLVMGetTypeKind(element_type) != c.LLVMPointerTypeKind) {
+                    self.allocator.free(element_type_str);
+                }
+                return result;
+            },
+            c.LLVMFunctionTypeKind => return "function",
+            else => return "unknown",
+        }
+    }
+
+    /// Report a type mismatch error with detailed type information
+    pub fn reportTypeMismatch(self: *CodeGenerator, expected_type: c.LLVMTypeRef, actual_type: c.LLVMTypeRef, context: []const u8) void {
+        const expected_str = self.typeToString(expected_type);
+        const actual_str = self.typeToString(actual_type);
+        
+        const msg = std.fmt.allocPrint(
+            self.allocator,
+            "Type mismatch in {s}: expected '{s}' but got '{s}'",
+            .{context, expected_str, actual_str}
+        ) catch {
+            self.reportError("Type mismatch", null);
+            return;
+        };
+        defer self.allocator.free(msg);
+        
+        self.reportError(msg, "Consider using an explicit cast if this conversion is intended");
+        
+        // Clean up type strings if they were allocated
+        const expected_kind = c.LLVMGetTypeKind(expected_type);
+        const actual_kind = c.LLVMGetTypeKind(actual_type);
+        
+        if (expected_kind == c.LLVMIntegerTypeKind or expected_kind == c.LLVMPointerTypeKind or 
+            expected_kind == c.LLVMVoidTypeKind or expected_kind == c.LLVMFloatTypeKind or 
+            expected_kind == c.LLVMDoubleTypeKind) {
+            // These are static strings, don't free
+        } else {
+            self.allocator.free(expected_str);
+        }
+        
+        if (actual_kind == c.LLVMIntegerTypeKind or actual_kind == c.LLVMPointerTypeKind or 
+            actual_kind == c.LLVMVoidTypeKind or actual_kind == c.LLVMFloatTypeKind or 
+            actual_kind == c.LLVMDoubleTypeKind) {
+            // These are static strings, don't free
+        } else {
+            self.allocator.free(actual_str);
+        }
+    }
+
+    /// Report a type mismatch error with a custom expected type description
+    pub fn reportTypeMismatchStr(self: *CodeGenerator, expected_desc: []const u8, actual_type: c.LLVMTypeRef, context: []const u8) void {
+        const actual_str = self.typeToString(actual_type);
+        
+        const msg = std.fmt.allocPrint(
+            self.allocator,
+            "Type mismatch in {s}: expected {s} but got '{s}'",
+            .{context, expected_desc, actual_str}
+        ) catch {
+            self.reportError("Type mismatch", null);
+            return;
+        };
+        defer self.allocator.free(msg);
+        
+        self.reportError(msg, "Check the types of the operands");
+        
+        // Clean up type string if allocated
+        const actual_kind = c.LLVMGetTypeKind(actual_type);
+        if (actual_kind != c.LLVMIntegerTypeKind and actual_kind != c.LLVMPointerTypeKind and 
+            actual_kind != c.LLVMVoidTypeKind and actual_kind != c.LLVMFloatTypeKind and 
+            actual_kind != c.LLVMDoubleTypeKind) {
+            self.allocator.free(actual_str);
+        }
+    }
+
+    /// Report a generic type mismatch error with just a context
+    pub fn reportTypeMismatchGeneric(self: *CodeGenerator, context: []const u8, hint: ?[]const u8) void {
+        const msg = std.fmt.allocPrint(
+            self.allocator,
+            "Type mismatch in {s}",
+            .{context}
+        ) catch {
+            self.reportError("Type mismatch", hint);
+            return;
+        };
         defer self.allocator.free(msg);
         self.reportError(msg, hint);
     }
@@ -495,6 +626,7 @@ pub const CodeGenerator = struct {
 
                             const ptr_type_name = try self.inferType(un.operand);
                             if (!(std.mem.startsWith(u8, ptr_type_name, "ptr<") and std.mem.endsWith(u8, ptr_type_name, ">"))) {
+                                self.reportTypeMismatchGeneric("dereference assignment", "Cannot dereference non-pointer type");
                                 return errors.CodegenError.TypeMismatch;
                             }
                             const elem_name = ptr_type_name[4 .. ptr_type_name.len - 1];
@@ -503,6 +635,7 @@ pub const CodeGenerator = struct {
                             const casted_val = try self.castWithRules(value_raw, elem_ty, as.value);
                             _ = c.LLVMBuildStore(self.builder, casted_val, ptr_val);
                         } else {
+                            self.reportTypeMismatchGeneric("assignment target", "Target must be a dereferenceable pointer");
                             return errors.CodegenError.TypeMismatch;
                         }
                     },
@@ -733,6 +866,7 @@ pub const CodeGenerator = struct {
                             const ptr_val = try self.generateExpression(un.operand);
                             const ptr_type = c.LLVMTypeOf(ptr_val);
                             if (c.LLVMGetTypeKind(ptr_type) != c.LLVMPointerTypeKind) {
+                                self.reportTypeMismatchStr("a pointer type", ptr_type, "compound assignment dereference");
                                 return errors.CodegenError.TypeMismatch;
                             }
 
@@ -780,6 +914,7 @@ pub const CodeGenerator = struct {
                             };
                             _ = c.LLVMBuildStore(self.builder, new_value, ptr_val);
                         } else {
+                            self.reportTypeMismatchGeneric("compound assignment target", "Target must be a dereferenceable pointer or a variable");
                             return errors.CodegenError.TypeMismatch;
                         }
                     },

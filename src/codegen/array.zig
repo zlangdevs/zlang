@@ -142,6 +142,7 @@ pub fn generateArrayReassignment(self: *CodeGenerator, array_name: []const u8, v
             const element_type = c.LLVMGetElementType(var_info.type_ref);
             const element_type_kind = c.LLVMGetTypeKind(element_type);
             if (element_type_kind != c.LLVMIntegerTypeKind or c.LLVMGetIntTypeWidth(element_type) != 8) {
+                self.reportTypeMismatchStr("arr<u8, N>", var_info.type_ref, "string literal assignment");
                 return errors.CodegenError.TypeMismatch;
             }
             const parsed_str = try strings.parseEscape(self.allocator, str_lit.value);
@@ -150,6 +151,7 @@ pub fn generateArrayReassignment(self: *CodeGenerator, array_name: []const u8, v
             const array_type = var_info.type_ref;
             const array_length = c.LLVMGetArrayLength(array_type);
             if (str_len > array_length) {
+                self.reportErrorFmt("String literal too long: {d} characters exceeds array size of {d}", .{str_len, array_length}, "Increase array size or shorten the string");
                 return errors.CodegenError.TypeMismatch;
             }
             const memcpy_func = try CodeGenerator.declareLibcFunction(self, "memcpy");
@@ -163,6 +165,7 @@ pub fn generateArrayReassignment(self: *CodeGenerator, array_name: []const u8, v
             _ = c.LLVMBuildCall2(self.builder, c.LLVMGlobalGetValueType(memcpy_func), memcpy_func, &memcpy_args[0], 3, "");
         },
         else => {
+            self.reportTypeMismatchGeneric("array initialization", "Array must be initialized with an array literal or string literal");
             return errors.CodegenError.TypeMismatch;
         },
     }
@@ -198,14 +201,17 @@ pub fn generateArrayDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.
                         array_size = parsed_str.len;
                     },
                     else => {
+                        self.reportTypeMismatchGeneric("array size inference", "Array size can only be inferred from array or string literals");
                         return errors.CodegenError.TypeMismatch;
                     },
                 }
             } else {
+                self.reportTypeMismatchGeneric("array declaration", "Array size must be specified or inferable from initializer");
                 return errors.CodegenError.TypeMismatch;
             }
         } else {
             array_size = std.fmt.parseInt(usize, size_str, 10) catch {
+                self.reportErrorFmt("Invalid array size: '{s}'", .{size_str}, "Array size must be a valid integer");
                 return errors.CodegenError.TypeMismatch;
             };
         }
