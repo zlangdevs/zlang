@@ -1176,7 +1176,7 @@ fun main() >> i32 {
    - Generates LLVM IR
    - Applies optimizations
 
-4. **Linking** (Clang/LLVM)
+4. **Linking** (Clang/LLVM-LLD)
    - Links with C runtime
    - Produces native binary
 
