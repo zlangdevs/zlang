@@ -3,5 +3,11 @@ fun main() >> i32 {
     bool another_flag = false;
     @printf("flag (expected 1):%d\n", flag);
     @printf("another_flag (expected 0):%d\n", another_flag);
+    bool res1 = flag && another_flag;
+    bool res2 = flag || another_flag;
+    bool res3 = (flag || (3 < 5)) && (false || !another_flag);
+    @printf("res1 (expected 0):%d\n", res1);
+    @printf("res2 (expected 1):%d\n", res2);
+    @printf("res3 (expected 1):%d\n", res3);
     return 0;
 }
