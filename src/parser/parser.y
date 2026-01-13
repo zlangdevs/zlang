@@ -64,6 +64,7 @@ extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
 extern void* zig_create_cast(void* expr, const char* type_name, int auto_flag);
 extern void zlang_set_location(int line, int col);
+extern void zig_record_parse_error(int line, int col, const char* msg);
 
 void yyerror(const char* s);
 int zlang_lex(void* scanner);
@@ -855,8 +856,6 @@ int yylex(void) {
 }
 
 void yyerror(const char* s) {
-    /* int line = zlang_get_lineno(current_scanner);
-    fprintf(stderr, "Parse error at line %d: %s\n", line, s);
-    Suppress GLR parser warnings - errors are reported by Zig code if parse fails */
-    (void)s;
+    int line = zlang_get_lineno(current_scanner);
+    zig_record_parse_error(line, 0, s);
 }
