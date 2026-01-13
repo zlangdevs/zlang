@@ -238,24 +238,94 @@ fn resolveModulePath(base_path: []const u8, module_name: []const u8, alloc: std.
     return utils.dupe(u8, alloc, full_path);
 }
 
+fn tryFindMoreErrors(alloc: std.mem.Allocator, file_path: []const u8, input: []const u8) void {
+    var lines = std.mem.splitScalar(u8, input, '\n');
+    var line_num: usize = 1;
+    var brace_depth: i32 = 0;
+    var in_function = false;
+    while (lines.next()) |line| : (line_num += 1) {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+        if (std.mem.startsWith(u8, trimmed, "//")) continue;
+        for (trimmed) |ch| {
+            if (ch == '{') brace_depth += 1;
+            if (ch == '}') brace_depth -= 1;
+        }
+        if (std.mem.indexOf(u8, trimmed, "fun ") != null) {
+            in_function = true;
+        }
+        if (in_function and !std.mem.endsWith(u8, trimmed, ";") and 
+            !std.mem.endsWith(u8, trimmed, "{") and 
+            !std.mem.endsWith(u8, trimmed, "}") and
+            trimmed.len > 0 and trimmed[0] != '}') {
+            var has_control_keyword = false;
+            const control_keywords = [_][]const u8{ "if", "for", "while", "return", "break", "continue" };
+            for (control_keywords) |kw| {
+                if (std.mem.indexOf(u8, trimmed, kw) != null) {
+                    has_control_keyword = true;
+                    break;
+                }
+            }
+            if (!has_control_keyword and std.mem.indexOf(u8, trimmed, "=") != null) {
+                diagnostics.printDiagnostic(alloc, .{
+                    .file_path = file_path,
+                    .line = line_num,
+                    .column = trimmed.len,
+                    .message = "missing semicolon at end of statement",
+                    .severity = .Error,
+                    .hint = "add ';' at the end",
+                });
+            }
+        }
+        if (brace_depth == 0 and in_function) {
+            in_function = false;
+        }
+    }
+    if (brace_depth > 0) {
+        diagnostics.printDiagnostic(alloc, .{
+            .file_path = file_path,
+            .line = line_num - 1,
+            .column = 0,
+            .message = "unclosed braces in file",
+            .severity = .Error,
+            .hint = "missing closing brace(s)",
+        });
+    }
+}
+
 fn parseModuleFile(file_path: []const u8, alloc: std.mem.Allocator) !ModuleInfo {
     const input = read_file(file_path) catch |err| {
         std.debug.print("Error reading file {s}: {}\n", .{ file_path, err });
         return err;
     };
     const ast_root = parser.parse(alloc, input) catch |err| {
-        const loc = parser.lastParseErrorLocation();
-        if (loc) |l| {
-            diagnostics.printDiagnostic(alloc, .{
-                .file_path = file_path,
-                .line = l.line,
-                .column = l.column,
-                .message = "Parse error",
-                .severity = .Error,
-            });
+        const parse_errors = parser.getParseErrors();
+        if (parse_errors.len > 0) {
+            for (parse_errors) |parse_err| {
+                diagnostics.printDiagnostic(alloc, .{
+                    .file_path = file_path,
+                    .line = parse_err.line,
+                    .column = parse_err.column,
+                    .message = parse_err.message,
+                    .severity = .Error,
+                });
+            }
         } else {
-            std.debug.print("Error parsing file {s}: {}\n", .{ file_path, err });
+            const loc = parser.lastParseErrorLocation();
+            if (loc) |l| {
+                diagnostics.printDiagnostic(alloc, .{
+                    .file_path = file_path,
+                    .line = l.line,
+                    .column = l.column,
+                    .message = "Parse error",
+                    .severity = .Error,
+                });
+            } else {
+                std.debug.print("Error parsing file {s}: {}\n", .{ file_path, err });
+            }
         }
+        
+        tryFindMoreErrors(alloc, file_path, input);
         return err;
     };
     if (ast_root) |root| {
