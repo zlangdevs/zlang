@@ -8,6 +8,15 @@ var global_allocator: std.mem.Allocator = undefined;
 var last_error_line: usize = 0;
 var last_error_col: usize = 0;
 
+pub const ParseErrorInfo = struct {
+    line: usize,
+    column: usize,
+    message: []const u8,
+};
+
+var error_list: std.ArrayList(ParseErrorInfo) = undefined;
+var error_list_initialized: bool = false;
+
 extern fn yyparse() c_int;
 extern fn zlang_lex_init(scanner: *?*anyopaque) c_int;
 extern fn zlang_lex_destroy(scanner: ?*anyopaque) c_int;
@@ -1082,11 +1091,32 @@ export fn zig_create_cast(expr_ptr: ?*anyopaque, type_name_ptr: [*c]const u8, au
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_record_parse_error(line: c_int, col: c_int, msg_ptr: [*c]const u8) void {
+    if (!error_list_initialized) return;
+    const msg = std.mem.span(msg_ptr);
+    const msg_copy = utils.dupe(u8, global_allocator, msg);
+    const error_info = ParseErrorInfo{
+        .line = @intCast(line),
+        .column = @intCast(col),
+        .message = msg_copy,
+    };
+    error_list.append(global_allocator, error_info) catch return;
+}
+
 pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!?*ast.Node {
     global_allocator = allocator;
     ast_root = null;
     last_error_line = 0;
-    last_error_col = 0;
+    last_error_col = 0;  
+    if (!error_list_initialized) {
+        error_list = std.ArrayList(ParseErrorInfo){};
+        error_list_initialized = true;
+    } else {
+        for (error_list.items) |err_info| {
+            allocator.free(err_info.message);
+        }
+        error_list.clearRetainingCapacity();
+    }
 
     if (zlang_lex_init(&current_scanner) != 0) {
         return errors.ParseError.LexerInitFailed;
@@ -1108,8 +1138,13 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!
 
     const result = yyparse();
     if (result != 0) {
-        last_error_line = @intCast(@as(usize, @intCast(zlang_get_lineno(current_scanner))));
-        last_error_col = 0;
+        if (error_list.items.len == 0) {
+            last_error_line = @intCast(@as(usize, @intCast(zlang_get_lineno(current_scanner))));
+            last_error_col = 0;
+        }
+        return errors.ParseError.ParseFailed;
+    }
+    if (error_list.items.len > 0) {
         return errors.ParseError.ParseFailed;
     }
 
@@ -1122,4 +1157,18 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!
 pub fn lastParseErrorLocation() ?struct { line: usize, column: usize } {
     if (last_error_line == 0) return null;
     return .{ .line = last_error_line, .column = last_error_col };
+}
+
+pub fn getParseErrors() []ParseErrorInfo {
+    if (!error_list_initialized) return &[_]ParseErrorInfo{};
+    return error_list.items;
+}
+
+pub fn clearParseErrors(allocator: std.mem.Allocator) void {
+    if (!error_list_initialized) return;
+    for (error_list.items) |err_info| {
+        allocator.free(err_info.message);
+    }
+    error_list.deinit();
+    error_list_initialized = false;
 }
