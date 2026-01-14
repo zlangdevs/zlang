@@ -27,7 +27,7 @@ fun main() >> i32 {
     f64 elapsed = timerElapsed(timer);
     @printf("Elapsed time: %.2f seconds\n", elapsed);
     
-    if (elapsed < 0.9 || elapsed > 1.5) {
+    if (elapsed < 0.9 || elapsed > 1.2) {
         @printf("ERROR: Timer elapsed time seems incorrect!\n");
         return 1;
     }
