@@ -1,0 +1,73 @@
+struct Vector2 {
+    x f32,
+    y f32,
+}
+
+struct Color {
+    r u8,
+    g u8,
+    b u8,
+    a u8,
+}
+
+fun __abi_pack_Vector2(value: Vector2) >> simd<f32, 2> {
+    simd<f32, 2> tmp = {value.x, value.y};
+    return tmp;
+}
+
+fun __abi_unpack_Vector2(value: simd<f32, 2>) >> Vector2 {
+    Vector2 tmp = Vector2{x = value[0], y = value[1]};
+    return tmp;
+}
+
+fun __abi_pack_Color(value: Color) >> u32 {
+    return (value.r as u32) |
+           ((value.g as u32) << 8) |
+           ((value.b as u32) << 16) |
+           ((value.a as u32) << 24);
+}
+
+fun __abi_unpack_Color(value: u32) >> Color {
+    Color tmp = Color{
+        r = (value & 0xFF) as u8,
+        g = ((value >> 8) & 0xFF) as u8,
+        b = ((value >> 16) & 0xFF) as u8,
+        a = ((value >> 24) & 0xFF) as u8,
+    };
+    return tmp;
+}
+
+fun low_level(v: simd<f32, 2>, c: u32) >> i32 {
+    Vector2 unpacked_v = __abi_unpack_Vector2(v);
+    Color unpacked_c = __abi_unpack_Color(c);
+
+    return (unpacked_v.x as i32) +
+           (unpacked_v.y as i32) +
+           (unpacked_c.r as i32) +
+           (unpacked_c.g as i32) +
+           (unpacked_c.b as i32) +
+           (unpacked_c.a as i32);
+}
+
+fun high_level(v: Vector2, c: Color) >> i32 {
+    return low_level(__abi_pack_Vector2(v), __abi_pack_Color(c));
+}
+
+fun main() >> i32 {
+    Vector2 v = Vector2{x = 10.0, y = 20.0};
+    Color c = Color{r = 1, g = 2, b = 3, a = 4};
+
+    @printf("(expected 40):%d\n", high_level(v, c));
+
+    simd<f32, 2> packed_v = __abi_pack_Vector2(v);
+    Vector2 unpacked_v = __abi_unpack_Vector2(packed_v);
+    @printf("(expected 10):%d\n", unpacked_v.x as i32);
+    @printf("(expected 20):%d\n", unpacked_v.y as i32);
+
+    u32 packed_c = __abi_pack_Color(c);
+    Color unpacked_c = __abi_unpack_Color(packed_c);
+    @printf("(expected 1):%d\n", unpacked_c.r as i32);
+    @printf("(expected 4):%d\n", unpacked_c.a as i32);
+
+    return 0;
+}

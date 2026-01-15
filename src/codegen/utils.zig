@@ -2,6 +2,7 @@ const codegen = @import("llvm.zig");
 const std = @import("std");
 const ast = @import("../parser/ast.zig");
 const errors = @import("../errors.zig");
+const c_abi = @import("../c_abi.zig");
 
 const c_bindings = @import("c_bindings.zig");
 const c = c_bindings.c;
@@ -518,10 +519,8 @@ pub fn getTypeNameFromLLVMType(self: *codegen.CodeGenerator, llvm_type: c.LLVMTy
     };
 }
 
-pub fn getStructSizeBytes(_: *codegen.CodeGenerator, struct_type: c.LLVMTypeRef) u64 {
-    const target_data = c.LLVMCreateTargetData("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128");
-    defer c.LLVMDisposeTargetData(target_data);
-    return c.LLVMABISizeOfType(target_data, struct_type);
+pub fn getStructSizeBytes(cg: *codegen.CodeGenerator, struct_type: c.LLVMTypeRef) u64 {
+    return c_abi.getStructSizeBytesForModule(cg.module, struct_type);
 }
 
 pub fn shouldUseByVal(cg: *codegen.CodeGenerator, struct_type: c.LLVMTypeRef) bool {
