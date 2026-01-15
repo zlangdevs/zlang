@@ -1,0 +1,5 @@
+# Expected diagnostic fragments
+Undefined variable 'y'
+Variable is not declared in this scope
+i32 x = y + 1;
+^
