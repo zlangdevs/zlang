@@ -127,7 +127,7 @@ pub fn printHelpSyntax() void {
         \\{s}Control Flow:{s}
         \\  if x > 0 {{ ... }} else {{ ... }}
         \\  for i32 i = 0; i < 10; i++ {{ ... }}
-        \\  while x > 0 {{ ... }}
+        \\  for (x > 0) {{ ... }}
         \\
         \\{s}Pointers:{s}
         \\  ptr<i32> p = &x;
