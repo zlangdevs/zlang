@@ -5,6 +5,7 @@ const errors = @import("errors.zig");
 const parser = @import("parser/parser.zig");
 const ast = @import("parser/ast.zig");
 const semantic = @import("semantic.zig");
+const wrapgen = @import("wrapgen.zig");
 const codegen = @import("codegen/llvm.zig");
 const utils = @import("codegen/utils.zig");
 const diagnostics = @import("diagnostics.zig");
@@ -1072,7 +1073,7 @@ pub fn main() !u8 {
             std.debug.print("Usage: zlang wrap <file.h> -o <file.zl>\n", .{});
             return 1;
         }
-        generateWrapperFromHeader(allocator, header_path, out_path.?) catch |err| {
+        wrapgen.generateFromHeader(allocator, header_path, out_path.?) catch |err| {
             std.debug.print("Error generating wrapper for {s}: {}\n", .{ header_path, err });
             return 1;
         };

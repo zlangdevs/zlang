@@ -444,6 +444,20 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
         c.LLVMSetLinkage(llvm_func, c.LLVMExternalLinkage);
     }
     try cg.c_function_declarations.put(utils.dupe(u8, cg.allocator, c_func.name), c_func.is_wrapped);
+
+    var param_sig = std.ArrayList(u8){};
+    defer param_sig.deinit(cg.allocator);
+    var first_param = true;
+    for (c_func.parameters.items) |param| {
+        if (utils.isVarArgType(param.type_name)) continue;
+        if (!first_param) {
+            try param_sig.append(cg.allocator, ',');
+        }
+        first_param = false;
+        try param_sig.appendSlice(cg.allocator, param.type_name);
+    }
+    try cg.c_function_param_signatures.put(utils.dupe(u8, cg.allocator, c_func.name), utils.dupe(u8, cg.allocator, param_sig.items));
+
     try cg.function_return_types.put(utils.dupe(u8, cg.allocator, c_func.name), c_func.return_type);
     if (is_varargs) {
         const last_param = c_func.parameters.items[c_func.parameters.items.len - 1];
@@ -602,7 +616,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
     var final_best_match: ?structs.FunctionOverload = null;
     var final_best_substitutions: ?std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = null;
     var found_overload = false;
-    if (cg.function_overloads.get(call.name)) |overloads| {
+    if (if (call.is_libc) null else cg.function_overloads.get(call.name)) |overloads| {
         var best_score: i32 = -1;
 
         for (overloads.items) |candidate| {
@@ -890,11 +904,11 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                 }
             }
         }
+    } else {
+        if (cg.c_function_param_signatures.get(resolved_name)) |sig| {
+            sig_param_it = std.mem.tokenizeAny(u8, sig, ",");
+        }
     }
-
-    const ByValInfo = struct { idx: usize, ty: c.LLVMTypeRef };
-    var byval_args = std.ArrayList(ByValInfo){};
-    defer byval_args.deinit(cg.allocator);
 
     for (arg_values.items) |val| {
         var param_type_name: ?[]const u8 = null;
@@ -942,6 +956,32 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                     break;
                 }
 
+                const maybe_param_ty = utils.getLLVMTypeSilent(cg, tn) catch null;
+                if (maybe_param_ty) |param_ty| {
+                    if (c.LLVMGetTypeKind(@ptrCast(param_ty)) == c.LLVMStructTypeKind and utils.shouldSplitAsVector(cg, @ptrCast(param_ty))) {
+                        const float_ty = c.LLVMFloatTypeInContext(cg.context);
+                        const vec2_ty = c.LLVMVectorType(float_ty, 2);
+                        const i32_ty = c.LLVMInt32TypeInContext(cg.context);
+
+                        const x = c.LLVMBuildExtractValue(cg.builder, val, 0, "split_x");
+                        const y = c.LLVMBuildExtractValue(cg.builder, val, 1, "split_y");
+                        const z = c.LLVMBuildExtractValue(cg.builder, val, 2, "split_z");
+
+                        const idx0 = c.LLVMConstInt(i32_ty, 0, 0);
+                        const idx1 = c.LLVMConstInt(i32_ty, 1, 0);
+                        var vec2 = c.LLVMGetUndef(vec2_ty);
+                        vec2 = c.LLVMBuildInsertElement(cg.builder, vec2, x, idx0, "split_v2_x");
+                        vec2 = c.LLVMBuildInsertElement(cg.builder, vec2, y, idx1, "split_v2_y");
+
+                        try final_args.append(cg.allocator, vec2);
+                        try final_args.append(cg.allocator, z);
+
+                        param_idx += 2;
+                        arg_idx += 1;
+                        continue;
+                    }
+                }
+
                 if (utils.isByValType(cg, tn)) {
                     processed_byval = true;
                     const struct_ty = try cg.getLLVMType(tn);
@@ -959,7 +999,6 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                         _ = c.LLVMBuildStore(@ptrCast(cg.builder), val, temp);
                         final_arg = temp;
                     }
-                    try byval_args.append(cg.allocator, .{ .idx = param_idx, .ty = @ptrCast(struct_ty) });
                 }
             }
 
@@ -1001,11 +1040,6 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
         c.LLVMBuildCall2(cg.builder, func_type, func, final_args.items.ptr, @intCast(final_args.items.len), "")
     else
         c.LLVMBuildCall2(cg.builder, func_type, func, null, 0, "");
-
-    for (byval_args.items) |info| {
-        const byval_attr = c.LLVMCreateTypeAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("byval", 5), info.ty);
-        c.LLVMAddAttributeAtIndex(call_inst, @intCast(info.idx + 1), byval_attr);
-    }
 
     if (uses_sret and sret_alloca != null) {
         if (cg.sret_functions.get(resolved_name)) |pt| {
