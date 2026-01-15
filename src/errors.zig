@@ -40,6 +40,11 @@ pub const ParseError = error{
     OutOfMemory,
 };
 
+pub const SemanticError = error{
+    SemanticFailed,
+    OutOfMemory,
+};
+
 pub const CodegenError = error{
     ModuleCreationFailed,
     BuilderCreationFailed,

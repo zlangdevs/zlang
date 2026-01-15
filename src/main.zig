@@ -4,6 +4,7 @@ const consts = @import("consts.zig");
 const errors = @import("errors.zig");
 const parser = @import("parser/parser.zig");
 const ast = @import("parser/ast.zig");
+const semantic = @import("semantic.zig");
 const codegen = @import("codegen/llvm.zig");
 const utils = @import("codegen/utils.zig");
 const diagnostics = @import("diagnostics.zig");
@@ -1149,6 +1150,16 @@ pub fn main() !u8 {
             stats.lines_of_code += line_count;
         }
     }
+
+    const semantic_file_path = if (ctx.input_files.items.len > 0) ctx.input_files.items[0] else "<input>";
+    semantic.analyzeProgram(allocator, ast_root.getRoot(), semantic_file_path) catch |err| {
+        const error_msg = switch (err) {
+            error.SemanticFailed => "Semantic analysis failed.",
+            error.OutOfMemory => "Out of memory during semantic analysis.",
+        };
+        std.debug.print("{s}\n", .{error_msg});
+        return 1;
+    };
 
     const codegen_start = std.time.nanoTimestamp();
     var code_generator = codegen.CodeGenerator.init(allocator) catch |err| {
