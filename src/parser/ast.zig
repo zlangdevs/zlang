@@ -327,6 +327,34 @@ pub const NodeData = union(NodeType) {
     cast: Cast,
 };
 
+pub const ArenaAST = struct {
+    arena: std.heap.ArenaAllocator,
+    root: *Node,
+
+    pub fn init(backing_allocator: std.mem.Allocator) ArenaAST {
+        return ArenaAST{
+            .arena = std.heap.ArenaAllocator.init(backing_allocator),
+            .root = undefined,
+        };
+    }
+
+    pub fn allocator(self: *ArenaAST) std.mem.Allocator {
+        return self.arena.allocator();
+    }
+
+    pub fn setRoot(self: *ArenaAST, root: *Node) void {
+        self.root = root;
+    }
+
+    pub fn getRoot(self: *const ArenaAST) *Node {
+        return self.root;
+    }
+
+    pub fn deinit(self: *ArenaAST) void {
+        self.arena.deinit();
+    }
+};
+
 pub const Node = struct {
     data: NodeData,
     allocator: std.mem.Allocator,
@@ -541,7 +569,7 @@ pub const Node = struct {
             },
             else => {},
         }
-        self.allocator.destroy(self);
+        _ = self.allocator;
     }
 };
 
