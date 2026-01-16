@@ -293,16 +293,16 @@ fn tryFindMoreErrors(alloc: std.mem.Allocator, file_path: []const u8, input: []c
     }
 }
 
-fn parseModuleFile(file_path: []const u8, alloc: std.mem.Allocator) !ModuleInfo {
+fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_alloc: std.mem.Allocator) !ModuleInfo {
     const input = read_file(file_path) catch |err| {
         std.debug.print("Error reading file {s}: {}\n", .{ file_path, err });
         return err;
     };
-    const ast_root = parser.parse(alloc, input) catch |err| {
+    const ast_root = parser.parse(arena, input) catch |err| {
         const parse_errors = parser.getParseErrors();
         if (parse_errors.len > 0) {
             for (parse_errors) |parse_err| {
-                diagnostics.printDiagnostic(alloc, .{
+                diagnostics.printDiagnostic(backing_alloc, .{
                     .file_path = file_path,
                     .line = parse_err.line,
                     .column = parse_err.column,
@@ -313,7 +313,7 @@ fn parseModuleFile(file_path: []const u8, alloc: std.mem.Allocator) !ModuleInfo 
         } else {
             const loc = parser.lastParseErrorLocation();
             if (loc) |l| {
-                diagnostics.printDiagnostic(alloc, .{
+                diagnostics.printDiagnostic(backing_alloc, .{
                     .file_path = file_path,
                     .line = l.line,
                     .column = l.column,
@@ -325,18 +325,21 @@ fn parseModuleFile(file_path: []const u8, alloc: std.mem.Allocator) !ModuleInfo 
             }
         }
         
-        tryFindMoreErrors(alloc, file_path, input);
+        tryFindMoreErrors(backing_alloc, file_path, input);
         return err;
     };
     if (ast_root) |root| {
-        var module = ModuleInfo.init(alloc, file_path, root);
+        var module = ModuleInfo.init(backing_alloc, file_path, root);
         collectUseStatements(root, &module.dependencies);
         return module;
     }
     return error.ParseFailed;
 }
 
-fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
+fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
+    var arena_ast = ast.ArenaAST.init(alloc);
+    const arena = arena_ast.allocator();
+    
     var modules = std.ArrayList(ModuleInfo){};
     defer {
         for (modules.items) |*module| {
@@ -363,7 +366,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
             continue;
         }
 
-        const module = try parseModuleFile(current_file, alloc);
+        const module = try parseModuleFile(current_file, arena, alloc);
         try loaded_modules.put(utils.dupe(u8, alloc, current_file), {});
 
         for (module.dependencies.items) |dep| {
@@ -373,6 +376,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
                 }
             } else {
                 std.debug.print("\x1b[31mError:\x1b[0m Cannot resolve module '\x1b[33m{s}\x1b[0m' imported from {s}\n", .{ dep, current_file });
+                arena_ast.deinit();
                 return error.ModuleNotFound;
             }
         }
@@ -386,7 +390,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
         },
     };
 
-    const merged_program = ast.Node.create(alloc, merged_program_data);
+    const merged_program = ast.Node.create(arena, merged_program_data);
     var module_name_map = std.StringHashMap([]const u8).init(alloc);
     defer module_name_map.deinit();
     var module_deps = std.StringHashMap(std.ArrayList([]const u8)).init(alloc);
@@ -426,20 +430,21 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !*ast.Node {
             .program => |prog| {
                 for (prog.functions.items) |func| {
                     if (func.data != .use_stmt) {
-                        try merged_program.data.program.functions.append(alloc, func);
+                        try merged_program.data.program.functions.append(arena, func);
                     }
                 }
                 for (prog.globals.items) |glob| {
-                    try merged_program.data.program.globals.append(alloc, glob);
+                    try merged_program.data.program.globals.append(arena, glob);
                 }
             },
             else => {
-                try merged_program.data.program.functions.append(alloc, module.ast);
+                try merged_program.data.program.functions.append(arena, module.ast);
             },
         }
     }
 
-    return merged_program;
+    arena_ast.setRoot(merged_program);
+    return arena_ast;
 }
 
 pub fn read_file(file_name: []const u8) anyerror![]const u8 {
@@ -1049,13 +1054,13 @@ pub fn main() !u8 {
         return compileBrainfuck(&ctx, allocator);
     }
 
-    const ast_root = parseMultiFile(&ctx, allocator) catch {
+    var ast_root = parseMultiFile(&ctx, allocator) catch {
         return 1;
     };
 
-    defer ast_root.destroy();
+    defer ast_root.deinit();
     if (ctx.show_ast) {
-        ast.printASTTree(ast_root);
+        ast.printASTTree(ast_root.getRoot());
     }
 
     var code_generator = codegen.CodeGenerator.init(allocator) catch |err| {
@@ -1073,8 +1078,10 @@ pub fn main() !u8 {
     {
         for (ctx.input_files.items) |input_file| {
             const input = read_file(input_file) catch continue;
-            const ast_root2 = parser.parse(allocator, input) catch continue;
-            if (ast_root2) |root| {
+            var temp_arena = ast.ArenaAST.init(allocator);
+            defer temp_arena.deinit();
+            const temp_root = parser.parse(temp_arena.allocator(), input) catch continue;
+            if (temp_root) |root| {
                 var deps = std.ArrayList([]const u8){};
                 defer deps.deinit(allocator);
                 collectUseStatements(root, &deps);
@@ -1099,7 +1106,7 @@ pub fn main() !u8 {
             }
         }
     }
-    code_generator.generateCode(ast_root) catch |err| {
+    code_generator.generateCode(ast_root.getRoot()) catch |err| {
         const error_msg = switch (err) {
             error.FunctionCreationFailed => "Failed to create function.",
             error.TypeMismatch => "Type mismatch in code generation.",
