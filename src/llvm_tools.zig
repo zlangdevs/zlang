@@ -28,7 +28,7 @@ pub const ToolPath = struct {
 pub fn findLLVMTool(allocator: std.mem.Allocator, tool: LLVMTool) !?ToolPath {
     const base_name = tool.baseName();
     const version_suffixes = [_][]const u8{
-        "-20", "-19", "-18", "-17", "-16", "-15", "-14", "-13", "-12", "-11", "",
+        "-20", "-19", "-18", "-17", "-16", "-15", "-14", "",
     };
     for (version_suffixes) |suffix| {
         const tool_name = if (suffix.len > 0)
