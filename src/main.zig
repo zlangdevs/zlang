@@ -41,6 +41,7 @@ pub const Context = struct {
     show_ast: bool,
     optimize: bool,
     verbose: bool,
+    quiet: bool,
     run_mode: bool,
     brainfuck_mode: bool,
     bf_cell_size: i32,
@@ -57,6 +58,7 @@ pub const Context = struct {
             .show_ast = false,
             .optimize = false,
             .verbose = false,
+            .quiet = false,
             .run_mode = false,
             .brainfuck_mode = false,
             .bf_cell_size = 8,
@@ -71,6 +73,7 @@ pub const Context = struct {
     }
 
     pub fn print(self: *const Context) void {
+        if (self.quiet) return;
         std.debug.print("========Compilation context=======\n", .{});
         std.debug.print("Input files: ", .{});
         for (self.input_files.items, 0..) |file, i| {
@@ -524,6 +527,8 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                 } else if (std.mem.eql(u8, flag, "-verbose")) {
                     context.show_ast = true;
                     context.verbose = true;
+                } else if (std.mem.eql(u8, flag, "-q") or std.mem.eql(u8, flag, "-quiet")) {
+                    context.quiet = true;
                 } else if (std.mem.eql(u8, flag, "-optimize")) {
                     context.optimize = true;
                 } else if (std.mem.eql(u8, flag, "-o")) {
@@ -645,9 +650,9 @@ fn compileBrainfuck(ctx: *Context, alloc: std.mem.Allocator) !u8 {
         return 1;
     };
 
-    if (ctx.verbose) {
-        std.debug.print("Brainfuck executable compiled to {s}\n", .{ctx.output});
-    }
+        if (ctx.verbose and !ctx.quiet) {
+            std.debug.print("Brainfuck executable compiled to {s}\n", .{ctx.output});
+        }
     return 0;
 }
 
@@ -1140,7 +1145,7 @@ pub fn main() !u8 {
             allocator.free(ir_file);
         }
 
-        if (ctx.verbose) {
+        if (ctx.verbose and !ctx.quiet) {
             std.debug.print("Running {s} with lli...\n", .{ir_file});
         }
 
@@ -1156,7 +1161,7 @@ pub fn main() !u8 {
             return 1;
         };
 
-        if (ctx.verbose) {
+        if (ctx.verbose and !ctx.quiet) {
             std.debug.print("Executable compiled to {s}\n", .{ctx.output});
         }
         return 0;
