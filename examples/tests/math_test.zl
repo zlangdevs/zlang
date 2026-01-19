@@ -24,7 +24,7 @@ fun main() >> i32 {
     @printf("f64 + f16 test (expected 3.3):%.1f\n", f64_+f16_);
     f64_ = f64_ + f1 + f16_ + 0.0 + 1.1 + 2.222222222;
     
-    ?? Modulus tests
+    ?? Modulo tests
     i32 mod_a = 2;
     @printf("(expected 0):%d\n", mod_a % 2);
     i32 mod_b = 44;
