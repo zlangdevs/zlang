@@ -36,6 +36,28 @@ const FunctionInfo = struct {
     has_varargs: bool,
 };
 
+const EnumValueInfo = struct {
+    name: []const u8,
+    expr: ?[]const u8,
+};
+
+const EnumInfo = struct {
+    name: []const u8,
+    values: std.ArrayList(EnumValueInfo),
+};
+
+const ConstType = enum {
+    i32,
+    f32,
+    bool,
+};
+
+const ConstInfo = struct {
+    name: []const u8,
+    expr: []const u8,
+    ty: ConstType,
+};
+
 const DeclNameInfo = struct {
     name: []const u8,
     array_len: ?usize,
@@ -142,6 +164,353 @@ fn removeExternCGuards(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
     }
 
     return out.toOwnedSlice(alloc);
+}
+
+fn stripCommentsOnly(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
+    var out = std.ArrayList(u8){};
+    defer out.deinit(alloc);
+
+    var i: usize = 0;
+    while (i < input.len) : (i += 1) {
+        if (i + 1 < input.len and input[i] == '/' and input[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < input.len and !(input[i] == '*' and input[i + 1] == '/')) : (i += 1) {}
+            if (i + 1 < input.len) i += 1;
+            continue;
+        }
+
+        if (i + 1 < input.len and input[i] == '/' and input[i + 1] == '/') {
+            while (i < input.len and input[i] != '\n') : (i += 1) {}
+            continue;
+        }
+
+        if (input[i] != '\r') {
+            try out.append(alloc, input[i]);
+        }
+    }
+
+    return out.toOwnedSlice(alloc);
+}
+
+fn isNumericToken(token: []const u8) bool {
+    if (token.len == 0) return false;
+    if (std.ascii.isDigit(token[0])) return true;
+    return token.len >= 2 and token[0] == '.' and std.ascii.isDigit(token[1]);
+}
+
+fn sanitizeNumericToken(alloc: std.mem.Allocator, token: []const u8) ![]const u8 {
+    var tmp = std.ArrayList(u8){};
+    defer tmp.deinit(alloc);
+
+    for (token) |ch| {
+        if (ch == '\'') continue;
+        try tmp.append(alloc, ch);
+    }
+
+    while (tmp.items.len > 0) {
+        const last = tmp.items[tmp.items.len - 1];
+        if (last == 'u' or last == 'U' or last == 'l' or last == 'L' or last == 'f' or last == 'F') {
+            _ = tmp.pop();
+            continue;
+        }
+        break;
+    }
+
+    if (tmp.items.len == 0) return error.InvalidCharacter;
+    return utils.dupe(u8, alloc, tmp.items);
+}
+
+fn isWrappedByParens(input: []const u8) bool {
+    if (input.len < 2) return false;
+    if (input[0] != '(' or input[input.len - 1] != ')') return false;
+
+    var depth: usize = 0;
+    for (input, 0..) |ch, i| {
+        if (ch == '(') depth += 1;
+        if (ch == ')') {
+            if (depth == 0) return false;
+            depth -= 1;
+            if (depth == 0 and i < input.len - 1) return false;
+        }
+    }
+
+    return depth == 0;
+}
+
+fn sanitizeConstantExpr(alloc: std.mem.Allocator, raw_expr: []const u8) !?[]const u8 {
+    var expr = trimSpaces(raw_expr);
+    if (expr.len == 0) return null;
+
+    if (std.mem.indexOfScalar(u8, expr, '"') != null or std.mem.indexOfScalar(u8, expr, '\'') != null) {
+        return null;
+    }
+
+    while (isWrappedByParens(expr)) {
+        expr = trimSpaces(expr[1 .. expr.len - 1]);
+    }
+
+    var out = std.ArrayList(u8){};
+    defer out.deinit(alloc);
+
+    var i: usize = 0;
+    while (i < expr.len) {
+        const ch = expr[i];
+        const starts_token = std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '.';
+
+        if (!starts_token) {
+            try out.append(alloc, ch);
+            i += 1;
+            continue;
+        }
+
+        const start = i;
+        while (i < expr.len) : (i += 1) {
+            const c = expr[i];
+            if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '.' or c == '\'')) {
+                break;
+            }
+        }
+
+        const token = expr[start..i];
+        if (isNumericToken(token)) {
+            const cleaned = try sanitizeNumericToken(alloc, token);
+            try out.appendSlice(alloc, cleaned);
+        } else {
+            try out.appendSlice(alloc, token);
+        }
+    }
+
+    const normalized = trimSpaces(out.items);
+    if (normalized.len == 0) return null;
+    return utils.dupe(u8, alloc, normalized);
+}
+
+fn inferConstType(expr: []const u8) ConstType {
+    if (std.mem.eql(u8, expr, "true") or std.mem.eql(u8, expr, "false")) return .bool;
+
+    var i: usize = 0;
+    while (i < expr.len) {
+        const ch = expr[i];
+        if (!(std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '.' or ch == '\'')) {
+            i += 1;
+            continue;
+        }
+
+        const start = i;
+        while (i < expr.len and (std.ascii.isAlphanumeric(expr[i]) or expr[i] == '_' or expr[i] == '.' or expr[i] == '\'')) : (i += 1) {}
+        const token = expr[start..i];
+        if (!isNumericToken(token)) continue;
+
+        if (std.mem.indexOfScalar(u8, token, '.')) |_| {
+            return .f32;
+        }
+
+        const is_hex = std.mem.startsWith(u8, token, "0x") or std.mem.startsWith(u8, token, "0X");
+        if (!is_hex and (std.mem.indexOfScalar(u8, token, 'e') != null or std.mem.indexOfScalar(u8, token, 'E') != null)) {
+            return .f32;
+        }
+    }
+
+    return .i32;
+}
+
+fn parseTypedefEnum(
+    alloc: std.mem.Allocator,
+    stmt: []const u8,
+    enums: *std.ArrayList(EnumInfo),
+    enum_value_names: *std.StringHashMap(void),
+) !void {
+    const trimmed = trimSpaces(stmt);
+    if (trimmed.len == 0) return;
+
+    var lowered = try asciiLower(alloc, trimmed);
+    lowered = try squeezeSpaces(alloc, lowered);
+    if (!std.mem.startsWith(u8, lowered, "typedef enum")) return;
+
+    const open_brace = std.mem.indexOfScalar(u8, trimmed, '{') orelse return;
+    const close_brace = std.mem.lastIndexOfScalar(u8, trimmed, '}') orelse return;
+    if (close_brace <= open_brace) return;
+
+    const enum_prefix = trimSpaces(trimmed[12..open_brace]);
+    const prefix_name = findIdentifierBeforeIndex(enum_prefix, enum_prefix.len);
+
+    const alias_part = trimSpaces(trimmed[close_brace + 1 ..]);
+    const alias_name = findIdentifierBeforeIndex(alias_part, alias_part.len);
+
+    const enum_name = alias_name orelse prefix_name orelse return;
+
+    var enum_info = EnumInfo{
+        .name = utils.dupe(u8, alloc, enum_name),
+        .values = std.ArrayList(EnumValueInfo){},
+    };
+
+    const body = trimmed[open_brace + 1 .. close_brace];
+    var entries = try splitTopLevel(alloc, body, ',');
+    defer entries.deinit(alloc);
+
+    for (entries.items) |entry_raw| {
+        const entry = trimSpaces(entry_raw);
+        if (entry.len == 0) continue;
+
+        if (std.mem.indexOfScalar(u8, entry, '=')) |eq_pos| {
+            const value_name = trimSpaces(entry[0..eq_pos]);
+            if (value_name.len == 0) continue;
+
+            const maybe_expr = try sanitizeConstantExpr(alloc, entry[eq_pos + 1 ..]);
+            try enum_info.values.append(alloc, .{
+                .name = utils.dupe(u8, alloc, value_name),
+                .expr = maybe_expr,
+            });
+            try enum_value_names.put(utils.dupe(u8, alloc, value_name), {});
+        } else {
+            const value_name = trimSpaces(entry);
+            if (value_name.len == 0) continue;
+
+            try enum_info.values.append(alloc, .{
+                .name = utils.dupe(u8, alloc, value_name),
+                .expr = null,
+            });
+            try enum_value_names.put(utils.dupe(u8, alloc, value_name), {});
+        }
+    }
+
+    if (enum_info.values.items.len == 0) {
+        enum_info.values.deinit(alloc);
+        return;
+    }
+
+    try enums.append(alloc, enum_info);
+}
+
+fn parseDefineConstants(alloc: std.mem.Allocator, source: []const u8, constants: *std.ArrayList(ConstInfo)) !void {
+    var current = std.ArrayList(u8){};
+    defer current.deinit(alloc);
+
+    var collecting = false;
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line_raw| {
+        const line = trimSpaces(line_raw);
+        if (!collecting) {
+            if (!std.mem.startsWith(u8, line, "#define ")) continue;
+            current.clearRetainingCapacity();
+            try current.appendSlice(alloc, line);
+            collecting = true;
+        } else {
+            if (line.len > 0) {
+                try current.append(alloc, ' ');
+                try current.appendSlice(alloc, line);
+            }
+        }
+
+        while (current.items.len > 0 and isSpace(current.items[current.items.len - 1])) {
+            _ = current.pop();
+        }
+
+        if (current.items.len > 0 and current.items[current.items.len - 1] == '\\') {
+            _ = current.pop();
+            continue;
+        }
+
+        collecting = false;
+
+        const define_line = trimSpaces(current.items);
+        if (!std.mem.startsWith(u8, define_line, "#define ")) continue;
+
+        const rest = trimSpaces(define_line[8..]);
+        if (rest.len == 0) continue;
+
+        var pos: usize = 0;
+        while (pos < rest.len and isIdentChar(rest[pos])) : (pos += 1) {}
+        if (pos == 0) continue;
+
+        const name = rest[0..pos];
+        if (pos < rest.len and rest[pos] == '(') continue;
+
+        const value_raw = trimSpaces(rest[pos..]);
+        if (value_raw.len == 0) continue;
+
+        const sanitized = try sanitizeConstantExpr(alloc, value_raw) orelse continue;
+        if (std.mem.indexOf(u8, sanitized, "sizeof") != null) continue;
+        if (std.mem.indexOfScalar(u8, sanitized, ':') != null) continue;
+
+        try constants.append(alloc, .{
+            .name = utils.dupe(u8, alloc, name),
+            .expr = sanitized,
+            .ty = inferConstType(sanitized),
+        });
+    }
+}
+
+fn emitEnumDeclarations(writer: anytype, enums: []const EnumInfo) !void {
+    for (enums) |enum_info| {
+        try writer.print("enum {s} {{\n", .{enum_info.name});
+        for (enum_info.values.items) |value| {
+            if (value.expr) |expr| {
+                try writer.print("    {s} = {s},\n", .{ value.name, expr });
+            } else {
+                try writer.print("    {s},\n", .{value.name});
+            }
+        }
+        try writer.writeAll("}\n\n");
+    }
+}
+
+fn isIdentifierStart(ch: u8) bool {
+    return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_';
+}
+
+fn isConstExprResolvable(expr: []const u8, known_symbols: *const std.StringHashMap(void)) bool {
+    var i: usize = 0;
+    while (i < expr.len) {
+        const ch = expr[i];
+        if (!(std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '.' or ch == '\'')) {
+            i += 1;
+            continue;
+        }
+
+        const start = i;
+        while (i < expr.len and (std.ascii.isAlphanumeric(expr[i]) or expr[i] == '_' or expr[i] == '.' or expr[i] == '\'')) : (i += 1) {}
+        const token = expr[start..i];
+
+        if (isNumericToken(token)) continue;
+        if (!isIdentifierStart(token[0])) continue;
+
+        const ident = token;
+
+        if (std.mem.eql(u8, ident, "true") or std.mem.eql(u8, ident, "false")) {
+            continue;
+        }
+        if (!known_symbols.contains(ident)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+fn constTypeName(ty: ConstType) []const u8 {
+    return switch (ty) {
+        .i32 => "i32",
+        .f32 => "f32",
+        .bool => "bool",
+    };
+}
+
+fn emitConstants(writer: anytype, constants: []const ConstInfo, known_symbols: *std.StringHashMap(void), emitted_names: *std.StringHashMap(void)) !void {
+    var progress = true;
+    while (progress) {
+        progress = false;
+        for (constants) |constant| {
+            if (emitted_names.contains(constant.name)) continue;
+            if (known_symbols.contains(constant.name)) continue;
+            if (!isConstExprResolvable(constant.expr, known_symbols)) continue;
+
+            try writer.print("const {s} {s} = {s};\n", .{ constTypeName(constant.ty), constant.name, constant.expr });
+            try emitted_names.put(constant.name, {});
+            try known_symbols.put(constant.name, {});
+            progress = true;
+        }
+    }
 }
 
 fn splitTopLevel(alloc: std.mem.Allocator, input: []const u8, delimiter: u8) !std.ArrayList([]const u8) {
@@ -898,6 +1267,7 @@ pub fn generateFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out
     const a = arena.allocator();
 
     const header_src = try readFile(a, header_path);
+    const comments_only = try stripCommentsOnly(a, header_src);
     const cleaned = try stripCommentsAndPreproc(a, header_src);
     const normalized = try removeExternCGuards(a, cleaned);
 
@@ -907,13 +1277,28 @@ pub fn generateFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out
     var aliases = AliasMap.init(a);
     var structs = StructMap.init(a);
     var ordered_structs = std.ArrayList(*StructInfo){};
+    var enums = std.ArrayList(EnumInfo){};
+    var enum_value_names = std.StringHashMap(void).init(a);
+    var constants = std.ArrayList(ConstInfo){};
     var functions = std.ArrayList(FunctionInfo){};
 
     defer {
         aliases.deinit();
         structs.deinit();
         ordered_structs.deinit(a);
+        for (enums.items) |*enum_info| {
+            enum_info.values.deinit(a);
+        }
+        enums.deinit(a);
+        enum_value_names.deinit();
+        constants.deinit(a);
         functions.deinit(a);
+    }
+
+    try parseDefineConstants(a, comments_only, &constants);
+
+    for (statements.items) |stmt| {
+        try parseTypedefEnum(a, stmt, &enums, &enum_value_names);
     }
 
     for (statements.items) |stmt| {
@@ -942,9 +1327,16 @@ pub fn generateFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out
     defer output.deinit(a);
 
     const writer = output.writer(a);
-    try writer.print("// Auto-generated by zlang wrap from: {s}\n\n", .{header_path});
 
     try emitStructDeclarations(writer, ordered_structs.items);
+    try emitEnumDeclarations(writer, enums.items);
+
+    var emitted_const_names = std.StringHashMap(void).init(a);
+    defer emitted_const_names.deinit();
+    try emitConstants(writer, constants.items, &enum_value_names, &emitted_const_names);
+    if (emitted_const_names.count() > 0) {
+        try writer.writeAll("\n");
+    }
 
     for (functions.items) |fn_info| {
         if (!needsWrapper(fn_info)) continue;
