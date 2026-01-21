@@ -64,6 +64,7 @@ pub fn printHelp() void {
         \\  {s}-arch <arch>{s}  Specify target architecture (e.g., x86_64)
         \\  {s}-keepll{s}      Keep intermediate LLVM IR files
         \\  {s}-dast{s}        Dump Abstract Syntax Tree
+        \\  {s}-quite{s}       Disable output
         \\  {s}-verbose{s}     Enable verbose output
         \\  {s}-optimize{s}    Enable optimizations
         \\  {s}-c{s}           Compile to object file only
