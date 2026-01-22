@@ -177,6 +177,6 @@ Press Ctrl+C to exit
 
 ## Credits
 
-CHIP-8 was originally designed by Joseph Weisbecker in 1977 for the COSMAC VIP computer.
+[CHIP-8](https://en.wikipedia.org/wiki/CHIP-8) was originally designed by Joseph Weisbecker in 1977 for the COSMAC VIP computer.
 
 This emulator implements the standard CHIP-8 specification with all 35 original opcodes.
