@@ -1190,6 +1190,21 @@ fun add(a: i32, b: i32) >> i32 {
     return a + b;
 }
 ```
+LLVM IR:
+```llvm
+define i32 @add(i32 %0, i32 %1) {
+entry:
+  %ai32 = alloca i32, align 4
+  store i32 %0, ptr %ai32, align 4
+  %bi32 = alloca i32, align 4
+  store i32 %1, ptr %bi32, align 4
+  %load = load i32, ptr %ai32, align 4
+  %load1 = load i32, ptr %bi32, align 4
+  %add = add i32 %load, %load1
+  ret i32 %add
+}
+```
+
 | ZLang Type | LLVM Type |
 |------------|-----------|
 | `i8` | `i8` |
