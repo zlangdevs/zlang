@@ -407,7 +407,7 @@ fun main() >> i32 {
     u16 y = 3;
     
     brainfuck {
-        ?cell_size 32?
+        ?cell_size 16?
         ?load x 0?
         ?load y 1?
         [->+<]        ?? Add x to y
