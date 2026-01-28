@@ -509,7 +509,7 @@ Requirements:
 ```bash
 git clone <repo>
 cd zlang
-zig build
+zig build -Doptimize=ReleaseFast
 ```
 
 ## 📝 Syntax Highlighting
