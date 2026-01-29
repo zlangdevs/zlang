@@ -1,0 +1,9 @@
+#flag -lm
+
+fun @sqrt(x: f64) >> f64;
+
+fun main() >> i32 {
+    f64 value = @sqrt(81.0);
+    @printf("(expected 9.0):%.1f\n", value);
+    return 0;
+}

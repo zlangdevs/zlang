@@ -17,6 +17,18 @@ fn skipSpaces(s: []const u8, i: *usize) void {
     while (i.* < s.len and isSpace(s[i.*])) : (i.* += 1) {}
 }
 
+pub const PreprocessOutput = struct {
+    text: []u8,
+    flags: std.ArrayList([]const u8),
+
+    pub fn deinitFlags(self: *PreprocessOutput, allocator: std.mem.Allocator) void {
+        for (self.flags.items) |flag| {
+            allocator.free(flag);
+        }
+        self.flags.deinit(allocator);
+    }
+};
+
 fn appendExpandedText(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
@@ -136,7 +148,62 @@ fn parseDefineLine(allocator: std.mem.Allocator, defs: *std.StringHashMap([]cons
     }
 }
 
-pub fn preprocess(allocator: std.mem.Allocator, input: []const u8) errors.PreprocessError![]u8 {
+fn parseFlagLine(allocator: std.mem.Allocator, flags: *std.ArrayList([]const u8), line: []const u8) errors.PreprocessError!void {
+    var i: usize = 0;
+    skipSpaces(line, &i);
+    if (i >= line.len or line[i] != '#') return errors.PreprocessError.InvalidDirective;
+    i += 1;
+    skipSpaces(line, &i);
+
+    const kw_start = i;
+    while (i < line.len and isIdentChar(line[i])) : (i += 1) {}
+    const kw = line[kw_start..i];
+    if (!std.mem.eql(u8, kw, "flag")) return errors.PreprocessError.InvalidDirective;
+
+    skipSpaces(line, &i);
+    const rest = std.mem.trimRight(u8, line[i..], " \t\r");
+    if (rest.len == 0) return errors.PreprocessError.InvalidDirective;
+
+    var it = std.mem.tokenizeAny(u8, rest, " \t");
+    while (it.next()) |token| {
+        const token_copy = allocator.dupe(u8, token) catch return errors.PreprocessError.OutOfMemory;
+        flags.append(allocator, token_copy) catch {
+            allocator.free(token_copy);
+            return errors.PreprocessError.OutOfMemory;
+        };
+    }
+}
+
+fn parseDirectiveLine(
+    allocator: std.mem.Allocator,
+    defs: *std.StringHashMap([]const u8),
+    flags: *std.ArrayList([]const u8),
+    line: []const u8,
+) errors.PreprocessError!void {
+    var i: usize = 0;
+    skipSpaces(line, &i);
+    if (i >= line.len or line[i] != '#') return errors.PreprocessError.InvalidDirective;
+    i += 1;
+    skipSpaces(line, &i);
+
+    const kw_start = i;
+    while (i < line.len and isIdentChar(line[i])) : (i += 1) {}
+    const kw = line[kw_start..i];
+
+    if (std.mem.eql(u8, kw, "define")) {
+        try parseDefineLine(allocator, defs, line);
+        return;
+    }
+
+    if (std.mem.eql(u8, kw, "flag")) {
+        try parseFlagLine(allocator, flags, line);
+        return;
+    }
+
+    return errors.PreprocessError.InvalidDirective;
+}
+
+pub fn preprocessWithFlags(allocator: std.mem.Allocator, input: []const u8) errors.PreprocessError!PreprocessOutput {
     var defs = std.StringHashMap([]const u8).init(allocator);
     defer {
         var it = defs.iterator();
@@ -150,6 +217,14 @@ pub fn preprocess(allocator: std.mem.Allocator, input: []const u8) errors.Prepro
     var out = std.ArrayList(u8){};
     errdefer out.deinit(allocator);
 
+    var flags = std.ArrayList([]const u8){};
+    errdefer {
+        for (flags.items) |flag| {
+            allocator.free(flag);
+        }
+        flags.deinit(allocator);
+    }
+
     var i: usize = 0;
     var at_line_start = true;
 
@@ -161,7 +236,7 @@ pub fn preprocess(allocator: std.mem.Allocator, input: []const u8) errors.Prepro
                 var line_end = j;
                 while (line_end < input.len and input[line_end] != '\n') : (line_end += 1) {}
                 const line = input[i..line_end];
-                try parseDefineLine(allocator, &defs, line);
+                try parseDirectiveLine(allocator, &defs, &flags, line);
                 if (line_end < input.len and input[line_end] == '\n') {
                     try out.append(allocator, '\n');
                     i = line_end + 1;
@@ -252,5 +327,14 @@ pub fn preprocess(allocator: std.mem.Allocator, input: []const u8) errors.Prepro
         at_line_start = ch == '\n';
     }
 
-    return out.toOwnedSlice(allocator);
+    return PreprocessOutput{
+        .text = try out.toOwnedSlice(allocator),
+        .flags = flags,
+    };
+}
+
+pub fn preprocess(allocator: std.mem.Allocator, input: []const u8) errors.PreprocessError![]u8 {
+    var result = try preprocessWithFlags(allocator, input);
+    result.deinitFlags(allocator);
+    return result.text;
 }

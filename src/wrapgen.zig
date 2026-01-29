@@ -513,6 +513,24 @@ fn emitConstants(writer: anytype, constants: []const ConstInfo, known_symbols: *
     }
 }
 
+fn emitKnownHeaderFlags(writer: anytype, alloc: std.mem.Allocator, header_path: []const u8) !void {
+    const base = std.fs.path.basename(header_path);
+    if (!std.mem.eql(u8, base, "raylib.h")) return;
+
+    const header_dir = std.fs.path.dirname(header_path) orelse ".";
+    const lib_dir = try std.fs.path.join(alloc, &[_][]const u8{ header_dir, "bin" });
+    defer alloc.free(lib_dir);
+
+    try writer.print("#flag -L{s}\n", .{lib_dir});
+    try writer.writeAll("#flag -lraylib\n");
+    try writer.writeAll("#flag -lGL\n");
+    try writer.writeAll("#flag -lm\n");
+    try writer.writeAll("#flag -lpthread\n");
+    try writer.writeAll("#flag -ldl\n");
+    try writer.writeAll("#flag -lrt\n");
+    try writer.writeAll("#flag -lX11\n\n");
+}
+
 fn splitTopLevel(alloc: std.mem.Allocator, input: []const u8, delimiter: u8) !std.ArrayList([]const u8) {
     var parts = std.ArrayList([]const u8){};
     var current = std.ArrayList(u8){};
@@ -1327,6 +1345,8 @@ pub fn generateFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out
     defer output.deinit(a);
 
     const writer = output.writer(a);
+
+    try emitKnownHeaderFlags(writer, a, header_path);
 
     try emitStructDeclarations(writer, ordered_structs.items);
     try emitEnumDeclarations(writer, enums.items);
