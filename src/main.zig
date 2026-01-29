@@ -19,18 +19,21 @@ const ModuleInfo = struct {
     path: []const u8,
     ast: *ast.Node,
     dependencies: std.ArrayList([]const u8),
+    linker_flags: std.ArrayList([]const u8),
 
     pub fn init(alloc: std.mem.Allocator, path: []const u8, ast_node: *ast.Node) ModuleInfo {
         return ModuleInfo{
             .path = utils.dupe(u8, alloc, path),
             .ast = ast_node,
             .dependencies = std.ArrayList([]const u8){},
+            .linker_flags = std.ArrayList([]const u8){},
         };
     }
 
     pub fn deinit(self: *ModuleInfo, alloc: std.mem.Allocator) void {
         alloc.free(self.path);
         self.dependencies.deinit(alloc);
+        self.linker_flags.deinit(alloc);
     }
 };
 
@@ -335,7 +338,7 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
         return err;
     };
 
-    const preprocessed = preprocessor.preprocess(arena, input) catch |err| {
+    var preprocessed = preprocessor.preprocessWithFlags(arena, input) catch |err| {
         const msg = switch (err) {
             errors.PreprocessError.InvalidDirective => "Invalid preprocessor directive",
             errors.PreprocessError.InvalidDefine => "Invalid #define",
@@ -351,8 +354,9 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
         });
         return err;
     };
+    defer preprocessed.deinitFlags(arena);
 
-    const ast_root = parser.parse(arena, preprocessed) catch |err| {
+    const ast_root = parser.parse(arena, preprocessed.text) catch |err| {
         const parse_errors = parser.getParseErrors();
         if (parse_errors.len > 0) {
             for (parse_errors) |parse_err| {
@@ -385,9 +389,95 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
     if (ast_root) |root| {
         var module = ModuleInfo.init(backing_alloc, file_path, root);
         collectUseStatements(root, &module.dependencies);
+        for (preprocessed.flags.items) |flag| {
+            try module.linker_flags.append(backing_alloc, utils.dupe(u8, backing_alloc, flag));
+        }
         return module;
     }
     return error.ParseFailed;
+}
+
+fn containsString(list: []const []const u8, value: []const u8) bool {
+    for (list) |item| {
+        if (std.mem.eql(u8, item, value)) return true;
+    }
+    return false;
+}
+
+fn resolvePathRelativeToModule(alloc: std.mem.Allocator, module_path: []const u8, raw_path: []const u8) ![]const u8 {
+    if (std.fs.path.isAbsolute(raw_path)) {
+        return utils.dupe(u8, alloc, raw_path);
+    }
+
+    const base_dir = std.fs.path.dirname(module_path) orelse ".";
+    const joined = try std.fs.path.join(alloc, &[_][]const u8{ base_dir, raw_path });
+    defer alloc.free(joined);
+    return utils.dupe(u8, alloc, joined);
+}
+
+fn appendModuleFlagsToContext(ctx: *Context, module: *const ModuleInfo, alloc: std.mem.Allocator) !void {
+    var i: usize = 0;
+    while (i < module.linker_flags.items.len) {
+        const flag = module.linker_flags.items[i];
+
+        if (std.mem.eql(u8, flag, "-link")) {
+            if (i + 1 < module.linker_flags.items.len) {
+                const raw_obj = module.linker_flags.items[i + 1];
+                const resolved_obj = try resolvePathRelativeToModule(alloc, module.path, raw_obj);
+                if (!containsString(ctx.link_objects.items, resolved_obj)) {
+                    try ctx.link_objects.append(alloc, resolved_obj);
+                } else {
+                    alloc.free(resolved_obj);
+                }
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        if (std.mem.eql(u8, flag, "-L")) {
+            if (i + 1 < module.linker_flags.items.len) {
+                const raw_path = module.linker_flags.items[i + 1];
+                const resolved_path = try resolvePathRelativeToModule(alloc, module.path, raw_path);
+                defer alloc.free(resolved_path);
+
+                const combined = try std.fmt.allocPrint(alloc, "-L{s}", .{resolved_path});
+                if (!containsString(ctx.extra_args.items, combined)) {
+                    try ctx.extra_args.append(alloc, combined);
+                } else {
+                    alloc.free(combined);
+                }
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, flag, "-L") and flag.len > 2) {
+            const raw_path = flag[2..];
+            const resolved_path = try resolvePathRelativeToModule(alloc, module.path, raw_path);
+            defer alloc.free(resolved_path);
+
+            const combined = try std.fmt.allocPrint(alloc, "-L{s}", .{resolved_path});
+            if (!containsString(ctx.extra_args.items, combined)) {
+                try ctx.extra_args.append(alloc, combined);
+            } else {
+                alloc.free(combined);
+            }
+            i += 1;
+            continue;
+        }
+
+        const flag_copy = utils.dupe(u8, alloc, flag);
+        if (!containsString(ctx.extra_args.items, flag_copy)) {
+            try ctx.extra_args.append(alloc, flag_copy);
+        } else {
+            alloc.free(flag_copy);
+        }
+        i += 1;
+    }
 }
 
 fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
@@ -421,6 +511,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
         }
 
         const module = try parseModuleFile(current_file, arena, alloc);
+        try appendModuleFlagsToContext(ctx, &module, alloc);
         try loaded_modules.put(utils.dupe(u8, alloc, current_file), {});
 
         for (module.dependencies.items) |dep| {
