@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const consts = @import("consts.zig");
 const errors = @import("errors.zig");
 const parser = @import("parser/parser.zig");
@@ -30,6 +31,32 @@ const ModuleInfo = struct {
     }
 };
 
+pub const CompilationStats = struct {
+    parse_time_ns: u64,
+    codegen_time_ns: u64,
+    link_time_ns: u64,
+    total_time_ns: u64,
+    lines_of_code: usize,
+    memory_peak_kb: usize,
+};
+
+fn printStats(stats: CompilationStats) void {
+    const parse_ms = @as(f64, @floatFromInt(stats.parse_time_ns)) / 1_000_000.0;
+    const codegen_ms = @as(f64, @floatFromInt(stats.codegen_time_ns)) / 1_000_000.0;
+    const link_ms = @as(f64, @floatFromInt(stats.link_time_ns)) / 1_000_000.0;
+    const total_ms = @as(f64, @floatFromInt(stats.total_time_ns)) / 1_000_000.0;
+
+    std.debug.print("Compilation Statistics:\n", .{});
+    std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
+    std.debug.print("  Parse time:      {d:.2} ms\n", .{parse_ms});
+    std.debug.print("  Codegen time:    {d:.2} ms\n", .{codegen_ms});
+    std.debug.print("  Link time:       {d:.2} ms\n", .{link_ms});
+    std.debug.print("  Total time:      {d:.2} ms\n", .{total_ms});
+    std.debug.print("  Lines of code:   {d}\n", .{stats.lines_of_code});
+    std.debug.print("  Memory peak:     {d} KB\n", .{stats.memory_peak_kb});
+    std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
+}
+
 pub const Context = struct {
     input_files: std.ArrayList([]const u8),
     link_objects: std.ArrayList([]const u8),
@@ -42,6 +69,7 @@ pub const Context = struct {
     optimize: bool,
     verbose: bool,
     quiet: bool,
+    stats: bool,
     run_mode: bool,
     brainfuck_mode: bool,
     bf_cell_size: i32,
@@ -59,6 +87,7 @@ pub const Context = struct {
             .optimize = false,
             .verbose = false,
             .quiet = false,
+            .stats = false,
             .run_mode = false,
             .brainfuck_mode = false,
             .bf_cell_size = 8,
@@ -529,6 +558,8 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     context.verbose = true;
                 } else if (std.mem.eql(u8, flag, "-q") or std.mem.eql(u8, flag, "-quiet")) {
                     context.quiet = true;
+                } else if (std.mem.eql(u8, flag, "-stats")) {
+                    context.stats = true;
                 } else if (std.mem.eql(u8, flag, "-optimize")) {
                     context.optimize = true;
                 } else if (std.mem.eql(u8, flag, "-o")) {
@@ -1045,6 +1076,16 @@ pub fn main() !u8 {
     };
     defer ctx.deinit(allocator);
 
+    const total_start = std.time.nanoTimestamp();
+    var stats = CompilationStats{
+        .parse_time_ns = 0,
+        .codegen_time_ns = 0,
+        .link_time_ns = 0,
+        .total_time_ns = 0,
+        .lines_of_code = 0,
+        .memory_peak_kb = 0,
+    };
+
     if (ctx.brainfuck_mode) {
         if (ctx.input_files.items.len == 0) {
             std.debug.print("Error: No input file specified for brainfuck mode\n", .{});
@@ -1056,18 +1097,40 @@ pub fn main() !u8 {
             std.debug.print("Error: Brainfuck mode requires input file with .b or .bf extension\n", .{});
             return 1;
         }
-        return compileBrainfuck(&ctx, allocator);
+        const result = compileBrainfuck(&ctx, allocator);
+        if (ctx.stats) {
+            stats.total_time_ns = @intCast(std.time.nanoTimestamp() - total_start);
+            std.debug.print("\n", .{});
+            printStats(stats);
+        }
+        return result;
     }
 
+    const parse_start = std.time.nanoTimestamp();
     var ast_root = parseMultiFile(&ctx, allocator) catch {
         return 1;
     };
+    const parse_end = std.time.nanoTimestamp();
+    stats.parse_time_ns = @intCast(parse_end - parse_start);
 
     defer ast_root.deinit();
     if (ctx.show_ast) {
         ast.printASTTree(ast_root.getRoot());
     }
 
+    if (ctx.stats) {
+        for (ctx.input_files.items) |input_file| {
+            const input = read_file(input_file) catch continue;
+            var line_count: usize = 0;
+            var it = std.mem.splitScalar(u8, input, '\n');
+            while (it.next()) |_| {
+                line_count += 1;
+            }
+            stats.lines_of_code += line_count;
+        }
+    }
+
+    const codegen_start = std.time.nanoTimestamp();
     var code_generator = codegen.CodeGenerator.init(allocator) catch |err| {
         const error_msg = switch (err) {
             error.ModuleCreationFailed => "Failed to create LLVM module.",
@@ -1126,6 +1189,8 @@ pub fn main() !u8 {
         std.debug.print("Error generating code: {s}\n", .{error_msg});
         return 1;
     };
+    const codegen_end = std.time.nanoTimestamp();
+    stats.codegen_time_ns = @intCast(codegen_end - codegen_start);
 
     if (ctx.run_mode) {
         if (!interpreter.checkLLIAvailable(allocator)) {
@@ -1154,16 +1219,52 @@ pub fn main() !u8 {
             return 1;
         };
 
+        if (ctx.stats) {
+            stats.total_time_ns = @intCast(std.time.nanoTimestamp() - total_start);
+            std.debug.print("\n", .{});
+            printStats(stats);
+        }
         return exit_code;
     } else {
+        const link_start = std.time.nanoTimestamp();
         code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items) catch |err| {
             std.debug.print("Error compiling to executable: {}\n", .{err});
             return 1;
         };
+        const link_end = std.time.nanoTimestamp();
+        stats.link_time_ns = @intCast(link_end - link_start);
+        stats.total_time_ns = @intCast(std.time.nanoTimestamp() - total_start);
 
         if (ctx.verbose and !ctx.quiet) {
             std.debug.print("Executable compiled to {s}\n", .{ctx.output});
         }
+
+        if (ctx.stats) {
+            if (builtin.os.tag == .linux) {
+                const stat_file = "/proc/self/status";
+                const file = std.fs.cwd().openFile(stat_file, .{}) catch null;
+                if (file) |f| {
+                    defer f.close();
+                    var buffer: [4096]u8 = undefined;
+                    const bytes_read = f.readAll(&buffer) catch 0;
+                    const content = buffer[0..bytes_read];
+                    var lines = std.mem.splitScalar(u8, content, '\n');
+                    while (lines.next()) |line| {
+                        if (std.mem.startsWith(u8, line, "VmPeak:")) {
+                            var it = std.mem.splitScalar(u8, line, ' ');
+                            _ = it.next();
+                            if (it.next()) |kb_str| {
+                                stats.memory_peak_kb = std.fmt.parseInt(usize, kb_str, 10) catch 0;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            std.debug.print("\n", .{});
+            printStats(stats);
+        }
+
         return 0;
     }
 }
