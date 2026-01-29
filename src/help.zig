@@ -64,19 +64,13 @@ pub fn printHelp() void {
         \\  {s}-arch <arch>{s}  Specify target architecture (e.g., x86_64)
         \\  {s}-keepll{s}      Keep intermediate LLVM IR files
         \\  {s}-dast{s}        Dump Abstract Syntax Tree
-        \\  {s}-quite{s}       Disable output
+        \\  {s}-q, -quiet{s}   Suppress non-error output
         \\  {s}-verbose{s}     Enable verbose output
+        \\  {s}-stats{s}       Show compilation statistics
         \\  {s}-optimize{s}    Enable optimizations
         \\  {s}-c{s}           Compile to object file only
         \\  {s}-l<lib>{s}      Link with library
         \\  {s}-L<path>{s}     Add library search path
-        \\
-        \\{s}Brainfuck Mode:{s}
-        \\  {s}-b{s}            Compile pure Brainfuck (.b/.bf files, 8-bit cells)
-        \\  {s}-b8{s}           Compile Brainfuck with 8-bit cells
-        \\  {s}-b16{s}          Compile Brainfuck with 16-bit cells
-        \\  {s}-b32{s}          Compile Brainfuck with 32-bit cells
-        \\  {s}-b64{s}          Compile Brainfuck with 64-bit cells
         \\
     , .{
         bold,   reset,
@@ -89,6 +83,19 @@ pub fn printHelp() void {
         yellow, reset,
         yellow, reset,
         yellow, reset,
+        yellow, reset,
+        yellow, reset,
+    });
+
+    std.debug.print(
+        \\{s}Brainfuck Mode:{s}
+        \\  {s}-b{s}            Compile pure Brainfuck (.b/.bf files, 8-bit cells)
+        \\  {s}-b8{s}           Compile Brainfuck with 8-bit cells
+        \\  {s}-b16{s}          Compile Brainfuck with 16-bit cells
+        \\  {s}-b32{s}          Compile Brainfuck with 32-bit cells
+        \\  {s}-b64{s}          Compile Brainfuck with 64-bit cells
+        \\
+    , .{
         bold,   reset,
         yellow, reset,
         yellow, reset,
