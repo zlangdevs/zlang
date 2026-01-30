@@ -143,7 +143,7 @@ Due to ZLang compiler issues discovered during development:
 
 ```
 ╔════════════════════════════════════════════════════════════════╗
-║           CHIP-8 Emulator - Full Implementation               ║
+║           CHIP-8 Emulator - Full Implementation                ║
 ╚════════════════════════════════════════════════════════════════╝
 
 CHIP-8 initialized
