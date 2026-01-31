@@ -435,7 +435,7 @@ zlang -b32 program.bf -o program   # 32-bit cells
 zlang -b64 program.bf -o program   # 64-bit cells
 ```
 
-The `-b` flags enable brainfuck-only mode, compiling `.b` or `.bf` files directly to native executables via LLVM. This gives you highly optimized Brainfuck programs with configurable cell sizes! The flag is also compatible with `-optimize` flag, applying extra optimizations. This can take some time, since compiler interprets parts of the code to precompute and optimize program.
+The `-b` flags enable brainfuck-only mode, compiling `.b` or `.bf` files directly to native executables via LLVM. This gives you highly optimized Brainfuck programs with configurable cell sizes! The flag is also compatible with `-optimize` flag, applying extra optimizations. This can take some time, since compiler interprets parts of the code to precompute and optimize program. Applying `-optimize` in brainfuck-only mode will make compiler try to optimize code runnig parts of it during comptime (compile-time PGO), so compilation may take more time.
 
 ### Numeric Literal Delimiters
 
