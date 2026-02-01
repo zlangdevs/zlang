@@ -19,6 +19,13 @@ pub const TokenizeError = error{
     OutOfMemory,
 };
 
+pub const PreprocessError = error{
+    InvalidDirective,
+    InvalidDefine,
+    ExpansionLimit,
+    OutOfMemory,
+};
+
 pub const SyntaxError = error{
     InvalidToken,
     UnexpectedCharacter,

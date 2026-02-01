@@ -151,7 +151,7 @@ pub fn generateArrayReassignment(self: *CodeGenerator, array_name: []const u8, v
             const array_type = var_info.type_ref;
             const array_length = c.LLVMGetArrayLength(array_type);
             if (str_len > array_length) {
-                self.reportErrorFmt("String literal too long: {d} characters exceeds array size of {d}", .{str_len, array_length}, "Increase array size or shorten the string");
+                self.reportErrorFmt("String literal too long: {d} characters exceeds array size of {d}", .{ str_len, array_length }, "Increase array size or shorten the string");
                 return errors.CodegenError.TypeMismatch;
             }
             const memcpy_func = try CodeGenerator.declareLibcFunction(self, "memcpy");
