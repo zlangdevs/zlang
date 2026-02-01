@@ -153,7 +153,7 @@ pub const CodeGenerator = struct {
     /// Convert an LLVM type to a human-readable string
     pub fn typeToString(self: *CodeGenerator, llvm_type: c.LLVMTypeRef) []const u8 {
         const type_kind = c.LLVMGetTypeKind(llvm_type);
-        
+
         switch (type_kind) {
             c.LLVMVoidTypeKind => return "void",
             c.LLVMHalfTypeKind => return "f16",
@@ -173,7 +173,7 @@ pub const CodeGenerator = struct {
                 const element_type = c.LLVMGetElementType(llvm_type);
                 const array_len = c.LLVMGetArrayLength(llvm_type);
                 const element_type_str = self.typeToString(element_type);
-                const result = std.fmt.allocPrint(self.allocator, "arr<{s}, {d}>", .{element_type_str, array_len}) catch "arr<?, ?>";
+                const result = std.fmt.allocPrint(self.allocator, "arr<{s}, {d}>", .{ element_type_str, array_len }) catch "arr<?, ?>";
                 if (type_kind == c.LLVMIntegerTypeKind or type_kind == c.LLVMPointerTypeKind) {
                     // Only free if we allocated it
                 } else {
@@ -193,7 +193,7 @@ pub const CodeGenerator = struct {
                 const element_type = c.LLVMGetElementType(llvm_type);
                 const vector_size = c.LLVMGetVectorSize(llvm_type);
                 const element_type_str = self.typeToString(element_type);
-                const result = std.fmt.allocPrint(self.allocator, "vec<{s}, {d}>", .{element_type_str, vector_size}) catch "vec<?, ?>";
+                const result = std.fmt.allocPrint(self.allocator, "vec<{s}, {d}>", .{ element_type_str, vector_size }) catch "vec<?, ?>";
                 if (c.LLVMGetTypeKind(element_type) != c.LLVMIntegerTypeKind and c.LLVMGetTypeKind(element_type) != c.LLVMPointerTypeKind) {
                     self.allocator.free(element_type_str);
                 }
@@ -208,34 +208,32 @@ pub const CodeGenerator = struct {
     pub fn reportTypeMismatch(self: *CodeGenerator, expected_type: c.LLVMTypeRef, actual_type: c.LLVMTypeRef, context: []const u8) void {
         const expected_str = self.typeToString(expected_type);
         const actual_str = self.typeToString(actual_type);
-        
-        const msg = std.fmt.allocPrint(
-            self.allocator,
-            "Type mismatch in {s}: expected '{s}' but got '{s}'",
-            .{context, expected_str, actual_str}
-        ) catch {
+
+        const msg = std.fmt.allocPrint(self.allocator, "Type mismatch in {s}: expected '{s}' but got '{s}'", .{ context, expected_str, actual_str }) catch {
             self.reportError("Type mismatch", null);
             return;
         };
         defer self.allocator.free(msg);
-        
+
         self.reportError(msg, "Consider using an explicit cast if this conversion is intended");
-        
+
         // Clean up type strings if they were allocated
         const expected_kind = c.LLVMGetTypeKind(expected_type);
         const actual_kind = c.LLVMGetTypeKind(actual_type);
-        
-        if (expected_kind == c.LLVMIntegerTypeKind or expected_kind == c.LLVMPointerTypeKind or 
-            expected_kind == c.LLVMVoidTypeKind or expected_kind == c.LLVMFloatTypeKind or 
-            expected_kind == c.LLVMDoubleTypeKind) {
+
+        if (expected_kind == c.LLVMIntegerTypeKind or expected_kind == c.LLVMPointerTypeKind or
+            expected_kind == c.LLVMVoidTypeKind or expected_kind == c.LLVMFloatTypeKind or
+            expected_kind == c.LLVMDoubleTypeKind)
+        {
             // These are static strings, don't free
         } else {
             self.allocator.free(expected_str);
         }
-        
-        if (actual_kind == c.LLVMIntegerTypeKind or actual_kind == c.LLVMPointerTypeKind or 
-            actual_kind == c.LLVMVoidTypeKind or actual_kind == c.LLVMFloatTypeKind or 
-            actual_kind == c.LLVMDoubleTypeKind) {
+
+        if (actual_kind == c.LLVMIntegerTypeKind or actual_kind == c.LLVMPointerTypeKind or
+            actual_kind == c.LLVMVoidTypeKind or actual_kind == c.LLVMFloatTypeKind or
+            actual_kind == c.LLVMDoubleTypeKind)
+        {
             // These are static strings, don't free
         } else {
             self.allocator.free(actual_str);
@@ -245,35 +243,28 @@ pub const CodeGenerator = struct {
     /// Report a type mismatch error with a custom expected type description
     pub fn reportTypeMismatchStr(self: *CodeGenerator, expected_desc: []const u8, actual_type: c.LLVMTypeRef, context: []const u8) void {
         const actual_str = self.typeToString(actual_type);
-        
-        const msg = std.fmt.allocPrint(
-            self.allocator,
-            "Type mismatch in {s}: expected {s} but got '{s}'",
-            .{context, expected_desc, actual_str}
-        ) catch {
+
+        const msg = std.fmt.allocPrint(self.allocator, "Type mismatch in {s}: expected {s} but got '{s}'", .{ context, expected_desc, actual_str }) catch {
             self.reportError("Type mismatch", null);
             return;
         };
         defer self.allocator.free(msg);
-        
+
         self.reportError(msg, "Check the types of the operands");
-        
+
         // Clean up type string if allocated
         const actual_kind = c.LLVMGetTypeKind(actual_type);
-        if (actual_kind != c.LLVMIntegerTypeKind and actual_kind != c.LLVMPointerTypeKind and 
-            actual_kind != c.LLVMVoidTypeKind and actual_kind != c.LLVMFloatTypeKind and 
-            actual_kind != c.LLVMDoubleTypeKind) {
+        if (actual_kind != c.LLVMIntegerTypeKind and actual_kind != c.LLVMPointerTypeKind and
+            actual_kind != c.LLVMVoidTypeKind and actual_kind != c.LLVMFloatTypeKind and
+            actual_kind != c.LLVMDoubleTypeKind)
+        {
             self.allocator.free(actual_str);
         }
     }
 
     /// Report a generic type mismatch error with just a context
     pub fn reportTypeMismatchGeneric(self: *CodeGenerator, context: []const u8, hint: ?[]const u8) void {
-        const msg = std.fmt.allocPrint(
-            self.allocator,
-            "Type mismatch in {s}",
-            .{context}
-        ) catch {
+        const msg = std.fmt.allocPrint(self.allocator, "Type mismatch in {s}", .{context}) catch {
             self.reportError("Type mismatch", hint);
             return;
         };

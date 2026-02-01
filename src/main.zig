@@ -9,6 +9,7 @@ const utils = @import("codegen/utils.zig");
 const diagnostics = @import("diagnostics.zig");
 const help = @import("help.zig");
 const interpreter = @import("interpreter.zig");
+const preprocessor = @import("preprocessor/preprocessor.zig");
 
 const allocator = std.heap.page_allocator;
 
@@ -286,10 +287,11 @@ fn tryFindMoreErrors(alloc: std.mem.Allocator, file_path: []const u8, input: []c
         if (std.mem.indexOf(u8, trimmed, "fun ") != null) {
             in_function = true;
         }
-        if (in_function and !std.mem.endsWith(u8, trimmed, ";") and 
-            !std.mem.endsWith(u8, trimmed, "{") and 
+        if (in_function and !std.mem.endsWith(u8, trimmed, ";") and
+            !std.mem.endsWith(u8, trimmed, "{") and
             !std.mem.endsWith(u8, trimmed, "}") and
-            trimmed.len > 0 and trimmed[0] != '}') {
+            trimmed.len > 0 and trimmed[0] != '}')
+        {
             var has_control_keyword = false;
             const control_keywords = [_][]const u8{ "if", "for", "while", "return", "break", "continue" };
             for (control_keywords) |kw| {
@@ -330,7 +332,25 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
         std.debug.print("Error reading file {s}: {}\n", .{ file_path, err });
         return err;
     };
-    const ast_root = parser.parse(arena, input) catch |err| {
+
+    const preprocessed = preprocessor.preprocess(arena, input) catch |err| {
+        const msg = switch (err) {
+            errors.PreprocessError.InvalidDirective => "Invalid preprocessor directive",
+            errors.PreprocessError.InvalidDefine => "Invalid #define",
+            errors.PreprocessError.ExpansionLimit => "Macro expansion limit reached",
+            errors.PreprocessError.OutOfMemory => "Out of memory during preprocessing",
+        };
+        diagnostics.printDiagnostic(backing_alloc, .{
+            .file_path = file_path,
+            .line = 1,
+            .column = 1,
+            .message = msg,
+            .severity = .Error,
+        });
+        return err;
+    };
+
+    const ast_root = parser.parse(arena, preprocessed) catch |err| {
         const parse_errors = parser.getParseErrors();
         if (parse_errors.len > 0) {
             for (parse_errors) |parse_err| {
@@ -356,7 +376,7 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
                 std.debug.print("Error parsing file {s}: {}\n", .{ file_path, err });
             }
         }
-        
+
         tryFindMoreErrors(backing_alloc, file_path, input);
         return err;
     };
@@ -371,7 +391,7 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
 fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
     var arena_ast = ast.ArenaAST.init(alloc);
     const arena = arena_ast.allocator();
-    
+
     var modules = std.ArrayList(ModuleInfo){};
     defer {
         for (modules.items) |*module| {
@@ -681,9 +701,9 @@ fn compileBrainfuck(ctx: *Context, alloc: std.mem.Allocator) !u8 {
         return 1;
     };
 
-        if (ctx.verbose and !ctx.quiet) {
-            std.debug.print("Brainfuck executable compiled to {s}\n", .{ctx.output});
-        }
+    if (ctx.verbose and !ctx.quiet) {
+        std.debug.print("Brainfuck executable compiled to {s}\n", .{ctx.output});
+    }
     return 0;
 }
 
@@ -1148,7 +1168,8 @@ pub fn main() !u8 {
             const input = read_file(input_file) catch continue;
             var temp_arena = ast.ArenaAST.init(allocator);
             defer temp_arena.deinit();
-            const temp_root = parser.parse(temp_arena.allocator(), input) catch continue;
+            const preprocessed = preprocessor.preprocess(temp_arena.allocator(), input) catch continue;
+            const temp_root = parser.parse(temp_arena.allocator(), preprocessed) catch continue;
             if (temp_root) |root| {
                 var deps = std.ArrayList([]const u8){};
                 defer deps.deinit(allocator);

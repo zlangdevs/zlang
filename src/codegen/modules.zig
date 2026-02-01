@@ -58,7 +58,7 @@ pub const ModuleManager = struct {
                     return true;
                 }
             }
-        }   
+        }
         return false;
     }
     pub fn getCurrentModulePath(self: *ModuleManager) []const u8 {

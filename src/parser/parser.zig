@@ -1107,7 +1107,7 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!
     global_allocator = allocator;
     ast_root = null;
     last_error_line = 0;
-    last_error_col = 0;  
+    last_error_col = 0;
     if (!error_list_initialized) {
         error_list = std.ArrayList(ParseErrorInfo){};
         error_list_initialized = true;
