@@ -1,0 +1,19 @@
+#define A 40
+#define B 2
+#define SUM A + B
+#define C A
+
+fun main() >> i32 {
+    i32 x = SUM;
+    @printf("expected 42):%d\n", x);
+
+    @printf("expected 40):%d\n", A);
+    @printf("expected 2):%d\n", B);
+
+    @printf("expected 40):%d\n", C);
+
+    i32 A1 = 5;
+    @printf("expected 5):%d\n", A1);
+
+    return 0;
+}
