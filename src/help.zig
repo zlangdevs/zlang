@@ -136,6 +136,7 @@ pub fn printHelpSyntax() void {
         \\  if x > 0 {{ ... }} else {{ ... }}
         \\  for i32 i = 0; i < 10; i++ {{ ... }}
         \\  for (x > 0) {{ ... }}
+        \\  for {{ ... }}
         \\
         \\{s}Pointers:{s}
         \\  ptr<i32> p = &x;
