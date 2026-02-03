@@ -18,7 +18,7 @@ Complete language reference and advanced usage guide.
 ## Compiler Usage
 
 ### Basic Compilation
-`
+
 ```bash
 zlang <input.zl>
 ```
