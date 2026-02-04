@@ -83,6 +83,8 @@ pub const LIBC_FUNCTIONS = std.StaticStringMap(LibcFunctionSignature).initCompti
     .{ "rand", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{} } },
     .{ "srand", LibcFunctionSignature{ .return_type = .void_type, .param_types = &[_]LibcType{.int_type} } },
     .{ "square", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{.int_type} } },
+    .{ "memmove", LibcFunctionSignature{ .return_type = .char_ptr_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type, .size_t_type } } },
+    .{ "memcmp", LibcFunctionSignature{ .return_type = .int_type, .param_types = &[_]LibcType{ .char_ptr_type, .char_ptr_type, .size_t_type } } },
 });
 
 pub fn libcTypeToLLVM(cg: *codegen.CodeGenerator, libc_type: LibcType) c.LLVMTypeRef {
