@@ -1210,6 +1210,26 @@ pub fn main() !u8 {
         std.debug.print("Error generating code: {s}\n", .{error_msg});
         return 1;
     };
+    
+    // Process pending template instantiations
+    while (code_generator.pending_template_instantiations.items.len > 0) {
+        const pending = code_generator.pending_template_instantiations.toOwnedSlice(allocator) catch unreachable;
+        defer {
+            for (pending) |*p| p.substitutions.deinit();
+            allocator.free(pending);
+        }
+        
+        for (pending) |inst| {
+            const old_subs = code_generator.template_substitutions;
+            code_generator.template_substitutions = inst.substitutions;
+            // Body generation for instantiated functions (declareFunction was already called)
+            code_generator.generateFunctionBody(inst.func_node) catch |err| {
+                  std.debug.print("Error generating template body: {}\n", .{err});
+                  return 1;
+            };
+            code_generator.template_substitutions = old_subs;
+        }
+    }
     const codegen_end = std.time.nanoTimestamp();
     stats.codegen_time_ns = @intCast(codegen_end - codegen_start);
 
