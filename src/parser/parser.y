@@ -139,7 +139,7 @@ void* ast_root = NULL;
 %type <node> array_initializer c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration union_declaration wrap_statement
 %type <node> enum_values enum_value_list struct_fields struct_field_list
 %type <node> struct_initializer struct_field_values struct_field_value_list initializer_expression ref_expression ref_base
-%type <string> type_name function_name string_literal complex_type_name module_path function_type_core function_type_param_list
+%type <string> type_name function_name string_literal complex_type_name module_path function_type_core function_type_param_list type_list template_params
 
 %start program
 
@@ -254,11 +254,30 @@ wrap_statement:
     }
 ;
 
-function:
-    TOKEN_FUN function_name TOKEN_LPAREN parameter_list TOKEN_RPAREN TOKEN_RSHIFT type_name TOKEN_LBRACE statement_list TOKEN_RBRACE {
-        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_function($2, $7, $4, $9);
+template_params:
+    /* empty */ { $$ = NULL; }
+  | TOKEN_LBRACKET type_list TOKEN_RBRACKET {
+        char* result = malloc(strlen($2) + 3);
+        sprintf(result, "[%s]", $2);
         free($2);
-        free($7);
+        $$ = result;
+    }
+;
+
+function:
+    TOKEN_FUN function_name template_params TOKEN_LPAREN parameter_list TOKEN_RPAREN TOKEN_RSHIFT type_name TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        char* return_type_str;
+        if ($3) {
+            return_type_str = malloc(strlen($3) + strlen($8) + 3);
+            sprintf(return_type_str, "%s>>%s", $3, $8);
+            free($3);
+        } else {
+            return_type_str = strdup($8);
+        }
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_function($2, return_type_str, $5, $10);
+        free($2);
+        free($8);
+        free(return_type_str);
     }
 ;
 
@@ -373,9 +392,37 @@ function_type_param_list:
     }
 ;
 
+type_list:
+    type_name { $$ = $1; }
+  | type_list TOKEN_COMMA type_name {
+        const char* lhs = $1;
+        const char* rhs = $3;
+        size_t len = strlen(lhs) + strlen(rhs) + 3; // +2 for ", " and +1 for null
+        char* result = malloc(len);
+        result[0] = '\0';
+        strcat(result, lhs);
+        strcat(result, ", ");
+        strcat(result, rhs);
+        free($1);
+        free($3);
+        $$ = result;
+    }
+;
+
  type_name:
     complex_type_name { $$ = $1; }
   | TOKEN_IDENTIFIER { $$ = strdup($1); }
+  | TOKEN_LBRACKET type_list TOKEN_RBRACKET {
+        const char* list = $2;
+        size_t len = strlen(list) + 3; // +2 for [] and +1 for null
+        char* result = malloc(len);
+        result[0] = '\0';
+        strcat(result, "[");
+        strcat(result, list);
+        strcat(result, "]");
+        free($2);
+        $$ = result;
+    }
  ;
 
 /* ========== STATEMENTS ========== */

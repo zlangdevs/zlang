@@ -1,0 +1,45 @@
+?? Function Overloading Test
+
+fun add(a: i32, b: i32) >> i32 {
+    return a + b;
+}
+
+fun add(a: f32, b: f32) >> f32 {
+    return a + b;
+}
+
+?? Template Test
+fun identity[T](val: T) >> T {
+    return val;
+}
+
+fun sub[T](a: T, b: T) >> T {
+    return a - b;
+}
+
+?? Template List Syntax Test
+fun process_pair[A, B](a: A, b: B) >> A {
+    return a;
+}
+
+fun main() >> i32 {
+    i32 res_i32 = add(10, 20);
+    @printf("(expected 30):%d\n", res_i32);
+
+    f32 res_f32 = add(10.5, 20.5);
+    @printf("(expected 31.000000):%f\n", res_f32);
+
+    i32 id_i = identity(100);
+    @printf("(expected 100):%d\n", id_i);
+
+    f32 id_f = identity(3.14);
+    @printf("(expected 3.140000):%f\n", id_f);
+
+    i32 s_res = sub(50, 20);
+    @printf("(expected 30):%d\n", s_res);
+
+    i32 p_res = process_pair(10, 20.5);
+    @printf("(expected 10):%d\n", p_res);
+
+    return 0;
+}

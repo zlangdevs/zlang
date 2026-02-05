@@ -17,6 +17,16 @@ pub const VariableInfo = struct {
     is_const: bool = false,
 };
 
+pub const FunctionOverload = struct {
+    func_node: ast.Function,
+    is_template: bool,
+};
+
+pub const TemplateInstantiation = struct {
+    func_node: ast.Function,
+    substitutions: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+};
+
 pub const LoopContext = struct {
     break_block: c.LLVMBasicBlockRef,
     continue_block: c.LLVMBasicBlockRef,

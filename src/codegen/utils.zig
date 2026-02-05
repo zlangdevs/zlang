@@ -218,6 +218,20 @@ pub fn getVarArgType(type_name: []const u8) ?[]const u8 {
 }
 
 pub fn getLLVMType(self: *codegen.CodeGenerator, type_name: []const u8) errors.CodegenError!c.LLVMTypeRef {
+    return getLLVMTypeInternal(self, type_name, true);
+}
+
+pub fn getLLVMTypeSilent(self: *codegen.CodeGenerator, type_name: []const u8) errors.CodegenError!c.LLVMTypeRef {
+    return getLLVMTypeInternal(self, type_name, false);
+}
+
+fn getLLVMTypeInternal(self: *codegen.CodeGenerator, type_name: []const u8, verbose: bool) errors.CodegenError!c.LLVMTypeRef {
+    if (self.template_substitutions) |subs| {
+        if (subs.get(type_name)) |substituted_name| {
+            return getLLVMTypeInternal(self, substituted_name, verbose);
+        }
+    }
+
     if (std.mem.startsWith(u8, type_name, "ptr<") and std.mem.endsWith(u8, type_name, ">")) {
         var inner_type_name = type_name[4 .. type_name.len - 1];
 
@@ -232,17 +246,17 @@ pub fn getLLVMType(self: *codegen.CodeGenerator, type_name: []const u8) errors.C
             while (it.next()) |arg_raw| {
                 const arg_trim = std.mem.trim(u8, arg_raw, " \t");
                 if (arg_trim.len == 0) continue;
-                const arg_ty = try self.getLLVMType(arg_trim);
+                const arg_ty = try getLLVMTypeInternal(self, arg_trim, verbose);
                 args_list.append(self.allocator, arg_ty) catch unreachable;
             }
-            const ret_ty = try self.getLLVMType(ret_part);
+            const ret_ty = try getLLVMTypeInternal(self, ret_part, verbose);
             const fn_ty = if (args_list.items.len > 0)
                 c.LLVMFunctionType(ret_ty, args_list.items.ptr, @intCast(args_list.items.len), 0)
             else
                 c.LLVMFunctionType(ret_ty, null, 0, 0);
             return c.LLVMPointerType(fn_ty, 0);
         };
-        const inner_type = try self.getLLVMType(inner_type_name);
+        const inner_type = try getLLVMTypeInternal(self, inner_type_name, verbose);
         return c.LLVMPointerType(inner_type, 0);
     } else if (std.mem.startsWith(u8, type_name, "arr<") and std.mem.endsWith(u8, type_name, ">")) {
         const inner = type_name[4 .. type_name.len - 1];
@@ -262,14 +276,16 @@ pub fn getLLVMType(self: *codegen.CodeGenerator, type_name: []const u8) errors.C
             const size_str = std.mem.trim(u8, size_part, " \t");
 
             if (std.fmt.parseInt(u32, size_str, 10)) |array_size| {
-                const element_type = try self.getLLVMType(element_type_name);
+                const element_type = try getLLVMTypeInternal(self, element_type_name, verbose);
                 return c.LLVMArrayType(element_type, array_size);
             } else |_| {}
         } else {}
-        if (self.current_line > 0) {
-            std.debug.print("Error at line {d}: Invalid array type syntax: {s}\n", .{ self.current_line, type_name });
-        } else {
-            std.debug.print("Error: Invalid array type syntax: {s}\n", .{type_name});
+        if (verbose) {
+            if (self.current_line > 0) {
+                std.debug.print("Error at line {d}: Invalid array type syntax: {s}\n", .{ self.current_line, type_name });
+            } else {
+                std.debug.print("Error: Invalid array type syntax: {s}\n", .{type_name});
+            }
         }
         return error.UnknownType;
     } else if (std.mem.startsWith(u8, type_name, "simd<") and std.mem.endsWith(u8, type_name, ">")) {
@@ -290,14 +306,16 @@ pub fn getLLVMType(self: *codegen.CodeGenerator, type_name: []const u8) errors.C
             const size_str = std.mem.trim(u8, size_part, " \t");
 
             if (std.fmt.parseInt(u32, size_str, 10)) |vector_size| {
-                const element_type = try self.getLLVMType(element_type_name);
+                const element_type = try getLLVMTypeInternal(self, element_type_name, verbose);
                 return c.LLVMVectorType(element_type, vector_size);
             } else |_| {}
         } else {}
-        if (self.current_line > 0) {
-            std.debug.print("Error at line {d}: Invalid SIMD type syntax: {s}\n", .{ self.current_line, type_name });
-        } else {
-            std.debug.print("Error: Invalid SIMD type syntax: {s}\n", .{type_name});
+        if (verbose) {
+            if (self.current_line > 0) {
+                std.debug.print("Error at line {d}: Invalid SIMD type syntax: {s}\n", .{ self.current_line, type_name });
+            } else {
+                std.debug.print("Error: Invalid SIMD type syntax: {s}\n", .{type_name});
+            }
         }
         return error.UnknownType;
     } else if (std.mem.eql(u8, type_name, "i8")) {
@@ -331,10 +349,12 @@ pub fn getLLVMType(self: *codegen.CodeGenerator, type_name: []const u8) errors.C
             return @ptrCast(struct_type);
         }
     }
-    if (self.current_line > 0) {
-        std.debug.print("Error at line {d}: Unknown type '{s}'\n", .{ self.current_line, type_name });
-    } else {
-        std.debug.print("Error: Unknown type '{s}'\n", .{type_name});
+    if (verbose) {
+        if (self.current_line > 0) {
+            std.debug.print("Error at line {d}: Unknown type '{s}'\n", .{ self.current_line, type_name });
+        } else {
+            std.debug.print("Error: Unknown type '{s}'\n", .{type_name});
+        }
     }
     return error.UnknownType;
 }

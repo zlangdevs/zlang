@@ -48,6 +48,9 @@ pub const CodeGenerator = struct {
     current_line: usize,
     current_column: usize,
     enable_comptime_bf_opt: bool,
+    template_substitutions: ?std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    function_overloads: std.HashMap([]const u8, std.ArrayList(structs.FunctionOverload), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    pending_template_instantiations: std.ArrayList(structs.TemplateInstantiation),
 
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
         _ = c.LLVMInitializeNativeTarget();
@@ -94,6 +97,9 @@ pub const CodeGenerator = struct {
             .current_line = 0,
             .current_column = 0,
             .enable_comptime_bf_opt = false,
+            .template_substitutions = null,
+            .function_overloads = std.HashMap([]const u8, std.ArrayList(structs.FunctionOverload), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .pending_template_instantiations = std.ArrayList(structs.TemplateInstantiation){},
         };
     }
 
@@ -117,6 +123,13 @@ pub const CodeGenerator = struct {
         }
         self.struct_fields.deinit();
         self.struct_declarations.deinit();
+
+        if (self.template_substitutions) |*map| map.deinit();
+        var overload_iter = self.function_overloads.iterator();
+        while (overload_iter.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.function_overloads.deinit();
 
         self.module_manager.deinit();
         for (self.variable_scopes.items) |*scope| {
@@ -2269,6 +2282,9 @@ pub const CodeGenerator = struct {
                 }
                 return errors.CodegenError.TypeMismatch;
             },
+            .function_call => |call| {
+                return try CodeGenerator.generateFunctionCall(self, call, expected_type);
+            },
             else => return self.generateExpression(expr),
         }
     }
@@ -2928,10 +2944,10 @@ pub const CodeGenerator = struct {
                     .is_libc = false,
                     .args = args,
                 };
-                return try CodeGenerator.generateFunctionCall(self, function_call);
+                return try CodeGenerator.generateFunctionCall(self, function_call, null);
             },
             .function_call => |call| {
-                return try CodeGenerator.generateFunctionCall(self, call);
+                return try CodeGenerator.generateFunctionCall(self, call, null);
             },
             .array_index => |arr_idx| {
                 return try array.generateArrayIndexExpression(self, arr_idx);
