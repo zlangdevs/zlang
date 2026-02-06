@@ -62,25 +62,29 @@ fn createGenericLibcFunction(cg: *llvm.CodeGenerator, func_name: []const u8) !c.
 }
 
 fn isTemplate(func: ast.Function) bool {
-    if (std.mem.startsWith(u8, func.return_type, ">>")) return true;
+    // Check if the return type has generic parameters like [T]>>T
     if (std.mem.startsWith(u8, func.return_type, "[")) return true;
     for (func.parameters.items) |param| {
-        if (std.mem.startsWith(u8, param.type_name, "[") and std.mem.endsWith(u8, param.type_name, "]")) return true;
+        // [T] is used for generic types in parameters
+        if (std.mem.indexOf(u8, param.type_name, "[") != null) return true;
     }
     return false;
 }
 
-
 fn getActualReturnType(raw: []const u8) []const u8 {
     if (std.mem.startsWith(u8, raw, "[")) {
         if (std.mem.indexOf(u8, raw, ">>")) |idx| {
-            return raw[idx+2..];
+            return raw[idx + 2 ..];
         }
+    }
+    // Remove >> if it's there at the start (though parser usually handles this, sometimes the raw string might have it)
+    if (std.mem.startsWith(u8, raw, ">>")) {
+        return raw[2..];
     }
     return raw;
 }
 
-fn getMangledName(allocator: std.mem.Allocator, name: []const u8, param_types: []c.LLVMTypeRef, cg: *llvm.CodeGenerator) ![]const u8 {
+pub fn getMangledName(allocator: std.mem.Allocator, name: []const u8, param_type_names: []const []const u8, _: *llvm.CodeGenerator) ![]const u8 {
     if (std.mem.eql(u8, name, "main")) return utils.dupe(u8, allocator, name);
 
     var mangled = std.ArrayList(u8){};
@@ -88,14 +92,13 @@ fn getMangledName(allocator: std.mem.Allocator, name: []const u8, param_types: [
     try mangled.appendSlice(allocator, name);
     try mangled.appendSlice(allocator, "__");
 
-    for (param_types, 0..) |ty, i| {
+    for (param_type_names, 0..) |type_name, i| {
         if (i > 0) try mangled.appendSlice(allocator, "_");
-        const type_name_raw = cg.typeToString(ty); 
-        for (type_name_raw) |char| {
-             switch (char) {
-                 ' ', '<', '>', ',', '*', '[', ']', '(', ')' => try mangled.append(allocator, '_'),
-                 else => try mangled.append(allocator, char),
-             }
+        for (type_name) |char| {
+            switch (char) {
+                ' ', '<', '>', ',', '*', '[', ']', '(', ')' => try mangled.append(allocator, '_'),
+                else => try mangled.append(allocator, char),
+            }
         }
     }
 
@@ -161,17 +164,29 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
     var raw_param_types = std.ArrayList(c.LLVMTypeRef){};
     defer raw_param_types.deinit(cg.allocator);
     for (func.parameters.items) |param| {
-        if (utils.isVarArgType(param.type_name)) continue; 
+        if (utils.isVarArgType(param.type_name)) continue;
         try raw_param_types.append(cg.allocator, try cg.getLLVMType(param.type_name));
     }
-    
-    final_func_name = try getMangledName(cg.allocator, func.name, raw_param_types.items, cg);
+
+    var type_names = std.ArrayList([]const u8){};
+    defer type_names.deinit(cg.allocator);
+    for (func.parameters.items) |p| {
+        if (utils.isVarArgType(p.type_name)) continue;
+        if (cg.template_substitutions) |subs| {
+            if (subs.get(p.type_name)) |resolved| {
+                try type_names.append(cg.allocator, resolved);
+                continue;
+            }
+        }
+        try type_names.append(cg.allocator, p.type_name);
+    }
+    final_func_name = try getMangledName(cg.allocator, func.name, type_names.items, cg);
 
     const func_name_z = utils.dupeZ(cg.allocator, final_func_name);
     defer cg.allocator.free(func_name_z);
-    
+
     if (cg.functions.get(final_func_name)) |_| {
-         return;
+        return;
     }
 
     const llvm_func = c.LLVMAddFunction(@ptrCast(cg.module), func_name_z.ptr, function_type);
@@ -218,13 +233,19 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
 
 pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.CodegenError!void {
     if (isTemplate(func) and cg.template_substitutions == null) return;
-    var raw_param_types = std.ArrayList(c.LLVMTypeRef){};
-    defer raw_param_types.deinit(cg.allocator);
+    var type_names = std.ArrayList([]const u8){};
+    defer type_names.deinit(cg.allocator);
     for (func.parameters.items) |param| {
-        if (utils.isVarArgType(param.type_name)) continue; 
-        try raw_param_types.append(cg.allocator, try cg.getLLVMType(param.type_name));
+        if (utils.isVarArgType(param.type_name)) continue;
+        if (cg.template_substitutions) |subs| {
+            if (subs.get(param.type_name)) |resolved| {
+                try type_names.append(cg.allocator, resolved);
+                continue;
+            }
+        }
+        try type_names.append(cg.allocator, param.type_name);
     }
-    const mangled_name = try getMangledName(cg.allocator, func.name, raw_param_types.items, cg);
+    const mangled_name = try getMangledName(cg.allocator, func.name, type_names.items, cg);
     defer if (!std.mem.eql(u8, func.name, "main")) cg.allocator.free(mangled_name);
     const llvm_func = cg.functions.get(mangled_name) orelse return errors.CodegenError.UndefinedFunction;
     cg.setCurrentModuleByFunction(mangled_name);
@@ -245,7 +266,7 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
     var param_idx: usize = 0;
     for (func.parameters.items) |param| {
         if (utils.isVarArgType(param.type_name)) {
-            if (cg.typed_vararg_info.get(func.name)) |typed_info| {
+            if (cg.typed_vararg_info.get(mangled_name)) |typed_info| {
                 const ptr_param = c.LLVMGetParam(@ptrCast(llvm_func), @intCast(param_idx));
                 const count_param = c.LLVMGetParam(@ptrCast(llvm_func), @intCast(param_idx + 1));
 
@@ -578,16 +599,16 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
         try arg_types.append(cg.allocator, c.LLVMTypeOf(val));
     }
 
+    var final_best_match: ?structs.FunctionOverload = null;
+    var final_best_substitutions: ?std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = null;
     var found_overload = false;
     if (cg.function_overloads.get(call.name)) |overloads| {
-        var best_match: ?structs.FunctionOverload = null;
         var best_score: i32 = -1;
-        var best_substitutions: ?std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = null;
 
         for (overloads.items) |candidate| {
             const param_count = candidate.func_node.parameters.items.len;
             var is_varargs = false;
-             if (candidate.func_node.parameters.items.len > 0) {
+            if (candidate.func_node.parameters.items.len > 0) {
                 const last = candidate.func_node.parameters.items[candidate.func_node.parameters.items.len - 1];
                 if (utils.isVarArgType(last.type_name)) {
                     is_varargs = true;
@@ -606,8 +627,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
 
             if (candidate.is_template and expected_return_type != null) {
                 const actual_ret_type_name = getActualReturnType(candidate.func_node.return_type);
-                if (utils.getLLVMTypeSilent(cg, actual_ret_type_name)) |_| {
-                } else |_| {
+                if (utils.getLLVMTypeSilent(cg, actual_ret_type_name)) |_| {} else |_| {
                     try substitutions.put(utils.dupe(u8, cg.allocator, actual_ret_type_name), expected_return_type.?);
                     score += 2;
                 }
@@ -628,7 +648,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                             score += 10;
                         } else {
                             mismatch = true;
-                             break;
+                            break;
                         }
                     } else {
                         var it = std.mem.tokenizeAny(u8, inner, ", ");
@@ -659,9 +679,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                             break;
                         }
                     }
-
-                } else if (std.mem.startsWith(u8, type_name, ">>")) {
-                } else {
+                } else if (std.mem.startsWith(u8, type_name, ">>")) {} else {
                     var resolved_param_ty: ?c.LLVMTypeRef = if (utils.getLLVMTypeSilent(cg, type_name)) |ty| ty else |_| null;
                     if (resolved_param_ty == null) {
                         if (substitutions.get(type_name)) |sub_name| {
@@ -676,22 +694,24 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                             const arg_kind = c.LLVMGetTypeKind(arg_type);
                             const param_kind = c.LLVMGetTypeKind(param_ty);
                             const arg_node = call.args.items[i];
-                            
+
                             const is_number_literal = arg_node.data == .number_literal;
                             const is_float_literal = arg_node.data == .float_literal;
-                            
+
                             if (is_float_literal and (param_kind == c.LLVMFloatTypeKind or param_kind == c.LLVMDoubleTypeKind or param_kind == c.LLVMHalfTypeKind)) {
                                 score += 4;
                             } else if (is_number_literal and param_kind == c.LLVMIntegerTypeKind) {
                                 score += 4;
                             } else if (is_number_literal and (param_kind == c.LLVMFloatTypeKind or param_kind == c.LLVMDoubleTypeKind)) {
                                 score += 3;
+                            } else if ((arg_kind == c.LLVMFloatTypeKind or arg_kind == c.LLVMHalfTypeKind) and param_kind == c.LLVMDoubleTypeKind) {
+                                score += 3;
                             } else if (arg_kind == c.LLVMDoubleTypeKind and param_kind == c.LLVMFloatTypeKind) {
-                                 score += 2;
+                                score += 2;
                             } else if (arg_kind == c.LLVMIntegerTypeKind and param_kind == c.LLVMIntegerTypeKind) {
                                 score += 2;
-                            } else if (arg_kind == c.LLVMIntegerTypeKind and param_kind == c.LLVMFloatTypeKind) {
-                                 score += 3;
+                            } else if (arg_kind == c.LLVMIntegerTypeKind and (param_kind == c.LLVMFloatTypeKind or param_kind == c.LLVMDoubleTypeKind)) {
+                                score += 3;
                             } else if ((arg_kind == c.LLVMFloatTypeKind or arg_kind == c.LLVMDoubleTypeKind) and param_kind == c.LLVMIntegerTypeKind) {
                                 mismatch = true;
                                 break;
@@ -702,12 +722,12 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                         }
                     } else {
                         if (candidate.is_template) {
-                             const concrete_type_name = utils.getTypeNameFromLLVMType(cg, arg_type);
-                             try substitutions.put(utils.dupe(u8, cg.allocator, type_name), concrete_type_name);
-                             score += 5;
+                            const concrete_type_name = utils.getTypeNameFromLLVMType(cg, arg_type);
+                            try substitutions.put(utils.dupe(u8, cg.allocator, type_name), concrete_type_name);
+                            score += 5;
                         } else {
-                             mismatch = true;
-                             break;
+                            mismatch = true;
+                            break;
                         }
                     }
                     try substitutions.put(param.name, utils.getTypeNameFromLLVMType(cg, arg_type));
@@ -717,9 +737,9 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
             if (!mismatch) {
                 if (score > best_score) {
                     best_score = score;
-                    best_match = candidate;
-                    if (best_substitutions) |*map| map.deinit();
-                    best_substitutions = substitutions;
+                    final_best_match = candidate;
+                    if (final_best_substitutions) |*map| map.deinit();
+                    final_best_substitutions = substitutions;
                 } else {
                     substitutions.deinit();
                 }
@@ -728,34 +748,38 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
             }
         }
 
-        if (best_match) |match| {
+        if (final_best_match) |match| {
             found_overload = true;
             if (match.is_template) {
                 const old_subs = cg.template_substitutions;
-                cg.template_substitutions = best_substitutions.?;
-                
-                var resolved_param_types = std.ArrayList(c.LLVMTypeRef){};
-                defer resolved_param_types.deinit(cg.allocator);
+                cg.template_substitutions = final_best_substitutions.?;
+
+                var resolved_param_type_names = std.ArrayList([]const u8){};
+                defer resolved_param_type_names.deinit(cg.allocator);
                 for (match.func_node.parameters.items) |p| {
                     if (utils.isVarArgType(p.type_name)) continue;
-                    try resolved_param_types.append(cg.allocator, try utils.getLLVMTypeSilent(cg, p.type_name));
+                    if (final_best_substitutions.?.get(p.type_name)) |resolved| {
+                        try resolved_param_type_names.append(cg.allocator, resolved);
+                    } else {
+                        try resolved_param_type_names.append(cg.allocator, p.type_name);
+                    }
                 }
-                
-                const mangled = try getMangledName(cg.allocator, match.func_node.name, resolved_param_types.items, cg);
-                
+
+                const mangled = try getMangledName(cg.allocator, match.func_node.name, resolved_param_type_names.items, cg);
+
                 if (cg.functions.get(mangled)) |existing| {
                     func = existing;
                     resolved_name = mangled;
                     cg.template_substitutions = old_subs;
-                    if (best_substitutions) |*map| map.deinit();
+                    if (final_best_substitutions) |*map| map.deinit();
                 } else {
                     try cg.declareFunction(match.func_node);
                     try cg.pending_template_instantiations.append(cg.allocator, structs.TemplateInstantiation{
                         .func_node = match.func_node,
-                        .substitutions = best_substitutions.?,
+                        .substitutions = final_best_substitutions.?,
                     });
-                    
-                    best_substitutions = null;
+
+                    final_best_substitutions = null;
 
                     cg.template_substitutions = old_subs;
 
@@ -763,21 +787,22 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                     resolved_name = mangled;
                 }
             } else {
-                 var cand_param_types = std.ArrayList(c.LLVMTypeRef){};
-                 defer cand_param_types.deinit(cg.allocator);
-                 for(match.func_node.parameters.items) |p| {
-                     if(!utils.isVarArgType(p.type_name)) try cand_param_types.append(cg.allocator, try cg.getLLVMType(p.type_name));
-                 }
-                 const mangled = try getMangledName(cg.allocator, match.func_node.name, cand_param_types.items, cg);
-                 func = cg.functions.get(mangled) orelse return errors.CodegenError.UndefinedFunction;
-                 resolved_name = mangled;
-                 if (best_substitutions) |*map| map.deinit();
+                var cand_param_type_names = std.ArrayList([]const u8){};
+                defer cand_param_type_names.deinit(cg.allocator);
+                for (match.func_node.parameters.items) |p| {
+                    if (!utils.isVarArgType(p.type_name)) try cand_param_type_names.append(cg.allocator, p.type_name);
+                }
+                const mangled = try getMangledName(cg.allocator, match.func_node.name, cand_param_type_names.items, cg);
+                func = cg.functions.get(mangled) orelse return errors.CodegenError.UndefinedFunction;
+                resolved_name = mangled;
+                if (final_best_substitutions) |*map| map.deinit();
             }
         } else {
-             if (best_substitutions) |*map| map.deinit();
+            if (final_best_substitutions) |*map| map.deinit();
         }
     }
 
+    var func_type_set: ?c.LLVMTypeRef = null;
     if (!found_overload) {
         resolved_name = call.name;
         if (call.is_libc) {
@@ -785,14 +810,14 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
             var func_iter = c.LLVMGetFirstFunction(cg.module);
             while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
                 if (c.LLVMGetValueName(func_iter)) |name_ptr| {
-                     if (std.mem.eql(u8, std.mem.span(name_ptr), call.name)) {
+                    if (std.mem.eql(u8, std.mem.span(name_ptr), call.name)) {
                         func = func_iter;
                         found_ext = true;
                         break;
-                     }
+                    }
                 }
             }
-             if (!found_ext) {
+            if (!found_ext) {
                 if (utils.LIBC_FUNCTIONS.get(call.name)) |sig| {
                     func = try createFunctionFromSignature(cg, call.name, sig);
                 } else {
@@ -800,70 +825,192 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                 }
             }
         } else {
-              if (cg.functions.get(call.name)) |declared_func| {
-                  func = declared_func;
-              } else {
-                  return errors.CodegenError.UndefinedFunction;
-              }
+            if (cg.functions.get(call.name)) |declared_func| {
+                func = declared_func;
+            } else if (llvm.CodeGenerator.getVariable(cg, call.name)) |var_info| {
+                func = c.LLVMBuildLoad2(cg.builder, var_info.type_ref, var_info.value, "load_func_ptr");
+                if (std.mem.startsWith(u8, var_info.type_name, "ptr<") and std.mem.endsWith(u8, var_info.type_name, ">")) {
+                    const sig = var_info.type_name[4 .. var_info.type_name.len - 1];
+                    func_type_set = try utils.getLLVMFunctionType(cg, sig);
+                } else {
+                    return errors.CodegenError.UndefinedFunction;
+                }
+            } else {
+                if (cg.function_overloads.get(call.name)) |overloads| {
+                    if (overloads.items.len == 1) {
+                        const match = overloads.items[0];
+                        if (!match.is_template) {
+                            var cand_param_type_names = std.ArrayList([]const u8){};
+                            defer cand_param_type_names.deinit(cg.allocator);
+                            for (match.func_node.parameters.items) |p| {
+                                if (!utils.isVarArgType(p.type_name)) try cand_param_type_names.append(cg.allocator, p.type_name);
+                            }
+                            const mangled = try getMangledName(cg.allocator, match.func_node.name, cand_param_type_names.items, cg);
+                            defer cg.allocator.free(mangled);
+                            if (cg.functions.get(mangled)) |f| {
+                                func = f;
+                                found_overload = true;
+                                final_best_match = match;
+                            }
+                        }
+                    }
+                }
+                if (!found_overload) return errors.CodegenError.UndefinedFunction;
+            }
         }
     }
-    const func_type = c.LLVMGlobalGetValueType(func);
+    const func_type = if (func_type_set) |ft| ft else c.LLVMGlobalGetValueType(func);
     const param_count_llvm = c.LLVMCountParamTypes(func_type);
     var func_param_types = std.ArrayList(c.LLVMTypeRef){};
     defer func_param_types.deinit(cg.allocator);
     try func_param_types.resize(cg.allocator, param_count_llvm);
-    if(param_count_llvm > 0) c.LLVMGetParamTypes(func_type, func_param_types.items.ptr);
+    if (param_count_llvm > 0) c.LLVMGetParamTypes(func_type, func_param_types.items.ptr);
     var final_args = std.ArrayList(c.LLVMValueRef){};
     defer final_args.deinit(cg.allocator);
     const uses_sret = cg.sret_functions.get(resolved_name) != null;
     var sret_alloca: ?c.LLVMValueRef = null;
     if (uses_sret) {
-         if (cg.sret_functions.get(resolved_name)) |pointee_type| {
-             sret_alloca = c.LLVMBuildAlloca(cg.builder, pointee_type, "sret_temp");
-             try final_args.append(cg.allocator, sret_alloca.?);
-         }
+        if (cg.sret_functions.get(resolved_name)) |pointee_type| {
+            sret_alloca = c.LLVMBuildAlloca(cg.builder, pointee_type, "sret_temp");
+            try final_args.append(cg.allocator, sret_alloca.?);
+        }
     }
     var arg_idx: usize = 0;
     var param_idx: usize = if (uses_sret) 1 else 0;
+
+    var sig_param_it: ?std.mem.TokenIterator(u8, .any) = null;
+    if (func_type_set != null) {
+        if (llvm.CodeGenerator.getVariable(cg, call.name)) |var_info| {
+            if (std.mem.startsWith(u8, var_info.type_name, "ptr<") and std.mem.endsWith(u8, var_info.type_name, ">")) {
+                const sig = var_info.type_name[4 .. var_info.type_name.len - 1];
+                if (std.mem.indexOfScalar(u8, sig, '(')) |lp| {
+                    if (std.mem.lastIndexOfScalar(u8, sig, ')')) |rp| {
+                        sig_param_it = std.mem.tokenizeAny(u8, sig[lp + 1 .. rp], ",");
+                    }
+                }
+            }
+        }
+    }
+
+    const ByValInfo = struct { idx: usize, ty: c.LLVMTypeRef };
+    var byval_args = std.ArrayList(ByValInfo){};
+    defer byval_args.deinit(cg.allocator);
+
     for (arg_values.items) |val| {
-         if (param_idx < func_param_types.items.len) {
-             const expected = func_param_types.items[param_idx];
-             const casted = try cg.castWithRules(val, expected, call.args.items[arg_idx]);
-             try final_args.append(cg.allocator, casted);
-             param_idx += 1;
-         } else {
-             const ty = c.LLVMTypeOf(val);
-             const kind = c.LLVMGetTypeKind(ty);
-             if (kind == c.LLVMFloatTypeKind) {
-                 const f64_type = c.LLVMDoubleTypeInContext(cg.context);
-                 const promoted = c.LLVMBuildFPExt(cg.builder, val, f64_type, "vararg_promotion");
-                 try final_args.append(cg.allocator, promoted);
-             } else if (kind == c.LLVMDoubleTypeKind) {
-                 try final_args.append(cg.allocator, val);
-             } else if (kind == c.LLVMIntegerTypeKind) {
-                 const bits = c.LLVMGetIntTypeWidth(ty);
-                 if (bits < 32) {
-                     const i32_type = c.LLVMInt32TypeInContext(cg.context);
-                     const promoted = c.LLVMBuildSExt(cg.builder, val, i32_type, "vararg_promotion");
-                     try final_args.append(cg.allocator, promoted);
-                 } else {
-                     try final_args.append(cg.allocator, val);
-                 }
-             } else {
-                 try final_args.append(cg.allocator, val);
-             }
-         }
-         arg_idx += 1;
+        var param_type_name: ?[]const u8 = null;
+        if (final_best_match) |match| {
+            if (arg_idx < match.func_node.parameters.items.len) {
+                param_type_name = match.func_node.parameters.items[arg_idx].type_name;
+            }
+        } else if (sig_param_it) |*it| {
+            if (it.next()) |tn_raw| {
+                param_type_name = std.mem.trim(u8, tn_raw, " \t");
+            }
+        }
+
+        if (param_idx < func_param_types.items.len) {
+            const expected = func_param_types.items[param_idx];
+            var final_arg = val;
+            var processed_byval = false;
+
+            if (param_type_name) |tn| {
+                if (utils.getVarArgType(tn)) |et| {
+                    const elem_ty = try cg.getLLVMType(et);
+                    const bundle_count = arg_values.items.len - arg_idx;
+                    const array_ty = c.LLVMArrayType(elem_ty, @intCast(bundle_count));
+                    const array_alloca = c.LLVMBuildAlloca(@ptrCast(cg.builder), array_ty, "typed_vararg_array");
+
+                    for (arg_idx..arg_values.items.len) |i| {
+                        const arg_val = arg_values.items[i];
+                        const casted = try cg.castWithRules(arg_val, elem_ty, call.args.items[i]);
+                        var elem_indices = [_]c.LLVMValueRef{
+                            c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0),
+                            c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), @intCast(i - arg_idx), 0),
+                        };
+                        const elem_ptr = c.LLVMBuildGEP2(@ptrCast(cg.builder), array_ty, array_alloca, &elem_indices, 2, "vararg_elem_ptr");
+                        _ = c.LLVMBuildStore(@ptrCast(cg.builder), casted, elem_ptr);
+                    }
+
+                    var head_indices = [_]c.LLVMValueRef{
+                        c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0),
+                        c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0),
+                    };
+                    const ptr_to_array = c.LLVMBuildGEP2(@ptrCast(cg.builder), array_ty, array_alloca, &head_indices, 2, "vararg_ptr");
+
+                    try final_args.append(cg.allocator, ptr_to_array);
+                    try final_args.append(cg.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), @intCast(bundle_count), 0));
+                    break;
+                }
+
+                if (utils.isByValType(cg, tn)) {
+                    processed_byval = true;
+                    const struct_ty = try cg.getLLVMType(tn);
+                    if (call.args.items[arg_idx].data == .identifier) {
+                        const ident_name = call.args.items[arg_idx].data.identifier.name;
+                        if (llvm.CodeGenerator.getVariable(cg, ident_name)) |var_info| {
+                            final_arg = @ptrCast(var_info.value);
+                        } else {
+                            const temp = c.LLVMBuildAlloca(@ptrCast(cg.builder), @ptrCast(struct_ty), "byval_tmp");
+                            _ = c.LLVMBuildStore(@ptrCast(cg.builder), val, temp);
+                            final_arg = temp;
+                        }
+                    } else {
+                        const temp = c.LLVMBuildAlloca(@ptrCast(cg.builder), @ptrCast(struct_ty), "byval_tmp");
+                        _ = c.LLVMBuildStore(@ptrCast(cg.builder), val, temp);
+                        final_arg = temp;
+                    }
+                    try byval_args.append(cg.allocator, .{ .idx = param_idx, .ty = @ptrCast(struct_ty) });
+                }
+            }
+
+            if (!processed_byval) {
+                final_arg = try cg.castWithRules(val, expected, call.args.items[arg_idx]);
+            }
+            try final_args.append(cg.allocator, final_arg);
+            param_idx += 1;
+        } else {
+            const ty = c.LLVMTypeOf(val);
+            const kind = c.LLVMGetTypeKind(ty);
+            if (kind == c.LLVMFloatTypeKind) {
+                const f64_type = c.LLVMDoubleTypeInContext(cg.context);
+                const promoted = c.LLVMBuildFPExt(cg.builder, val, f64_type, "vararg_promotion");
+                try final_args.append(cg.allocator, promoted);
+            } else if (kind == c.LLVMDoubleTypeKind) {
+                try final_args.append(cg.allocator, val);
+            } else if (kind == c.LLVMIntegerTypeKind) {
+                const bits = c.LLVMGetIntTypeWidth(ty);
+                if (bits < 32) {
+                    const arg_node = call.args.items[arg_idx];
+                    const type_name = try cg.inferType(arg_node);
+                    const i32_type = c.LLVMInt32TypeInContext(cg.context);
+                    const promoted = if (utils.isUnsignedType(type_name))
+                        c.LLVMBuildZExt(cg.builder, val, i32_type, "vararg_promotion")
+                    else
+                        c.LLVMBuildSExt(cg.builder, val, i32_type, "vararg_promotion");
+                    try final_args.append(cg.allocator, promoted);
+                } else {
+                    try final_args.append(cg.allocator, val);
+                }
+            } else {
+                try final_args.append(cg.allocator, val);
+            }
+        }
+        arg_idx += 1;
     }
     const call_inst = if (final_args.items.len > 0)
         c.LLVMBuildCall2(cg.builder, func_type, func, final_args.items.ptr, @intCast(final_args.items.len), "")
     else
         c.LLVMBuildCall2(cg.builder, func_type, func, null, 0, "");
 
+    for (byval_args.items) |info| {
+        const byval_attr = c.LLVMCreateTypeAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("byval", 5), info.ty);
+        c.LLVMAddAttributeAtIndex(call_inst, @intCast(info.idx + 1), byval_attr);
+    }
+
     if (uses_sret and sret_alloca != null) {
-         if (cg.sret_functions.get(resolved_name)) |pt| {
-             return c.LLVMBuildLoad2(cg.builder, pt, sret_alloca.?, "sret_res");
-         }
+        if (cg.sret_functions.get(resolved_name)) |pt| {
+            return c.LLVMBuildLoad2(cg.builder, pt, sret_alloca.?, "sret_res");
+        }
     }
     return call_inst;
 }
@@ -907,4 +1054,3 @@ fn prepareArgumentForLibcCall(cg: *llvm.CodeGenerator, arg_value: c.LLVMValueRef
 
     return arg_value;
 }
-

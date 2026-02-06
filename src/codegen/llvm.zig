@@ -124,7 +124,6 @@ pub const CodeGenerator = struct {
         self.struct_fields.deinit();
         self.struct_declarations.deinit();
 
-        if (self.template_substitutions) |*map| map.deinit();
         var overload_iter = self.function_overloads.iterator();
         while (overload_iter.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
@@ -165,56 +164,7 @@ pub const CodeGenerator = struct {
 
     /// Convert an LLVM type to a human-readable string
     pub fn typeToString(self: *CodeGenerator, llvm_type: c.LLVMTypeRef) []const u8 {
-        const type_kind = c.LLVMGetTypeKind(llvm_type);
-
-        switch (type_kind) {
-            c.LLVMVoidTypeKind => return "void",
-            c.LLVMHalfTypeKind => return "f16",
-            c.LLVMFloatTypeKind => return "f32",
-            c.LLVMDoubleTypeKind => return "f64",
-            c.LLVMX86_FP80TypeKind => return "f80",
-            c.LLVMFP128TypeKind => return "f128",
-            c.LLVMPPC_FP128TypeKind => return "ppc_f128",
-            c.LLVMIntegerTypeKind => {
-                const bit_width = c.LLVMGetIntTypeWidth(llvm_type);
-                return std.fmt.allocPrint(self.allocator, "i{d}", .{bit_width}) catch "i?";
-            },
-            c.LLVMPointerTypeKind => {
-                return std.fmt.allocPrint(self.allocator, "ptr", .{}) catch "ptr";
-            },
-            c.LLVMArrayTypeKind => {
-                const element_type = c.LLVMGetElementType(llvm_type);
-                const array_len = c.LLVMGetArrayLength(llvm_type);
-                const element_type_str = self.typeToString(element_type);
-                const result = std.fmt.allocPrint(self.allocator, "arr<{s}, {d}>", .{ element_type_str, array_len }) catch "arr<?, ?>";
-                if (type_kind == c.LLVMIntegerTypeKind or type_kind == c.LLVMPointerTypeKind) {
-                    // Only free if we allocated it
-                } else {
-                    self.allocator.free(element_type_str);
-                }
-                return result;
-            },
-            c.LLVMStructTypeKind => {
-                // Try to get the struct name
-                if (self.getStructTypeName(llvm_type)) |name| {
-                    return name;
-                } else |_| {
-                    return std.fmt.allocPrint(self.allocator, "struct<anonymous>", .{}) catch "struct";
-                }
-            },
-            c.LLVMVectorTypeKind => {
-                const element_type = c.LLVMGetElementType(llvm_type);
-                const vector_size = c.LLVMGetVectorSize(llvm_type);
-                const element_type_str = self.typeToString(element_type);
-                const result = std.fmt.allocPrint(self.allocator, "vec<{s}, {d}>", .{ element_type_str, vector_size }) catch "vec<?, ?>";
-                if (c.LLVMGetTypeKind(element_type) != c.LLVMIntegerTypeKind and c.LLVMGetTypeKind(element_type) != c.LLVMPointerTypeKind) {
-                    self.allocator.free(element_type_str);
-                }
-                return result;
-            },
-            c.LLVMFunctionTypeKind => return "function",
-            else => return "unknown",
-        }
+        return self.getTypeNameFromLLVMType(llvm_type);
     }
 
     /// Report a type mismatch error with detailed type information
@@ -2124,6 +2074,21 @@ pub const CodeGenerator = struct {
                 if (self.functions.get(ident.name)) |declared_func| {
                     return declared_func;
                 }
+                if (self.function_overloads.get(ident.name)) |overloads| {
+                    if (overloads.items.len == 1) {
+                        const match = overloads.items[0];
+                        if (!match.is_template) {
+                            var cand_param_type_names = std.ArrayList([]const u8){};
+                            defer cand_param_type_names.deinit(self.allocator);
+                            for (match.func_node.parameters.items) |p| {
+                                if (!utils.isVarArgType(p.type_name)) try cand_param_type_names.append(self.allocator, p.type_name);
+                            }
+                            const mangled = try functions.getMangledName(self.allocator, match.func_node.name, cand_param_type_names.items, self);
+                            defer self.allocator.free(mangled);
+                            if (self.functions.get(mangled)) |f| return f;
+                        }
+                    }
+                }
                 return errors.CodegenError.UndefinedVariable;
             },
             .null_literal => {
@@ -2423,6 +2388,21 @@ pub const CodeGenerator = struct {
                 }
                 if (self.functions.get(ident.name)) |declared_func| {
                     return declared_func;
+                }
+                if (self.function_overloads.get(ident.name)) |overloads| {
+                    if (overloads.items.len == 1) {
+                        const match = overloads.items[0];
+                        if (!match.is_template) {
+                            var cand_param_type_names = std.ArrayList([]const u8){};
+                            defer cand_param_type_names.deinit(self.allocator);
+                            for (match.func_node.parameters.items) |p| {
+                                if (!utils.isVarArgType(p.type_name)) try cand_param_type_names.append(self.allocator, p.type_name);
+                            }
+                            const mangled = try functions.getMangledName(self.allocator, match.func_node.name, cand_param_type_names.items, self);
+                            defer self.allocator.free(mangled);
+                            if (self.functions.get(mangled)) |f| return f;
+                        }
+                    }
                 }
                 return errors.CodegenError.UndefinedVariable;
             },
