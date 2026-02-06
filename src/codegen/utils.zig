@@ -225,6 +225,47 @@ pub fn getLLVMTypeSilent(self: *codegen.CodeGenerator, type_name: []const u8) er
     return getLLVMTypeInternal(self, type_name, false);
 }
 
+pub fn getLLVMFunctionType(self: *codegen.CodeGenerator, sig: []const u8) errors.CodegenError!c.LLVMTypeRef {
+    const lp = std.mem.indexOfScalar(u8, sig, '(') orelse return errors.CodegenError.TypeMismatch;
+    const rp = std.mem.lastIndexOfScalar(u8, sig, ')') orelse return errors.CodegenError.TypeMismatch;
+
+    const ret_part = std.mem.trim(u8, sig[0..lp], " \t");
+    const args_part_full = sig[lp + 1 .. rp];
+    var args_list = std.ArrayList(c.LLVMTypeRef){};
+    defer args_list.deinit(self.allocator);
+    var it = std.mem.tokenizeAny(u8, args_part_full, ",");
+    var is_vararg_llvm: c.LLVMBool = 0;
+    while (it.next()) |arg_raw| {
+        const arg_trim = std.mem.trim(u8, arg_raw, " \t");
+        if (arg_trim.len == 0) continue;
+        if (isVarArgType(arg_trim)) {
+            if (getVarArgType(arg_trim)) |et| {
+                const elem_ty = try self.getLLVMType(et);
+                try args_list.append(self.allocator, c.LLVMPointerType(elem_ty, 0));
+                try args_list.append(self.allocator, c.LLVMInt32TypeInContext(self.context));
+            } else {
+                is_vararg_llvm = 1;
+            }
+            continue;
+        }
+        if (getLLVMTypeSilent(self, arg_trim)) |arg_ty| {
+            if (c.LLVMGetTypeKind(@ptrCast(arg_ty)) == c.LLVMStructTypeKind and shouldUseByVal(self, @ptrCast(arg_ty))) {
+                try args_list.append(self.allocator, c.LLVMPointerType(@ptrCast(arg_ty), 0));
+            } else {
+                try args_list.append(self.allocator, arg_ty);
+            }
+        } else |_| {
+            const void_ptr_type = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+            try args_list.append(self.allocator, void_ptr_type);
+        }
+    }
+    const ret_ty = try self.getLLVMType(ret_part);
+    return if (args_list.items.len > 0)
+        c.LLVMFunctionType(ret_ty, args_list.items.ptr, @intCast(args_list.items.len), is_vararg_llvm)
+    else
+        c.LLVMFunctionType(ret_ty, null, 0, is_vararg_llvm);
+}
+
 fn getLLVMTypeInternal(self: *codegen.CodeGenerator, type_name: []const u8, verbose: bool) errors.CodegenError!c.LLVMTypeRef {
     if (self.template_substitutions) |subs| {
         if (subs.get(type_name)) |substituted_name| {
@@ -237,27 +278,23 @@ fn getLLVMTypeInternal(self: *codegen.CodeGenerator, type_name: []const u8, verb
 
         inner_type_name = stripConst(inner_type_name);
 
-        if (std.mem.indexOfScalar(u8, inner_type_name, '(')) |lp| if (std.mem.lastIndexOfScalar(u8, inner_type_name, ')')) |rp| if (rp > lp) {
-            const ret_part = std.mem.trim(u8, inner_type_name[0..lp], " \t");
-            const args_part_full = inner_type_name[lp + 1 .. rp];
-            var args_list = std.ArrayList(c.LLVMTypeRef){};
-            defer args_list.deinit(self.allocator);
-            var it = std.mem.tokenizeAny(u8, args_part_full, ",");
-            while (it.next()) |arg_raw| {
-                const arg_trim = std.mem.trim(u8, arg_raw, " \t");
-                if (arg_trim.len == 0) continue;
-                const arg_ty = try getLLVMTypeInternal(self, arg_trim, verbose);
-                args_list.append(self.allocator, arg_ty) catch unreachable;
+        if (std.mem.indexOfScalar(u8, inner_type_name, '(')) |lp| {
+            if (std.mem.lastIndexOfScalar(u8, inner_type_name, ')')) |rp| {
+                if (rp > lp) {
+                    const fn_ty = try getLLVMFunctionType(self, inner_type_name);
+                    return c.LLVMPointerType(fn_ty, 0);
+                }
             }
-            const ret_ty = try getLLVMTypeInternal(self, ret_part, verbose);
-            const fn_ty = if (args_list.items.len > 0)
-                c.LLVMFunctionType(ret_ty, args_list.items.ptr, @intCast(args_list.items.len), 0)
-            else
-                c.LLVMFunctionType(ret_ty, null, 0, 0);
-            return c.LLVMPointerType(fn_ty, 0);
-        };
+        }
         const inner_type = try getLLVMTypeInternal(self, inner_type_name, verbose);
         return c.LLVMPointerType(inner_type, 0);
+    } else if (std.mem.indexOfScalar(u8, type_name, '(')) |lp| blk: {
+        if (std.mem.lastIndexOfScalar(u8, type_name, ')')) |rp| {
+            if (rp > lp) {
+                return try getLLVMFunctionType(self, type_name);
+            }
+        }
+        break :blk;
     } else if (std.mem.startsWith(u8, type_name, "arr<") and std.mem.endsWith(u8, type_name, ">")) {
         const inner = type_name[4 .. type_name.len - 1];
         var comma_pos: ?usize = null;
@@ -360,7 +397,7 @@ fn getLLVMTypeInternal(self: *codegen.CodeGenerator, type_name: []const u8, verb
 }
 
 pub fn isUnsignedType(type_name: []const u8) bool {
-    return std.mem.startsWith(u8, type_name, "u");
+    return std.mem.startsWith(u8, type_name, "u") or std.mem.eql(u8, type_name, "bool");
 }
 
 pub fn isFloatType(type_name: []const u8) bool {
@@ -399,7 +436,6 @@ pub fn getAlignmentForType(self: *codegen.CodeGenerator, llvm_type: c.LLVMTypeRe
 }
 
 pub fn getTypeNameFromLLVMType(self: *codegen.CodeGenerator, llvm_type: c.LLVMTypeRef) []const u8 {
-    _ = self;
     const type_kind = c.LLVMGetTypeKind(llvm_type);
 
     return switch (type_kind) {
@@ -414,7 +450,7 @@ pub fn getTypeNameFromLLVMType(self: *codegen.CodeGenerator, llvm_type: c.LLVMTy
                     16 => "i16",
                     32 => "i32",
                     64 => "i64",
-                    else => "i32",
+                    else => std.fmt.allocPrint(self.allocator, "i{d}", .{width}) catch "i32",
                 };
             }
         },
@@ -422,9 +458,32 @@ pub fn getTypeNameFromLLVMType(self: *codegen.CodeGenerator, llvm_type: c.LLVMTy
         c.LLVMDoubleTypeKind => "f64",
         c.LLVMHalfTypeKind => "f16",
         c.LLVMPointerTypeKind => "ptr",
-        c.LLVMArrayTypeKind => "array",
-        c.LLVMVectorTypeKind => "simd",
-        c.LLVMStructTypeKind => "struct",
+        c.LLVMArrayTypeKind => {
+            const element_type = c.LLVMGetElementType(llvm_type);
+            const array_len = c.LLVMGetArrayLength(llvm_type);
+            const element_type_str = getTypeNameFromLLVMType(self, element_type);
+            return std.fmt.allocPrint(self.allocator, "arr<{s},{d}>", .{ element_type_str, array_len }) catch "array";
+        },
+        c.LLVMVectorTypeKind => {
+            const element_type = c.LLVMGetElementType(llvm_type);
+            const vector_size = c.LLVMGetVectorSize(llvm_type);
+            const element_type_str = getTypeNameFromLLVMType(self, element_type);
+            return std.fmt.allocPrint(self.allocator, "simd<{s},{d}>", .{ element_type_str, vector_size }) catch "simd";
+        },
+        c.LLVMStructTypeKind => {
+            const name_ptr = c.LLVMGetStructName(llvm_type);
+            if (name_ptr != null) {
+                return std.mem.sliceTo(name_ptr, 0);
+            }
+            // Fallback to manual lookup if unnamed
+            var it = self.struct_types.iterator();
+            while (it.next()) |entry| {
+                if (@intFromPtr(entry.value_ptr.*) == @intFromPtr(llvm_type)) {
+                    return entry.key_ptr.*;
+                }
+            }
+            return "struct";
+        },
         else => "unknown",
     };
 }
@@ -437,6 +496,11 @@ pub fn getStructSizeBytes(_: *codegen.CodeGenerator, struct_type: c.LLVMTypeRef)
 
 pub fn shouldUseByVal(cg: *codegen.CodeGenerator, struct_type: c.LLVMTypeRef) bool {
     return getStructSizeBytes(cg, struct_type) > 16;
+}
+
+pub fn isByValType(cg: *codegen.CodeGenerator, type_name: []const u8) bool {
+    const ty = getLLVMTypeSilent(cg, type_name) catch return false;
+    return c.LLVMGetTypeKind(@ptrCast(ty)) == c.LLVMStructTypeKind and shouldUseByVal(cg, @ptrCast(ty));
 }
 
 pub fn shouldSplitAsVector(cg: *codegen.CodeGenerator, struct_type: c.LLVMTypeRef) bool {
