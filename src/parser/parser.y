@@ -423,6 +423,14 @@ type_list:
         free($2);
         $$ = result;
     }
+  | TOKEN_LBRACKET TOKEN_RBRACKET type_name {
+        const char* inner = $3;
+        size_t len = strlen(inner) + 3; // +2 for [] and +1 for null
+        char* result = malloc(len);
+        sprintf(result, "[]%s", inner);
+        free($3);
+        $$ = result;
+    }
  ;
 
 /* ========== STATEMENTS ========== */

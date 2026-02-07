@@ -90,6 +90,17 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
                     var indices = [_]c.LLVMValueRef{index_expr};
                     const element_ptr = c.LLVMBuildGEP2(cg.builder, element_type, loaded_ptr, &indices[0], 1, "ptr_element_ptr");
                     break :blk ElementResult{ .element_ptr = element_ptr, .element_type = element_type };
+                } else if (var_type_kind == c.LLVMStructTypeKind and std.mem.startsWith(u8, current_type_name, "[]")) {
+                    const element_type = try utils.getLLVMType(cg, current_type_name[2..]);
+                    var ptr_indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0) };
+                    const ptr_in_struct = c.LLVMBuildGEP2(cg.builder, current_type, current_value, &ptr_indices[0], 2, "slice_ptr_in_struct");
+                    const arg_ptr_type = c.LLVMPointerType(element_type, 0);
+                    const loaded_ptr = c.LLVMBuildLoad2(cg.builder, arg_ptr_type, ptr_in_struct, "slice_ptr_val");
+                    
+                    var indices = [_]c.LLVMValueRef{index_expr};
+                    const element_ptr = c.LLVMBuildGEP2(cg.builder, element_type, loaded_ptr, &indices[0], 1, "slice_element_ptr");
+                    
+                    break :blk ElementResult{ .element_ptr = element_ptr, .element_type = element_type };
                 } else {
                     return errors.CodegenError.TypeMismatch;
                 }
@@ -321,6 +332,17 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
                     const loaded_ptr = c.LLVMBuildLoad2(cg.builder, current_type, current_value, "loaded_ptr");
                     var indices = [_]c.LLVMValueRef{index_expr};
                     const element_ptr = c.LLVMBuildGEP2(cg.builder, element_type, loaded_ptr, &indices[0], 1, "ptr_element_ptr");
+                    break :blk ElementResult{ .element_ptr = element_ptr, .element_type = element_type };
+                } else if (var_type_kind == c.LLVMStructTypeKind and std.mem.startsWith(u8, current_type_name, "[]")) {
+                    const element_type = try utils.getLLVMType(cg, current_type_name[2..]);
+                    var ptr_indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 0, 0) };
+                    const ptr_in_struct = c.LLVMBuildGEP2(cg.builder, current_type, current_value, &ptr_indices[0], 2, "slice_ptr_in_struct");
+                    const arg_ptr_type = c.LLVMPointerType(element_type, 0);
+                    const loaded_ptr = c.LLVMBuildLoad2(cg.builder, arg_ptr_type, ptr_in_struct, "slice_ptr_val");
+                    
+                    var indices = [_]c.LLVMValueRef{index_expr};
+                    const element_ptr = c.LLVMBuildGEP2(cg.builder, element_type, loaded_ptr, &indices[0], 1, "slice_element_ptr");
+                    
                     break :blk ElementResult{ .element_ptr = element_ptr, .element_type = element_type };
                 } else {
                     return errors.CodegenError.TypeMismatch;
