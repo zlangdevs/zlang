@@ -1204,7 +1204,7 @@ fn emitFunctionWrappers(writer: anytype, functions: []const FunctionInfo, used_h
         if (!wrap_needed) {
             try writer.print("wrap @{s}(", .{fn_info.name});
             try emitParamList(writer, fn_info.params.items, false, fn_info.has_varargs);
-            try writer.print(") >> {s};\n\n", .{fn_info.ret_z_type});
+            try writer.print(") >> {s};\n", .{fn_info.ret_z_type});
             continue;
         }
 
@@ -1345,7 +1345,6 @@ pub fn generateFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out
     defer output.deinit(a);
 
     const writer = output.writer(a);
-
     try emitKnownHeaderFlags(writer, a, header_path);
 
     try emitStructDeclarations(writer, ordered_structs.items);
