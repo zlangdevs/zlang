@@ -1,0 +1,38 @@
+
+
+
+fun print_slice(s: []i32) >> void {
+    @printf("Printing slice (len=%lld):\n", s.len);
+    i32 i = 0;
+    for {
+        if i >= s.len { break; }
+        @printf("  s[%d] = %d\n", i, s[i]);
+        i = i + 1;
+    }
+}
+
+fun main() >> i32 {
+    @printf("Slice Test\n");
+    
+    i32 size = 5;
+    ptr<i32> p = @malloc(size * 4) as ptr<i32>;
+    
+    ?? Test declaration and field access
+    []i32 s;
+    s.ptr = p;
+    s.len = size;
+    
+    ?? Test indexing assignment
+    i32 i = 0;
+    for {
+        if i >= s.len { break; }
+        s[i] = (i + 1) * 11;
+        i = i + 1;
+    }
+    
+    ?? Test passing to function
+    print_slice(s);
+    
+    @printf("Done.\n");
+    return 0;
+}
