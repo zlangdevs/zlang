@@ -1,0 +1,5 @@
+# Expected diagnostic fragments
+Unknown type 'mystery_type'
+Check for typos or missing declarations/imports
+mystery_type bad;
+^

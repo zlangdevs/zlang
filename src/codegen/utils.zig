@@ -297,7 +297,7 @@ fn getLLVMTypeInternal(self: *codegen.CodeGenerator, type_name: []const u8, verb
         break :blk;
     } else if (std.mem.startsWith(u8, type_name, "[]")) {
         const element_type_name = type_name[2..];
-        
+
         // Check if slice struct already exists
         if (self.struct_types.get(type_name)) |struct_type| {
             return @ptrCast(struct_type);
@@ -316,7 +316,7 @@ fn getLLVMTypeInternal(self: *codegen.CodeGenerator, type_name: []const u8, verb
         c.LLVMStructSetBody(struct_type, &element_types[0], 2, 0);
 
         try self.struct_types.put(type_name_dupe, @ptrCast(struct_type));
-        
+
         // Register dummy declaration so field access works
         var fields = std.ArrayList(ast.StructField){};
         const ptr_type_name = try std.fmt.allocPrint(self.allocator, "ptr<{s}>", .{element_type_name});
@@ -360,11 +360,7 @@ fn getLLVMTypeInternal(self: *codegen.CodeGenerator, type_name: []const u8, verb
             } else |_| {}
         } else {}
         if (verbose) {
-            if (self.current_line > 0) {
-                std.debug.print("Error at line {d}: Invalid array type syntax: {s}\n", .{ self.current_line, type_name });
-            } else {
-                std.debug.print("Error: Invalid array type syntax: {s}\n", .{type_name});
-            }
+            self.reportErrorFmt("Invalid array type syntax: {s}", .{type_name}, "Expected format: arr<element_type, size>");
         }
         return error.UnknownType;
     } else if (std.mem.startsWith(u8, type_name, "simd<") and std.mem.endsWith(u8, type_name, ">")) {
@@ -390,11 +386,7 @@ fn getLLVMTypeInternal(self: *codegen.CodeGenerator, type_name: []const u8, verb
             } else |_| {}
         } else {}
         if (verbose) {
-            if (self.current_line > 0) {
-                std.debug.print("Error at line {d}: Invalid SIMD type syntax: {s}\n", .{ self.current_line, type_name });
-            } else {
-                std.debug.print("Error: Invalid SIMD type syntax: {s}\n", .{type_name});
-            }
+            self.reportErrorFmt("Invalid SIMD type syntax: {s}", .{type_name}, "Expected format: simd<element_type, width>");
         }
         return error.UnknownType;
     } else if (std.mem.eql(u8, type_name, "i8")) {
@@ -429,11 +421,7 @@ fn getLLVMTypeInternal(self: *codegen.CodeGenerator, type_name: []const u8, verb
         }
     }
     if (verbose) {
-        if (self.current_line > 0) {
-            std.debug.print("Error at line {d}: Unknown type '{s}'\n", .{ self.current_line, type_name });
-        } else {
-            std.debug.print("Error: Unknown type '{s}'\n", .{type_name});
-        }
+        self.reportErrorFmt("Unknown type '{s}'", .{type_name}, "Check for typos or missing declarations/imports");
     }
     return error.UnknownType;
 }

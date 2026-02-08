@@ -1,0 +1,5 @@
+fun main() >> i32 {
+    i32 value = 7;
+    value.x = 1;
+    return 0;
+}

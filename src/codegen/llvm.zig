@@ -47,6 +47,7 @@ pub const CodeGenerator = struct {
     pending_gotos: std.ArrayList(structs.PendingGoto),
     current_line: usize,
     current_column: usize,
+    current_token_text: ?[]const u8,
     enable_comptime_bf_opt: bool,
     template_substitutions: ?std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     function_overloads: std.HashMap([]const u8, std.ArrayList(structs.FunctionOverload), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
@@ -96,6 +97,7 @@ pub const CodeGenerator = struct {
             .pending_gotos = std.ArrayList(structs.PendingGoto){},
             .current_line = 0,
             .current_column = 0,
+            .current_token_text = null,
             .enable_comptime_bf_opt = false,
             .template_substitutions = null,
             .function_overloads = std.HashMap([]const u8, std.ArrayList(structs.FunctionOverload), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
@@ -153,7 +155,46 @@ pub const CodeGenerator = struct {
             .message = message,
             .hint = hint,
             .severity = .Error,
+            .token_text = self.current_token_text,
         });
+    }
+
+    fn tokenTextForNode(node: *ast.Node) ?[]const u8 {
+        return switch (node.data) {
+            .identifier => |ident| ident.name,
+            .qualified_identifier => |qual_id| qual_id.field,
+            .var_decl => |decl| decl.name,
+            .function => |func| func.name,
+            .function_call => |call| call.name,
+            .method_call => |call| call.method_name,
+            .c_function_decl => |decl| decl.name,
+            .enum_decl => |decl| decl.name,
+            .struct_decl => |decl| decl.name,
+            .struct_initializer => |struct_init| struct_init.struct_name,
+            .use_stmt => |u| u.module_path,
+            .goto_stmt => |g| g.label,
+            .label_stmt => |l| l.label,
+            .number_literal => |lit| lit.value,
+            .float_literal => |lit| lit.value,
+            .string_literal => |lit| lit.value,
+            .assignment => |as| tokenTextForNode(as.target),
+            .compound_assignment => |as| tokenTextForNode(as.target),
+            .array_index => |idx| tokenTextForNode(idx.array),
+            .array_assignment => |as| tokenTextForNode(as.array),
+            .array_compound_assignment => |as| tokenTextForNode(as.array),
+            .simd_index => |idx| tokenTextForNode(idx.simd),
+            .simd_assignment => |as| tokenTextForNode(as.simd),
+            .simd_compound_assignment => |as| tokenTextForNode(as.simd),
+            .unary_op => |un| tokenTextForNode(un.operand),
+            .cast => |cast_expr| tokenTextForNode(cast_expr.expr),
+            else => null,
+        };
+    }
+
+    fn setCurrentNodeContext(self: *CodeGenerator, node: *ast.Node) void {
+        self.current_line = node.line;
+        self.current_column = node.column;
+        self.current_token_text = tokenTextForNode(node);
     }
 
     pub fn reportErrorFmt(self: *CodeGenerator, comptime fmt: []const u8, args: anytype, hint: ?[]const u8) void {
@@ -551,8 +592,7 @@ pub const CodeGenerator = struct {
     }
 
     pub fn generateStatement(self: *CodeGenerator, stmt: *ast.Node) errors.CodegenError!void {
-        self.current_line = stmt.line;
-        self.current_column = stmt.column;
+        self.setCurrentNodeContext(stmt);
         switch (stmt.data) {
             .assignment => |as| {
                 switch (as.target.data) {
@@ -1733,9 +1773,12 @@ pub const CodeGenerator = struct {
 
         if (value_node) |vn| {
             const old_col = self.current_column;
+            const old_token_text = self.current_token_text;
             if (vn.column > 0) self.current_column = vn.column;
+            self.current_token_text = tokenTextForNode(vn);
             self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
             self.current_column = old_col;
+            self.current_token_text = old_token_text;
         } else {
             self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
         }

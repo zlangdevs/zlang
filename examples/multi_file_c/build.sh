@@ -99,6 +99,10 @@ if [ -f "$OUTPUT_NAME" ]; then
     echo -e "${YELLOW}Testing executable...${NC}"
     echo -e "${YELLOW}Output:${NC}"
     ./$OUTPUT_NAME
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Error: Executable exited with failure${NC}"
+        exit 1
+    fi
     echo -e "${GREEN}✓ Executable ran successfully${NC}"
 fi
 

@@ -96,10 +96,10 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
                     const ptr_in_struct = c.LLVMBuildGEP2(cg.builder, current_type, current_value, &ptr_indices[0], 2, "slice_ptr_in_struct");
                     const arg_ptr_type = c.LLVMPointerType(element_type, 0);
                     const loaded_ptr = c.LLVMBuildLoad2(cg.builder, arg_ptr_type, ptr_in_struct, "slice_ptr_val");
-                    
+
                     var indices = [_]c.LLVMValueRef{index_expr};
                     const element_ptr = c.LLVMBuildGEP2(cg.builder, element_type, loaded_ptr, &indices[0], 1, "slice_element_ptr");
-                    
+
                     break :blk ElementResult{ .element_ptr = element_ptr, .element_type = element_type };
                 } else {
                     return errors.CodegenError.TypeMismatch;
@@ -160,19 +160,11 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
             }
 
             if (var_type_kind != c.LLVMStructTypeKind) {
-                if (cg.current_line > 0) {
-                    std.debug.print("Error at line {d}: Cannot access field on non-struct type. Type: {s}, Kind: {d}\n", .{ cg.current_line, current_type_name, var_type_kind });
-                } else {
-                    std.debug.print("Error: Cannot access field on non-struct type. Type: {s}, Kind: {d}\n", .{ current_type_name, var_type_kind });
-                }
+                cg.reportErrorFmt("Cannot access field on non-struct type '{s}'", .{current_type_name}, "Field access with '.' requires a struct or union value");
                 return errors.CodegenError.TypeMismatch;
             }
             const struct_type = cg.struct_types.get(current_type_name) orelse {
-                if (cg.current_line > 0) {
-                    std.debug.print("Error at line {d}: Unknown struct type '{s}'\n", .{ cg.current_line, current_type_name });
-                } else {
-                    std.debug.print("Error: Unknown struct type '{s}'\n", .{current_type_name});
-                }
+                cg.reportErrorFmt("Unknown struct type '{s}'", .{current_type_name}, "Struct type must be declared before use");
                 return errors.CodegenError.TypeMismatch;
             };
             const field_map = cg.struct_fields.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
@@ -215,11 +207,7 @@ pub fn generateStructFieldAssignment(cg: *llvm.CodeGenerator, struct_name: []con
     const struct_var_info = variables.getVariable(cg, struct_name) orelse return errors.CodegenError.UndefinedVariable;
 
     if (struct_var_info.is_const) {
-        if (cg.current_line > 0) {
-            std.debug.print("Error at line {d}: Cannot modify field of const variable '{s}'\n", .{ cg.current_line, struct_name });
-        } else {
-            std.debug.print("Error: Cannot modify field of const variable '{s}'\n", .{struct_name});
-        }
+        cg.reportErrorFmt("Cannot modify field of const variable '{s}'", .{struct_name}, "Variable is declared as const");
         return errors.CodegenError.ConstReassignment;
     }
 
@@ -339,10 +327,10 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
                     const ptr_in_struct = c.LLVMBuildGEP2(cg.builder, current_type, current_value, &ptr_indices[0], 2, "slice_ptr_in_struct");
                     const arg_ptr_type = c.LLVMPointerType(element_type, 0);
                     const loaded_ptr = c.LLVMBuildLoad2(cg.builder, arg_ptr_type, ptr_in_struct, "slice_ptr_val");
-                    
+
                     var indices = [_]c.LLVMValueRef{index_expr};
                     const element_ptr = c.LLVMBuildGEP2(cg.builder, element_type, loaded_ptr, &indices[0], 1, "slice_element_ptr");
-                    
+
                     break :blk ElementResult{ .element_ptr = element_ptr, .element_type = element_type };
                 } else {
                     return errors.CodegenError.TypeMismatch;
@@ -383,19 +371,11 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
             }
 
             if (var_type_kind != c.LLVMStructTypeKind) {
-                if (cg.current_line > 0) {
-                    std.debug.print("Error at line {d}: Cannot access field on non-struct type\n", .{cg.current_line});
-                } else {
-                    std.debug.print("Error: Cannot access field on non-struct type\n", .{});
-                }
+                cg.reportErrorFmt("Cannot access field on non-struct type '{s}'", .{current_type_name}, "Field access with '.' requires a struct or union value");
                 return errors.CodegenError.TypeMismatch;
             }
             const struct_type = cg.struct_types.get(current_type_name) orelse {
-                if (cg.current_line > 0) {
-                    std.debug.print("Error at line {d}: Unknown struct type '{s}'\n", .{ cg.current_line, current_type_name });
-                } else {
-                    std.debug.print("Error: Unknown struct type '{s}'\n", .{current_type_name});
-                }
+                cg.reportErrorFmt("Unknown struct type '{s}'", .{current_type_name}, "Struct type must be declared before use");
                 return errors.CodegenError.TypeMismatch;
             };
             const field_map = cg.struct_fields.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
@@ -486,11 +466,7 @@ pub fn generateStructType(cg: *llvm.CodeGenerator, struct_decl: ast.StructDecl) 
 
 pub fn generateStructInitializer(cg: *llvm.CodeGenerator, struct_init: ast.StructInitializer) errors.CodegenError!c.LLVMValueRef {
     const struct_type = cg.struct_types.get(struct_init.struct_name) orelse {
-        if (cg.current_line > 0) {
-            std.debug.print("Error at line {d}: Unknown struct type '{s}'\n", .{ cg.current_line, struct_init.struct_name });
-        } else {
-            std.debug.print("Error: Unknown struct type '{s}'\n", .{struct_init.struct_name});
-        }
+        cg.reportErrorFmt("Unknown struct type '{s}'", .{struct_init.struct_name}, "Struct type must be declared before use");
         return errors.CodegenError.TypeMismatch;
     };
     const field_map = cg.struct_fields.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
