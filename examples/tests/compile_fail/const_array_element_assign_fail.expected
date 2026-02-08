@@ -1,0 +1,5 @@
+# Expected diagnostic fragments
+Cannot modify element of const array 'nums'
+Array is declared as const
+nums[0] = 3;
+^

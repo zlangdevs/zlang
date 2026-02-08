@@ -70,11 +70,7 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
     const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
 
     if (var_info.is_const) {
-        if (self.current_line > 0) {
-            std.debug.print("Error at line {d}: Cannot modify element of const array '{s}'\n", .{ self.current_line, array_name });
-        } else {
-            std.debug.print("Error: Cannot modify element of const array '{s}'\n", .{array_name});
-        }
+        self.reportErrorFmt("Cannot modify element of const array '{s}'", .{array_name}, "Array is declared as const");
         return errors.CodegenError.ConstReassignment;
     }
 
@@ -325,7 +321,7 @@ pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayInde
 
         const element_type_name = var_info.type_name[2..];
         const element_type = try self.getLLVMType(element_type_name);
-        
+
         var ptr_indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0) };
         const ptr_in_struct = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &ptr_indices[0], 2, "slice_ptr_in_struct");
         const arg_ptr_type = c.LLVMPointerType(element_type, 0);

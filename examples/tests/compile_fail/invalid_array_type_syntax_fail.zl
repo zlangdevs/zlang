@@ -1,0 +1,4 @@
+fun main() >> i32 {
+    mystery_type bad;
+    return 0;
+}

@@ -1,0 +1,5 @@
+# Expected diagnostic fragments
+Cannot access field on non-struct type 'i32'
+Field access with '.' requires a struct or union value
+value.x = 1;
+^
