@@ -1,0 +1,107 @@
+wrap @usleep(usec: u32) >> i32;
+wrap @malloc(size: u64) >> ptr<void>;
+wrap @free(ptr: ptr<void>) >> void;
+wrap @sin(x: f64) >> f64;
+wrap @cos(x: f64) >> f64;
+
+const i32 WIDTH = 80;
+const i32 HEIGHT = 40;
+
+fun main() >> i32 {
+    @printf("3D Donut Animation - Press Ctrl+C to stop\n\n");
+    @usleep(1000000);
+    
+    ptr<u8> output = @malloc(3200) as ptr<u8>;
+    ptr<f64> zbuffer = @malloc(25600) as ptr<f64>;
+    
+    if output == null || zbuffer == null {
+        @printf("Memory allocation failed!\n");
+        return 1;
+    }
+    
+    arr<u8, 12> luminance = ".,-~:;=!*#$@";
+    
+    i32 frame = 0;
+    for {
+        for i32 i = 0; i < 3200; i++ {
+            output[i] = 32;
+            zbuffer[i] = 0.0;
+        }
+        
+        f64 A = (frame as f64) * 0.05;
+        f64 B = (frame as f64) * 0.08;
+        
+        f64 cA = cos(A);
+        f64 sA = sin(A);
+        f64 cB = cos(B);
+        f64 sB = sin(B);
+        
+        f64 theta = 0.0;
+        for i32 i = 0; i < 36; i++ {
+            f64 phi = 0.0;
+            for i32 j = 0; j < 36; j++ {
+                f64 cosphi = cos(phi);
+                f64 sinphi = sin(phi);
+                f64 costheta = cos(theta);
+                f64 sintheta = sin(theta);
+                
+                f64 x = (10.0 + 4.0 * cosphi) * costheta;
+                f64 y = (10.0 + 4.0 * cosphi) * sintheta;
+                f64 z = 4.0 * sinphi;
+                
+                f64 y1 = y * cA - z * sA;
+                f64 z1 = y * sA + z * cA;
+                
+                f64 x2 = x * cB + z1 * sB;
+                f64 z2 = -x * sB + z1 * cB;
+                
+                f64 z3 = z2 + 30.0;
+                if z3 > 0.5 {
+                    f64 ooz = 25.0 / z3;
+                    i32 xp = (40.0 + x2 * ooz * 2.0) as i32;
+                    i32 yp = (20.0 - y1 * ooz) as i32;
+                    
+                    if xp >= 0 && xp < WIDTH && yp >= 0 && yp < HEIGHT {
+                        i32 idx = yp * WIDTH + xp;
+                        if idx >= 0 && idx < 3200 && ooz > zbuffer[idx] {
+                            zbuffer[idx] = ooz;
+                            
+                            f64 nx = cosphi * costheta;
+                            f64 ny = cosphi * sintheta;
+                            f64 nz = sinphi;
+                            
+                            f64 ny1 = ny * cA - nz * sA;
+                            f64 nz1 = ny * sA + nz * cA;
+                            
+                            f64 L = nz1 * 0.7 + ny1 * 0.3;
+                            i32 lum = ((L + 1.0) / 2.0 * 11.0) as i32;
+                            if lum < 0 { lum = 0; }
+                            if lum > 11 { lum = 11; }
+                            
+                            output[idx] = luminance[lum];
+                        }
+                    }
+                }
+                
+                phi = phi + 0.2;
+            }
+            theta = theta + 0.2;
+        }
+        
+        @printf("\033[H");
+        for i32 y = 0; y < HEIGHT; y++ {
+            for i32 x = 0; x < WIDTH; x++ {
+                @printf("%c", output[y * WIDTH + x] as i32);
+            }
+            @printf("\n");
+        }
+        
+        frame = frame + 1;
+        @usleep(50000);
+    }
+    
+    free(output as ptr<void>);
+    free(zbuffer as ptr<void>);
+    
+    return 0;
+}
