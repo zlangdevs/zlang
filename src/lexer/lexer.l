@@ -73,6 +73,7 @@ FLOAT_DOT  \.{DIGIT_WITH_DELIM}{EXPONENT}?
 "union"     { return TOKEN_UNION; }
 "null"      { return TOKEN_NULL; }
 "as"        { return TOKEN_AS; }
+"match"     { return TOKEN_MATCH; }
 "_"         { return TOKEN_UNDERSCORE; }
 "brainfuck"[ \t\n]*"{" { BEGIN(BRAINFUCK); yylval.string = strdup(""); }
 {IDENT}     { yylval.string = strdup(yytext); last_was_identifier = 1; last_was_rparen = 0; return TOKEN_IDENTIFIER; }
