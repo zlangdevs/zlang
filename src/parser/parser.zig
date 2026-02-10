@@ -60,6 +60,16 @@ const NodeList = struct {
     }
 };
 
+const MatchCaseList = struct {
+    items: std.ArrayList(ast.MatchCase),
+
+    fn init() MatchCaseList {
+        return MatchCaseList{
+            .items = std.ArrayList(ast.MatchCase){},
+        };
+    }
+};
+
 export fn zig_create_program() ?*anyopaque {
     const program_data = ast.NodeData{
         .program = ast.Program{
@@ -764,6 +774,66 @@ export fn zig_create_c_for_stmt(init_ptr: ?*anyopaque, cond_ptr: ?*anyopaque, in
     };
 
     const node = ast.Node.create(global_allocator, c_for_data);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_match_case_list() ?*anyopaque {
+    const case_list = utils.create(MatchCaseList, global_allocator);
+    case_list.* = MatchCaseList.init();
+    return @as(*anyopaque, @ptrCast(case_list));
+}
+
+export fn zig_create_match_case(values_ptr: ?*anyopaque, body_ptr: ?*anyopaque) ?*anyopaque {
+    var values = std.ArrayList(*ast.Node){};
+    if (values_ptr) |ptr| {
+        const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
+        values = node_list.items;
+    }
+
+    var body = std.ArrayList(*ast.Node){};
+    if (body_ptr) |ptr| {
+        const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
+        body = node_list.items;
+    }
+
+    const match_case = utils.create(ast.MatchCase, global_allocator);
+    match_case.* = ast.MatchCase{
+        .values = values,
+        .body = body,
+    };
+
+    return @as(*anyopaque, @ptrCast(match_case));
+}
+
+export fn zig_add_match_case(list_ptr: ?*anyopaque, case_ptr: ?*anyopaque) void {
+    if (list_ptr == null or case_ptr == null) return;
+
+    const case_list = @as(*MatchCaseList, @ptrFromInt(@intFromPtr(list_ptr.?)));
+    const match_case = @as(*ast.MatchCase, @ptrFromInt(@intFromPtr(case_ptr.?)));
+
+    case_list.items.append(global_allocator, match_case.*) catch return;
+}
+
+export fn zig_create_match_stmt(condition_ptr: ?*anyopaque, cases_ptr: ?*anyopaque) ?*anyopaque {
+    if (condition_ptr == null) return null;
+
+    const condition = @as(*ast.Node, @ptrFromInt(@intFromPtr(condition_ptr.?)));
+
+    var cases = std.ArrayList(ast.MatchCase){};
+    if (cases_ptr) |ptr| {
+        const case_list = @as(*MatchCaseList, @ptrFromInt(@intFromPtr(ptr)));
+        cases = case_list.items;
+    }
+
+    const match_data = ast.NodeData{
+        .match_stmt = ast.MatchStmt{
+            .condition = condition,
+            .cases = cases,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, match_data);
+    set_node_location(node);
     return @as(*anyopaque, @ptrCast(node));
 }
 
