@@ -1195,6 +1195,9 @@ pub const CodeGenerator = struct {
             .label_stmt => |label_stmt| {
                 try self.generateLabelStatement(label_stmt);
             },
+            .match_stmt => |match_stmt| {
+                try self.generateMatchStatement(match_stmt);
+            },
             .array_assignment => |arr_ass| {
                 const array_name = try self.getBaseIdentifierName(arr_ass.array);
                 defer self.allocator.free(array_name);
@@ -1380,6 +1383,66 @@ pub const CodeGenerator = struct {
                 _ = c.LLVMBuildBr(self.builder, merge_bb);
             }
         }
+        c.LLVMPositionBuilderAtEnd(self.builder, merge_bb);
+    }
+
+    fn generateMatchStatement(self: *CodeGenerator, match_stmt: ast.MatchStmt) errors.CodegenError!void {
+        const current_function = self.current_function orelse return errors.CodegenError.TypeMismatch;
+        if (match_stmt.cases.items.len == 0) return;
+
+        const condition_value = try self.generateExpression(match_stmt.condition);
+        const condition_type = c.LLVMTypeOf(condition_value);
+        const condition_type_kind = c.LLVMGetTypeKind(condition_type);
+        const condition_type_name = self.getTypeNameFromLLVMType(condition_type);
+
+        const merge_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "match_end");
+        var next_check_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "match_check");
+
+        _ = c.LLVMBuildBr(self.builder, next_check_bb);
+
+        for (match_stmt.cases.items, 0..) |case, i| {
+            const case_body_bb = c.LLVMAppendBasicBlockInContext(self.context, current_function, "match_case");
+            const no_match_bb = if (i + 1 < match_stmt.cases.items.len)
+                c.LLVMAppendBasicBlockInContext(self.context, current_function, "match_check")
+            else
+                merge_bb;
+
+            c.LLVMPositionBuilderAtEnd(self.builder, next_check_bb);
+
+            var case_match: ?c.LLVMValueRef = null;
+            for (case.values.items) |value_node| {
+                const raw_case_value = try self.generateExpressionWithContext(value_node, condition_type_name);
+                const casted_case_value = try self.castWithRules(raw_case_value, condition_type, value_node);
+
+                const cmp = switch (condition_type_kind) {
+                    c.LLVMIntegerTypeKind, c.LLVMPointerTypeKind => c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, condition_value, casted_case_value, "match_cmp"),
+                    c.LLVMFloatTypeKind, c.LLVMDoubleTypeKind, c.LLVMHalfTypeKind => c.LLVMBuildFCmp(self.builder, c.LLVMRealOEQ, condition_value, casted_case_value, "match_cmp"),
+                    else => return errors.CodegenError.TypeMismatch,
+                };
+
+                case_match = if (case_match) |existing|
+                    c.LLVMBuildOr(self.builder, existing, cmp, "match_or")
+                else
+                    cmp;
+            }
+
+            const condition = case_match orelse c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 0, 0);
+            _ = c.LLVMBuildCondBr(self.builder, condition, case_body_bb, no_match_bb);
+
+            c.LLVMPositionBuilderAtEnd(self.builder, case_body_bb);
+            try CodeGenerator.pushScope(self);
+            for (case.body.items) |stmt| {
+                try self.generateStatement(stmt);
+            }
+            CodeGenerator.popScope(self);
+
+            if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
+                _ = c.LLVMBuildBr(self.builder, merge_bb);
+            }
+
+            next_check_bb = no_match_bb;
+        }
+
         c.LLVMPositionBuilderAtEnd(self.builder, merge_bb);
     }
 

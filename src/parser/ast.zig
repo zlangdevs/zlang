@@ -44,6 +44,7 @@ pub const NodeType = enum {
     struct_initializer,
     qualified_identifier,
     cast,
+    match_stmt,
 };
 
 pub const BinaryOp = struct {
@@ -282,6 +283,16 @@ pub const Cast = struct {
     auto: bool,
 };
 
+pub const MatchCase = struct {
+    values: std.ArrayList(*Node),
+    body: std.ArrayList(*Node),
+};
+
+pub const MatchStmt = struct {
+    condition: *Node,
+    cases: std.ArrayList(MatchCase),
+};
+
 pub const NodeData = union(NodeType) {
     program: Program,
     function: Function,
@@ -325,6 +336,7 @@ pub const NodeData = union(NodeType) {
     struct_initializer: StructInitializer,
     qualified_identifier: QualifiedIdentifier,
     cast: Cast,
+    match_stmt: MatchStmt,
 };
 
 pub const ArenaAST = struct {
@@ -567,6 +579,16 @@ pub const Node = struct {
             .label_stmt => |label_stmt| {
                 self.allocator.free(label_stmt.label);
             },
+            .match_stmt => |*match_stmt| {
+                match_stmt.condition.destroy();
+                for (match_stmt.cases.items) |*case| {
+                    for (case.values.items) |val| val.destroy();
+                    case.values.deinit(self.allocator);
+                    for (case.body.items) |stmt| stmt.destroy();
+                    case.body.deinit(self.allocator);
+                }
+                match_stmt.cases.deinit(self.allocator);
+            },
             else => {},
         }
         _ = self.allocator;
@@ -798,7 +820,24 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             std.debug.print("🚫 Break Statement\n", .{});
         },
         .continue_stmt => {
-            std.debug.print("➡️  Continue Statement\n", .{});
+            std.debug.print("🔄 Continue Statement\n", .{});
+        },
+        .match_stmt => |match_stmt| {
+            std.debug.print("🔀 Match Statement:\n", .{});
+            printAST(match_stmt.condition, indent + 1, false, false);
+            for (match_stmt.cases.items, 0..) |case, i| {
+                const is_case_last = i == match_stmt.cases.items.len - 1;
+                printIndent(indent + 1, is_case_last, false);
+                std.debug.print("Case:\n", .{});
+                for (case.values.items, 0..) |val, j| {
+                    printAST(val, indent + 2, j == case.values.items.len - 1, false);
+                }
+                printIndent(indent + 2, true, false);
+                std.debug.print("Body:\n", .{});
+                for (case.body.items, 0..) |stmt, k| {
+                    printAST(stmt, indent + 3, k == case.body.items.len - 1, false);
+                }
+            }
         },
         .goto_stmt => |goto_stmt| {
             std.debug.print("🎯 Goto: \x1b[36m{s}\x1b[0m\n", .{goto_stmt.label});

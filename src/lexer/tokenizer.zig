@@ -49,6 +49,7 @@ const TokenType = enum(c_int) {
     eq_greater = 289,
     non_equal = 290,
     not = 291,
+    match_token = 292,
 
     pub fn toString(self: TokenType) []const u8 {
         return switch (self) {
@@ -89,6 +90,7 @@ const TokenType = enum(c_int) {
             .eq_greater => "EQ_GREATER",
             .non_equal => "NON_EQ",
             .not => "NOT",
+            .match_token => "MATCH",
         };
     }
 };

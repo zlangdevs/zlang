@@ -38,6 +38,10 @@ extern void* zig_create_break_stmt(void);
 extern void* zig_create_continue_stmt(void);
 extern void* zig_create_goto_stmt(const char* label);
 extern void* zig_create_label_stmt(const char* label);
+extern void* zig_create_match_stmt(void* condition, void* cases);
+extern void* zig_create_match_case_list(void);
+extern void* zig_create_match_case(void* values, void* body);
+extern void zig_add_match_case(void* list, void* match_case);
 extern void* zig_create_array_initializer(void* elements);
 extern void* zig_create_array_index(void* array, void* index);
 extern void* zig_create_array_assignment(void* array, void* index, void* value);
@@ -100,7 +104,7 @@ void* ast_root = NULL;
 %token <number> TOKEN_REASSIGN
 
 %token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_GOTO TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_UNION TOKEN_DOT TOKEN_NULL TOKEN_CONST
-%token TOKEN_AS TOKEN_UNDERSCORE
+%token TOKEN_AS TOKEN_UNDERSCORE TOKEN_MATCH
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
 %token TOKEN_LBRACKET TOKEN_RBRACKET TOKEN_RSHIFT TOKEN_LSHIFT TOKEN_DECREMENT TOKEN_INCREMENT
@@ -112,6 +116,7 @@ void* ast_root = NULL;
 %type <node> continue_statement
 %type <node> goto_statement
 %type <node> label_statement
+%type <node> match_statement match_case_list match_case match_value_list
 
 %left TOKEN_OR
 %left TOKEN_AND
@@ -455,6 +460,7 @@ statement:
    | continue_statement TOKEN_SEMICOLON { $$ = $1; }
    | goto_statement TOKEN_SEMICOLON { $$ = $1; }
    | label_statement { $$ = $1; }
+   | match_statement { $$ = $1; }
    | c_function_decl TOKEN_SEMICOLON { $$ = $1; }
    | use_statement { $$ = $1; }
    | expression TOKEN_SEMICOLON { $$ = $1; }
@@ -492,6 +498,42 @@ c_for_statement:
     }
   | TOKEN_FOR assignment TOKEN_SEMICOLON expression TOKEN_SEMICOLON for_increment TOKEN_LBRACE statement_list TOKEN_RBRACE {
         zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_c_for_stmt($2, $4, $6, $8);
+    }
+;
+
+match_statement:
+    TOKEN_MATCH expression TOKEN_LBRACE match_case_list TOKEN_RBRACE {
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_match_stmt($2, $4);
+    }
+;
+
+match_case_list:
+    match_case {
+        void* list = zig_create_match_case_list();
+        zig_add_match_case(list, $1);
+        $$ = list;
+    }
+  | match_case_list match_case {
+        zig_add_match_case($1, $2);
+        $$ = $1;
+    }
+;
+
+match_case:
+    match_value_list TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_match_case($1, $3);
+    }
+;
+
+match_value_list:
+    expression {
+        void* list = zig_create_arg_list();
+        zig_add_to_arg_list(list, $1);
+        $$ = list;
+    }
+  | match_value_list TOKEN_COMMA expression {
+        zig_add_to_arg_list($1, $3);
+        $$ = $1;
     }
 ;
 
