@@ -1343,32 +1343,59 @@ pub fn main() !u8 {
         }
         return 0;
     }
-    if (std.mem.eql(u8, args[1], "wrap")) {
+    if (std.mem.eql(u8, args[1], "wrap") or std.mem.eql(u8, args[1], "wrap-clang")) {
+        const use_clang = std.mem.eql(u8, args[1], "wrap-clang");
         if (args.len < 5) {
-            std.debug.print("Usage: zlang wrap <file.h> -o <file.zl>\n", .{});
+            if (use_clang) {
+                std.debug.print("Usage: zlang wrap-clang <file.h> -o <file.zl> [-- <clang args...>]\n", .{});
+            } else {
+                std.debug.print("Usage: zlang wrap <file.h> -o <file.zl>\n", .{});
+            }
             return 1;
         }
+
         const header_path = args[2];
         var out_path: ?[]const u8 = null;
+        var clang_args_start: usize = args.len;
+
         var i: usize = 3;
         while (i < args.len) : (i += 1) {
+            if (std.mem.eql(u8, args[i], "--")) {
+                clang_args_start = i + 1;
+                break;
+            }
             if (std.mem.eql(u8, args[i], "-o")) {
                 if (i + 1 >= args.len) {
                     std.debug.print("Error: missing output after -o\n", .{});
                     return 1;
                 }
                 out_path = args[i + 1];
-                break;
+                i += 1;
             }
         }
+
         if (out_path == null) {
-            std.debug.print("Usage: zlang wrap <file.h> -o <file.zl>\n", .{});
+            if (use_clang) {
+                std.debug.print("Usage: zlang wrap-clang <file.h> -o <file.zl> [-- <clang args...>]\n", .{});
+            } else {
+                std.debug.print("Usage: zlang wrap <file.h> -o <file.zl>\n", .{});
+            }
             return 1;
         }
-        wrapgen.generateFromHeader(allocator, header_path, out_path.?) catch |err| {
-            std.debug.print("Error generating wrapper for {s}: {}\n", .{ header_path, err });
-            return 1;
-        };
+
+        if (use_clang) {
+            const clang_args = if (clang_args_start < args.len) args[clang_args_start..] else args[args.len..args.len];
+            wrapgen.generateFromHeaderWithClang(allocator, header_path, out_path.?, clang_args) catch |err| {
+                std.debug.print("Error generating clang wrapper for {s}: {}\n", .{ header_path, err });
+                return 1;
+            };
+        } else {
+            wrapgen.generateFromHeader(allocator, header_path, out_path.?) catch |err| {
+                std.debug.print("Error generating wrapper for {s}: {}\n", .{ header_path, err });
+                return 1;
+            };
+        }
+
         std.debug.print("Generated wrapper: {s}\n", .{out_path.?});
         return 0;
     }

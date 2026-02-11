@@ -1,6 +1,7 @@
 const std = @import("std");
 const utils = @import("codegen/utils.zig");
 const c_abi = @import("c_abi.zig");
+const llvm_tools = @import("llvm_tools.zig");
 
 const AliasMap = std.StringHashMap([]const u8);
 
@@ -20,6 +21,7 @@ const StructMap = std.StringHashMap(*StructInfo);
 
 const ParamInfo = struct {
     name: []const u8,
+    c_type: []const u8,
     z_type: []const u8,
     abi_type: []const u8,
     conversion: c_abi.ConversionKind,
@@ -28,6 +30,7 @@ const ParamInfo = struct {
 
 const FunctionInfo = struct {
     name: []const u8,
+    c_ret_type: []const u8,
     ret_z_type: []const u8,
     ret_abi_type: []const u8,
     ret_conversion: c_abi.ConversionKind,
@@ -430,6 +433,10 @@ fn parseDefineConstants(alloc: std.mem.Allocator, source: []const u8, constants:
         if (pos == 0) continue;
 
         const name = rest[0..pos];
+        if (std.mem.startsWith(u8, name, "__")) continue;
+        if (std.mem.eql(u8, name, "_LP64")) continue;
+        if (std.mem.eql(u8, name, "true")) continue;
+        if (std.mem.eql(u8, name, "false")) continue;
         if (pos < rest.len and rest[pos] == '(') continue;
 
         const value_raw = trimSpaces(rest[pos..]);
@@ -716,6 +723,30 @@ fn stripTrailingParamName(param_token: []const u8) []const u8 {
         if (std.ascii.eqlIgnoreCase(word, kw)) return token;
     }
 
+    var ident_count: usize = 0;
+    var first_ident: []const u8 = "";
+    var j: usize = 0;
+    while (j < token.len) {
+        while (j < token.len and !isIdentChar(token[j])) : (j += 1) {}
+        if (j >= token.len) break;
+        const start = j;
+        while (j < token.len and isIdentChar(token[j])) : (j += 1) {}
+        const ident = token[start..j];
+        if (ident_count == 0) first_ident = ident;
+        ident_count += 1;
+    }
+
+    if (ident_count == 2) {
+        const qualifier_first = std.ascii.eqlIgnoreCase(first_ident, "const") or
+            std.ascii.eqlIgnoreCase(first_ident, "volatile") or
+            std.ascii.eqlIgnoreCase(first_ident, "restrict") or
+            std.ascii.eqlIgnoreCase(first_ident, "signed") or
+            std.ascii.eqlIgnoreCase(first_ident, "unsigned") or
+            std.ascii.eqlIgnoreCase(first_ident, "short") or
+            std.ascii.eqlIgnoreCase(first_ident, "long");
+        if (qualifier_first) return token;
+    }
+
     var p: isize = id_start - 1;
     while (p >= 0 and isSpace(token[@as(usize, @intCast(p))])) : (p -= 1) {}
     if (p >= 0 and token[@as(usize, @intCast(p))] == '*') {
@@ -877,6 +908,20 @@ fn mapCTypeToZType(alloc: std.mem.Allocator, raw0: []const u8, aliases: *const A
             }
             return null;
         };
+
+        if (std.ascii.eqlIgnoreCase(custom_name, "const") or
+            std.ascii.eqlIgnoreCase(custom_name, "volatile") or
+            std.ascii.eqlIgnoreCase(custom_name, "restrict") or
+            std.ascii.eqlIgnoreCase(custom_name, "register") or
+            std.ascii.eqlIgnoreCase(custom_name, "extern") or
+            std.ascii.eqlIgnoreCase(custom_name, "static"))
+        {
+            if (ptr_depth > 0) {
+                return utils.dupe(u8, alloc, "ptr<void>");
+            }
+            return null;
+        }
+
         base = resolveAlias(aliases, custom_name);
     }
 
@@ -947,11 +992,22 @@ fn parseOpaqueStructAlias(
 
     const alias_name = findIdentifierBeforeIndex(trimmed, trimmed.len) orelse return;
     if (alias_name.len == 0) return;
-    if (structs.contains(alias_name)) return;
+
+    const kw_len: usize = if (is_struct) "typedef struct".len else "typedef union".len;
+    const between = trimSpaces(trimmed[kw_len..]);
+    const alias_pos = std.mem.lastIndexOf(u8, between, alias_name) orelse 0;
+    const tag_candidate = trimSpaces(between[0..alias_pos]);
+
+    const chosen_name = if (tag_candidate.len > 0 and !std.mem.eql(u8, tag_candidate, alias_name))
+        tag_candidate
+    else
+        alias_name;
+
+    if (structs.contains(chosen_name)) return;
 
     const info = utils.create(StructInfo, alloc);
     info.* = .{
-        .name = utils.dupe(u8, alloc, alias_name),
+        .name = utils.dupe(u8, alloc, chosen_name),
         .is_union = is_union,
         .fields = std.ArrayList(StructFieldInfo){},
         .abi_mapping = .{},
@@ -1136,6 +1192,7 @@ fn parseFunctionStatement(alloc: std.mem.Allocator, stmt_in: []const u8, aliases
 
     var fn_info = FunctionInfo{
         .name = utils.dupe(u8, alloc, name),
+        .c_ret_type = utils.dupe(u8, alloc, ret_raw),
         .ret_z_type = ret_z,
         .ret_abi_type = ret_info.abi_type,
         .ret_conversion = ret_info.conversion,
@@ -1169,6 +1226,7 @@ fn parseFunctionStatement(alloc: std.mem.Allocator, stmt_in: []const u8, aliases
 
             try fn_info.params.append(alloc, .{
                 .name = param_name,
+                .c_type = utils.dupe(u8, alloc, type_raw),
                 .z_type = z_type,
                 .abi_type = abi_info.abi_type,
                 .conversion = abi_info.conversion,
@@ -1190,6 +1248,92 @@ fn emitStructDeclarations(writer: anytype, ordered_structs: []const *StructInfo)
             try writer.print("    {s} {s},\n", .{ field.name, field.z_type });
         }
         try writer.writeAll("}\n\n");
+    }
+}
+
+fn collectCustomTypeNamesFromType(alloc: std.mem.Allocator, type_name_in: []const u8, out: *std.StringHashMap(void)) !void {
+    const type_name = trimSpaces(type_name_in);
+    if (type_name.len == 0) return;
+    if (isBuiltinTypeName(type_name)) return;
+    if (std.mem.eql(u8, type_name, "void")) return;
+
+    if (std.mem.startsWith(u8, type_name, "ptr<") and std.mem.endsWith(u8, type_name, ">")) {
+        try collectCustomTypeNamesFromType(alloc, type_name[4 .. type_name.len - 1], out);
+        return;
+    }
+
+    if (std.mem.startsWith(u8, type_name, "arr<") and std.mem.endsWith(u8, type_name, ">")) {
+        var parts = try splitTopLevel(alloc, type_name[4 .. type_name.len - 1], ',');
+        defer parts.deinit(alloc);
+        if (parts.items.len > 0) {
+            try collectCustomTypeNamesFromType(alloc, parts.items[0], out);
+        }
+        return;
+    }
+
+    if (std.mem.startsWith(u8, type_name, "simd<") and std.mem.endsWith(u8, type_name, ">")) {
+        return;
+    }
+
+    if (std.ascii.eqlIgnoreCase(type_name, "const") or
+        std.ascii.eqlIgnoreCase(type_name, "volatile") or
+        std.ascii.eqlIgnoreCase(type_name, "restrict") or
+        std.ascii.eqlIgnoreCase(type_name, "register"))
+    {
+        return;
+    }
+
+    try out.put(utils.dupe(u8, alloc, type_name), {});
+}
+
+fn emitOpaqueTypeDeclarations(
+    writer: anytype,
+    alloc: std.mem.Allocator,
+    ordered_structs: []const *StructInfo,
+    enums: []const EnumInfo,
+    functions: []const FunctionInfo,
+) !void {
+    var known_structs = std.StringHashMap(void).init(alloc);
+    defer known_structs.deinit();
+    for (ordered_structs) |info| {
+        try known_structs.put(info.name, {});
+    }
+
+    var known_enums = std.StringHashMap(void).init(alloc);
+    defer known_enums.deinit();
+    for (enums) |e| {
+        try known_enums.put(e.name, {});
+    }
+
+    var needed = std.StringHashMap(void).init(alloc);
+    defer needed.deinit();
+
+    for (ordered_structs) |info| {
+        for (info.fields.items) |field| {
+            try collectCustomTypeNamesFromType(alloc, field.z_type, &needed);
+        }
+    }
+    for (functions) |fn_info| {
+        try collectCustomTypeNamesFromType(alloc, fn_info.ret_z_type, &needed);
+        try collectCustomTypeNamesFromType(alloc, fn_info.ret_abi_type, &needed);
+        for (fn_info.params.items) |param| {
+            try collectCustomTypeNamesFromType(alloc, param.z_type, &needed);
+            try collectCustomTypeNamesFromType(alloc, param.abi_type, &needed);
+        }
+    }
+
+    var it = needed.iterator();
+    var emitted_any = false;
+    while (it.next()) |entry| {
+        const name = entry.key_ptr.*;
+        if (known_structs.contains(name)) continue;
+        if (known_enums.contains(name)) continue;
+        try writer.print("struct {s} {{\n}}\n\n", .{name});
+        emitted_any = true;
+    }
+
+    if (emitted_any) {
+        return;
     }
 }
 
@@ -1426,12 +1570,252 @@ fn readFile(alloc: std.mem.Allocator, file_path: []const u8) ![]u8 {
     return buffer[0..bytes_read];
 }
 
-pub fn generateFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out_path: []const u8) !void {
+const ProbeSignature = struct {
+    ret_llvm_type: []const u8,
+    param_llvm_types: std.ArrayList([]const u8),
+};
+
+fn parseFirstLlvmType(param: []const u8) ?[]const u8 {
+    const s = trimSpaces(param);
+    if (s.len == 0) return null;
+
+    if (s[0] == '<') {
+        var depth: usize = 0;
+        var i: usize = 0;
+        while (i < s.len) : (i += 1) {
+            if (s[i] == '<') depth += 1;
+            if (s[i] == '>') {
+                depth -= 1;
+                if (depth == 0) return trimSpaces(s[0 .. i + 1]);
+            }
+        }
+        return null;
+    }
+
+    if (s[0] == '[') {
+        var depth: usize = 0;
+        var i: usize = 0;
+        while (i < s.len) : (i += 1) {
+            if (s[i] == '[') depth += 1;
+            if (s[i] == ']') {
+                depth -= 1;
+                if (depth == 0) return trimSpaces(s[0 .. i + 1]);
+            }
+        }
+        return null;
+    }
+
+    var end: usize = 0;
+    while (end < s.len and !isSpace(s[end]) and s[end] != ',') : (end += 1) {}
+    if (end == 0) return null;
+    return trimSpaces(s[0..end]);
+}
+
+fn parseProbeSignaturesFromLl(alloc: std.mem.Allocator, ll_text: []const u8) !std.StringHashMap(ProbeSignature) {
+    var out = std.StringHashMap(ProbeSignature).init(alloc);
+
+    var lines = std.mem.splitScalar(u8, ll_text, '\n');
+    while (lines.next()) |line_raw| {
+        const line = trimSpaces(line_raw);
+        if (!std.mem.startsWith(u8, line, "define ")) continue;
+
+        const marker = "@__zprobe_";
+        const at_pos = std.mem.indexOf(u8, line, marker) orelse continue;
+
+        const name_start = at_pos + marker.len;
+        const open_pos_rel = std.mem.indexOfScalar(u8, line[name_start..], '(') orelse continue;
+        const open_pos = name_start + open_pos_rel;
+        const fn_name = line[name_start..open_pos];
+        if (fn_name.len == 0) continue;
+
+        var close_pos: ?usize = null;
+        var depth: usize = 0;
+        var i = open_pos;
+        while (i < line.len) : (i += 1) {
+            if (line[i] == '(') depth += 1;
+            if (line[i] == ')') {
+                depth -= 1;
+                if (depth == 0) {
+                    close_pos = i;
+                    break;
+                }
+            }
+        }
+        if (close_pos == null) continue;
+
+        var type_end: isize = @as(isize, @intCast(at_pos)) - 1;
+        while (type_end >= 0 and isSpace(line[@as(usize, @intCast(type_end))])) : (type_end -= 1) {}
+        if (type_end < 0) continue;
+
+        var type_start: isize = type_end;
+        var angle_depth: isize = 0;
+        var square_depth: isize = 0;
+        while (type_start >= 0) : (type_start -= 1) {
+            const ch = line[@as(usize, @intCast(type_start))];
+            if (ch == '>') angle_depth += 1;
+            if (ch == '<') angle_depth -= 1;
+            if (ch == ']') square_depth += 1;
+            if (ch == '[') square_depth -= 1;
+            if (isSpace(ch) and angle_depth == 0 and square_depth == 0) break;
+        }
+        const ret_type = trimSpaces(line[@as(usize, @intCast(type_start + 1))..@as(usize, @intCast(type_end + 1))]);
+        if (ret_type.len == 0) continue;
+
+        const params_chunk = line[open_pos + 1 .. close_pos.?];
+        var params = try splitTopLevel(alloc, params_chunk, ',');
+        defer params.deinit(alloc);
+
+        var param_types = std.ArrayList([]const u8){};
+        for (params.items) |param_raw| {
+            const p = trimSpaces(param_raw);
+            if (p.len == 0) continue;
+            if (std.mem.eql(u8, p, "void")) continue;
+            if (parseFirstLlvmType(p)) |t| {
+                try param_types.append(alloc, utils.dupe(u8, alloc, t));
+            }
+        }
+
+        try out.put(utils.dupe(u8, alloc, fn_name), .{
+            .ret_llvm_type = utils.dupe(u8, alloc, ret_type),
+            .param_llvm_types = param_types,
+        });
+    }
+
+    return out;
+}
+
+fn inferConversionFromLlvmType(struct_info: *const StructInfo, llvm_ty: []const u8) ?struct {
+    abi_type: []const u8,
+    conversion: c_abi.ConversionKind,
+} {
+    const t = trimSpaces(llvm_ty);
+    if (std.mem.eql(u8, t, "<2 x float>") and struct_info.fields.items.len == 2) {
+        return .{ .abi_type = "simd<f32, 2>", .conversion = .simd_f32_2 };
+    }
+    if (std.mem.eql(u8, t, "<4 x float>") and struct_info.fields.items.len == 4) {
+        return .{ .abi_type = "simd<f32, 4>", .conversion = .simd_f32_4 };
+    }
+    if (std.mem.eql(u8, t, "i32") and struct_info.fields.items.len == 4) {
+        const f = struct_info.fields.items;
+        if (std.mem.eql(u8, f[0].z_type, "u8") and std.mem.eql(u8, f[1].z_type, "u8") and std.mem.eql(u8, f[2].z_type, "u8") and std.mem.eql(u8, f[3].z_type, "u8")) {
+            return .{ .abi_type = "u32", .conversion = .packed_rgba_u32 };
+        }
+    }
+    return null;
+}
+
+fn sanitizeForProbe(alloc: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    var s = trimSpaces(raw);
+    if (std.mem.startsWith(u8, s, "extern ")) s = trimSpaces(s[7..]);
+    if (std.mem.startsWith(u8, s, "static ")) s = trimSpaces(s[7..]);
+    if (std.mem.startsWith(u8, s, "inline ")) s = trimSpaces(s[7..]);
+    return utils.dupe(u8, alloc, s);
+}
+
+fn refineAbiUsingClangProbe(alloc: std.mem.Allocator, header_path: []const u8, functions: *std.ArrayList(FunctionInfo), structs: *const StructMap) !void {
+    const clang_path = (try llvm_tools.getLLVMToolPath(alloc, .clang)) orelse return;
+    defer if (!std.mem.eql(u8, clang_path, "clang")) alloc.free(clang_path);
+
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     const a = arena.allocator();
 
-    const header_src = try readFile(a, header_path);
+    const probe_c = try std.fmt.allocPrint(a, ".zig-cache/wrapgen/probe_{d}.c", .{std.time.nanoTimestamp()});
+    const probe_ll = try std.fmt.allocPrint(a, ".zig-cache/wrapgen/probe_{d}.ll", .{std.time.nanoTimestamp()});
+    defer std.fs.cwd().deleteFile(probe_c) catch {};
+    defer std.fs.cwd().deleteFile(probe_ll) catch {};
+
+    var src = std.ArrayList(u8){};
+    defer src.deinit(a);
+    const w = src.writer(a);
+    try w.print("#include \"{s}\"\n\n", .{header_path});
+
+    for (functions.items) |fn_info| {
+        if (fn_info.has_varargs) continue;
+
+        const ret_c = try sanitizeForProbe(a, fn_info.c_ret_type);
+        try w.print("{s} __zprobe_{s}(", .{ ret_c, fn_info.name });
+        for (fn_info.params.items, 0..) |param, i| {
+            if (i > 0) try w.writeAll(", ");
+            const pty = try sanitizeForProbe(a, param.c_type);
+            try w.print("{s} a{d}", .{ pty, i });
+        }
+        try w.writeAll(") {\n");
+
+        if (std.mem.eql(u8, trimSpaces(ret_c), "void")) {
+            try w.print("    {s}(", .{fn_info.name});
+        } else {
+            try w.print("    return {s}(", .{fn_info.name});
+        }
+        for (fn_info.params.items, 0..) |_, i| {
+            if (i > 0) try w.writeAll(", ");
+            try w.print("a{d}", .{i});
+        }
+        try w.writeAll(");\n}\n\n");
+    }
+
+    var f = try std.fs.cwd().createFile(probe_c, .{ .truncate = true });
+    defer f.close();
+    try f.writeAll(src.items);
+
+    var argv = std.ArrayList([]const u8){};
+    defer argv.deinit(a);
+    try argv.append(a, clang_path);
+    try argv.append(a, "-S");
+    try argv.append(a, "-emit-llvm");
+    try argv.append(a, "-O0");
+    try argv.append(a, "-x");
+    try argv.append(a, "c");
+    try argv.append(a, probe_c);
+    try argv.append(a, "-o");
+    try argv.append(a, probe_ll);
+
+    var child = std.process.Child.init(argv.items, a);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    const term = try child.spawnAndWait();
+    switch (term) {
+        .Exited => |code| if (code != 0) return,
+        else => return,
+    }
+
+    const ll = try readFile(a, probe_ll);
+    var sigs = try parseProbeSignaturesFromLl(a, ll);
+
+    for (functions.items) |*fn_info| {
+        const sig = sigs.get(fn_info.name) orelse continue;
+
+        if (fn_info.ret_struct_name) |sn| {
+            if (structs.get(sn)) |info| {
+                if (inferConversionFromLlvmType(info, sig.ret_llvm_type)) |conv| {
+                    fn_info.ret_abi_type = conv.abi_type;
+                    fn_info.ret_conversion = conv.conversion;
+                }
+            }
+        }
+
+        for (fn_info.params.items, 0..) |*param, idx| {
+            if (param.struct_name) |sn| {
+                if (idx < sig.param_llvm_types.items.len) {
+                    if (structs.get(sn)) |info| {
+                        if (inferConversionFromLlvmType(info, sig.param_llvm_types.items[idx])) |conv| {
+                            param.abi_type = conv.abi_type;
+                            param.conversion = conv.conversion;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn generateFromHeaderImpl(alloc: std.mem.Allocator, source_header_path: []const u8, parse_input_path: []const u8, out_path: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const header_src = try readFile(a, parse_input_path);
     const comments_only = try stripCommentsOnly(a, header_src);
     const cleaned = try stripCommentsAndPreproc(a, header_src);
     const normalized = try removeExternCGuards(a, cleaned);
@@ -1485,6 +1869,8 @@ pub fn generateFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out
         }
     }
 
+    refineAbiUsingClangProbe(a, source_header_path, &functions, &structs) catch {};
+
     var used_helpers = std.StringHashMap(void).init(a);
     defer used_helpers.deinit();
 
@@ -1492,7 +1878,9 @@ pub fn generateFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out
     defer output.deinit(a);
 
     const writer = output.writer(a);
-    try emitKnownHeaderFlags(writer, a, header_path);
+    try emitKnownHeaderFlags(writer, a, source_header_path);
+
+    try emitOpaqueTypeDeclarations(writer, a, ordered_structs.items, enums.items, functions.items);
 
     try emitStructDeclarations(writer, ordered_structs.items);
     try emitEnumDeclarations(writer, enums.items);
@@ -1531,4 +1919,54 @@ pub fn generateFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out
     var out_file = try std.fs.cwd().createFile(out_path, .{ .truncate = true });
     defer out_file.close();
     try out_file.writeAll(output.items);
+}
+
+pub fn generateFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out_path: []const u8) !void {
+    try generateFromHeaderImpl(alloc, header_path, header_path, out_path);
+}
+
+pub fn generateFromHeaderWithClang(alloc: std.mem.Allocator, header_path: []const u8, out_path: []const u8, clang_args: []const []const u8) !void {
+    const clang_path = (try llvm_tools.getLLVMToolPath(alloc, .clang)) orelse return error.ClangNotFound;
+    defer if (!std.mem.eql(u8, clang_path, "clang")) alloc.free(clang_path);
+
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    try std.fs.cwd().makePath(".zig-cache/wrapgen");
+    const tmp_path = try std.fmt.allocPrint(a, ".zig-cache/wrapgen/preprocessed_{d}.h", .{std.time.nanoTimestamp()});
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    var argv = std.ArrayList([]const u8){};
+    defer argv.deinit(a);
+
+    try argv.append(a, clang_path);
+    try argv.append(a, "-E");
+    try argv.append(a, "-dD");
+    try argv.append(a, "-P");
+    try argv.append(a, "-x");
+    try argv.append(a, "c");
+
+    for (clang_args) |arg| {
+        try argv.append(a, arg);
+    }
+
+    try argv.append(a, header_path);
+    try argv.append(a, "-o");
+    try argv.append(a, tmp_path);
+
+    var child = std.process.Child.init(argv.items, a);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+
+    const term = try child.spawnAndWait();
+    switch (term) {
+        .Exited => |code| {
+            if (code != 0) return error.ClangPreprocessFailed;
+        },
+        else => return error.ClangPreprocessFailed,
+    }
+
+    try generateFromHeaderImpl(alloc, header_path, tmp_path, out_path);
 }
