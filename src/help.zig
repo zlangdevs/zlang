@@ -50,12 +50,13 @@ pub fn printHelp() void {
         \\  {s}build{s}       Compile a ZLang program (default)
         \\  {s}run{s}         Run a ZLang program without saving executable
         \\  {s}wrap{s}        Generate ZLang wrappers for C headers
+        \\  {s}wrap-clang{s}  Generate wrappers via clang preprocessing
         \\  {s}help{s}        Show this help message
         \\
     , .{
         bold, reset, green, reset, yellow, reset,
         bold, reset, cyan,  reset, cyan,   reset,
-        cyan, reset, cyan,  reset,
+        cyan, reset, cyan,  reset, cyan,   reset,
     });
 
     std.debug.print(
@@ -108,6 +109,7 @@ pub fn printHelp() void {
         \\{s}Examples:{s}
         \\  zlang main.zl
         \\  zlang wrap mylib.h -o mylib.zl
+        \\  zlang wrap-clang SDL2/SDL.h -o sdl.zl -- -I/usr/include/SDL2 -D_REENTRANT
         \\  zlang -o myapp main.zl -lSDL2
         \\  zlang -b mandelbrot.bf -o mandelbrot
         \\  zlang -b32 program.b -o output
