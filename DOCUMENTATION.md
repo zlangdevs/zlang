@@ -136,7 +136,7 @@ Example:
 zlang wrap /usr/include/GL/gl.h -o gl_bindings.zl
 ```
 
-This automatically generates `wrap` statements for C functions.
+This automatically generates `wrap` statements for C functions. Wrapper generator tries to provide SysV ABI compatibility.
 
 ### Complete Examples
 
