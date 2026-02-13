@@ -237,7 +237,7 @@ pub fn generateArrayDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.
 
         const element_type = try self.getLLVMType(element_type_name);
         const array_type = c.LLVMArrayType(@ptrCast(element_type), @intCast(array_size));
-        const alloca = c.LLVMBuildAlloca(self.builder, array_type, decl.name.ptr);
+        const alloca = self.buildAllocaAtEntry(array_type, decl.name);
 
         try CodeGenerator.putVariable(self, decl.name, structs.VariableInfo{
             .value = @ptrCast(alloca),

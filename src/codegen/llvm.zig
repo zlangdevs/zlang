@@ -291,6 +291,34 @@ pub const CodeGenerator = struct {
         return self.module_manager.canAccess(from_module, target_module);
     }
 
+    pub fn buildAllocaAtEntry(self: *CodeGenerator, llvm_type: c.LLVMTypeRef, name: []const u8) c.LLVMValueRef {
+        const current_block = c.LLVMGetInsertBlock(self.builder);
+        if (current_block == null) {
+            return c.LLVMBuildAlloca(self.builder, llvm_type, name.ptr);
+        }
+
+        const current_fn = c.LLVMGetBasicBlockParent(current_block);
+        if (current_fn == null) {
+            return c.LLVMBuildAlloca(self.builder, llvm_type, name.ptr);
+        }
+
+        const entry_block = c.LLVMGetEntryBasicBlock(current_fn);
+        if (entry_block == null) {
+            return c.LLVMBuildAlloca(self.builder, llvm_type, name.ptr);
+        }
+
+        const temp_builder = c.LLVMCreateBuilderInContext(self.context);
+        defer c.LLVMDisposeBuilder(temp_builder);
+
+        if (c.LLVMGetFirstInstruction(entry_block)) |first_inst| {
+            c.LLVMPositionBuilderBefore(temp_builder, first_inst);
+        } else {
+            c.LLVMPositionBuilderAtEnd(temp_builder, entry_block);
+        }
+
+        return c.LLVMBuildAlloca(temp_builder, llvm_type, name.ptr);
+    }
+
     fn buildQualifiedName(self: *CodeGenerator, node: *ast.Node) ![]const u8 {
         switch (node.data) {
             .identifier => |ident| {
@@ -442,7 +470,7 @@ pub const CodeGenerator = struct {
             },
             c.LLVMStructTypeKind => {
                 if (c.LLVMGetTypeKind(c.LLVMTypeOf(struct_ptr)) != c.LLVMPointerTypeKind) {
-                    const tmp = c.LLVMBuildAlloca(self.builder, struct_ty, "tmp_struct");
+                    const tmp = self.buildAllocaAtEntry(struct_ty, "tmp_struct");
                     _ = c.LLVMBuildStore(self.builder, struct_ptr, tmp);
                     struct_ptr = tmp;
                 }
@@ -755,7 +783,7 @@ pub const CodeGenerator = struct {
                     try simd.generateSimdDeclaration(self, decl);
                 } else {
                     const var_type = try self.getLLVMType(decl.type_name);
-                    const alloca = c.LLVMBuildAlloca(@ptrCast(self.builder), @ptrCast(var_type), decl.name.ptr);
+                    const alloca = self.buildAllocaAtEntry(@ptrCast(var_type), decl.name);
                     try CodeGenerator.putVariable(self, decl.name, structs.VariableInfo{
                         .value = @ptrCast(alloca),
                         .type_ref = @ptrCast(var_type),
@@ -2573,7 +2601,7 @@ pub const CodeGenerator = struct {
                     const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
                     var struct_ptr = result_value;
                     if (c.LLVMGetTypeKind(c.LLVMTypeOf(result_value)) != c.LLVMPointerTypeKind) {
-                        const temp_alloca = c.LLVMBuildAlloca(self.builder, c.LLVMTypeOf(result_value), "temp_struct");
+                        const temp_alloca = self.buildAllocaAtEntry(c.LLVMTypeOf(result_value), "temp_struct");
                         _ = c.LLVMBuildStore(self.builder, result_value, temp_alloca);
                         struct_ptr = temp_alloca;
                     }

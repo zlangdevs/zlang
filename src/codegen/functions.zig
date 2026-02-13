@@ -894,7 +894,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
     var sret_alloca: ?c.LLVMValueRef = null;
     if (uses_sret) {
         if (cg.sret_functions.get(resolved_name)) |pointee_type| {
-            sret_alloca = c.LLVMBuildAlloca(cg.builder, pointee_type, "sret_temp");
+            sret_alloca = cg.buildAllocaAtEntry(pointee_type, "sret_temp");
             try final_args.append(cg.allocator, sret_alloca.?);
         }
     }
@@ -941,7 +941,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                     const elem_ty = try cg.getLLVMType(et);
                     const bundle_count = arg_values.items.len - arg_idx;
                     const array_ty = c.LLVMArrayType(elem_ty, @intCast(bundle_count));
-                    const array_alloca = c.LLVMBuildAlloca(@ptrCast(cg.builder), array_ty, "typed_vararg_array");
+                    const array_alloca = cg.buildAllocaAtEntry(array_ty, "typed_vararg_array");
 
                     for (arg_idx..arg_values.items.len) |i| {
                         const arg_val = arg_values.items[i];
@@ -1013,12 +1013,12 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                         if (llvm.CodeGenerator.getVariable(cg, ident_name)) |var_info| {
                             final_arg = @ptrCast(var_info.value);
                         } else {
-                            const temp = c.LLVMBuildAlloca(@ptrCast(cg.builder), @ptrCast(struct_ty), "byval_tmp");
+                            const temp = cg.buildAllocaAtEntry(@ptrCast(struct_ty), "byval_tmp");
                             _ = c.LLVMBuildStore(@ptrCast(cg.builder), val, temp);
                             final_arg = temp;
                         }
                     } else {
-                        const temp = c.LLVMBuildAlloca(@ptrCast(cg.builder), @ptrCast(struct_ty), "byval_tmp");
+                        const temp = cg.buildAllocaAtEntry(@ptrCast(struct_ty), "byval_tmp");
                         _ = c.LLVMBuildStore(@ptrCast(cg.builder), val, temp);
                         final_arg = temp;
                     }
