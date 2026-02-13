@@ -31,7 +31,7 @@ pub fn generateSimdDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.C
         };
         const element_type = try self.getLLVMType(element_type_name);
         const vector_type = c.LLVMVectorType(@ptrCast(element_type), vector_size);
-        const alloca = c.LLVMBuildAlloca(self.builder, vector_type, decl.name.ptr);
+        const alloca = self.buildAllocaAtEntry(vector_type, decl.name);
         try CodeGenerator.putVariable(self, decl.name, structs.VariableInfo{
             .value = @ptrCast(alloca),
             .type_ref = @ptrCast(vector_type),

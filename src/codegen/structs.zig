@@ -470,7 +470,7 @@ pub fn generateStructInitializer(cg: *llvm.CodeGenerator, struct_init: ast.Struc
         return errors.CodegenError.TypeMismatch;
     };
     const field_map = cg.struct_fields.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
-    const struct_ptr = c.LLVMBuildAlloca(cg.builder, struct_type, "struct_init");
+    const struct_ptr = cg.buildAllocaAtEntry(struct_type, "struct_init");
     const struct_decl = getStructDecl(cg, struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
     for (struct_decl.fields.items, 0..) |field, i| {
         if (field.default_value) |default_val| {
