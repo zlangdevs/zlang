@@ -356,7 +356,13 @@ fn parseTypedefEnum(
             const value_name = trimSpaces(entry[0..eq_pos]);
             if (value_name.len == 0) continue;
 
-            const maybe_expr = try sanitizeConstantExpr(alloc, entry[eq_pos + 1 ..]);
+            var maybe_expr = try sanitizeConstantExpr(alloc, entry[eq_pos + 1 ..]);
+            if (maybe_expr) |expr| {
+                if (!isSimpleEnumExprForCodegen(expr)) {
+                    std.debug.print("warning: skipped enum initializer {s}.{s}: complex expression '{s}'\n", .{ enum_name, value_name, expr });
+                    maybe_expr = null;
+                }
+            }
             try enum_info.values.append(alloc, .{
                 .name = utils.dupe(u8, alloc, value_name),
                 .expr = maybe_expr,
@@ -496,7 +502,90 @@ fn constTypeName(ty: ConstType) []const u8 {
     };
 }
 
-fn emitConstants(writer: anytype, constants: []const ConstInfo, known_symbols: *std.StringHashMap(void), emitted_names: *std.StringHashMap(void)) !void {
+fn isSimpleConstExprForCodegen(expr: []const u8) bool {
+    const trimmed = trimSpaces(expr);
+    if (trimmed.len == 0) return false;
+
+    var saw_token = false;
+
+    for (trimmed, 0..) |ch, i| {
+        switch (ch) {
+            '+', '*', '/', '%', '<', '>', '&', '|', '^', '!', '~', '(', ')' => return false,
+            '-' => {
+                if (i != 0) return false;
+            },
+            else => {},
+        }
+    }
+
+    var i: usize = 0;
+    while (i < trimmed.len) {
+        const ch = trimmed[i];
+        const starts_token = std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '.' or ch == '\'';
+        if (!starts_token) {
+            i += 1;
+            continue;
+        }
+
+        const start = i;
+        while (i < trimmed.len and (std.ascii.isAlphanumeric(trimmed[i]) or trimmed[i] == '_' or trimmed[i] == '.' or trimmed[i] == '\'')) : (i += 1) {}
+        const token = trimmed[start..i];
+        saw_token = true;
+
+        if (isNumericToken(token)) continue;
+        if (std.mem.eql(u8, token, "true") or std.mem.eql(u8, token, "false")) continue;
+        return false;
+    }
+
+    return saw_token;
+}
+
+fn isSimpleEnumExprForCodegen(expr: []const u8) bool {
+    const trimmed = trimSpaces(expr);
+    if (trimmed.len == 0) return false;
+
+    var saw_token = false;
+
+    for (trimmed, 0..) |ch, i| {
+        switch (ch) {
+            '+', '*', '/', '%', '<', '>', '&', '|', '^', '!', '~', '(', ')' => return false,
+            '-' => {
+                if (i != 0) return false;
+            },
+            else => {},
+        }
+    }
+
+    var i: usize = 0;
+    while (i < trimmed.len) {
+        const ch = trimmed[i];
+        const starts_token = std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '.' or ch == '\'';
+        if (!starts_token) {
+            i += 1;
+            continue;
+        }
+
+        const start = i;
+        while (i < trimmed.len and (std.ascii.isAlphanumeric(trimmed[i]) or trimmed[i] == '_' or trimmed[i] == '.' or trimmed[i] == '\'')) : (i += 1) {}
+        const token = trimmed[start..i];
+        saw_token = true;
+
+        if (isNumericToken(token)) continue;
+        if (std.mem.eql(u8, token, "true") or std.mem.eql(u8, token, "false")) continue;
+        if (isIdentifierStart(token[0])) continue;
+        return false;
+    }
+
+    return saw_token;
+}
+
+fn emitConstants(
+    writer: anytype,
+    constants: []const ConstInfo,
+    known_symbols: *std.StringHashMap(void),
+    emitted_names: *std.StringHashMap(void),
+    skipped_names: *std.StringHashMap(void),
+) !void {
     var progress = true;
     while (progress) {
         progress = false;
@@ -504,6 +593,14 @@ fn emitConstants(writer: anytype, constants: []const ConstInfo, known_symbols: *
             if (emitted_names.contains(constant.name)) continue;
             if (known_symbols.contains(constant.name)) continue;
             if (!isConstExprResolvable(constant.expr, known_symbols)) continue;
+
+            if (!isSimpleConstExprForCodegen(constant.expr)) {
+                if (!skipped_names.contains(constant.name)) {
+                    std.debug.print("warning: skipped const {s}: non-literal expression '{s}'\n", .{ constant.name, constant.expr });
+                    try skipped_names.put(constant.name, {});
+                }
+                continue;
+            }
 
             try writer.print("const {s} {s} = {s};\n", .{ constTypeName(constant.ty), constant.name, constant.expr });
             try emitted_names.put(constant.name, {});
@@ -515,7 +612,8 @@ fn emitConstants(writer: anytype, constants: []const ConstInfo, known_symbols: *
 
 fn emitKnownHeaderFlags(writer: anytype, alloc: std.mem.Allocator, header_path: []const u8) !void {
     const base = std.fs.path.basename(header_path);
-    if (!std.mem.eql(u8, base, "raylib.h")) return;
+    const is_raylib_header = std.mem.eql(u8, base, "raylib.h") or std.mem.eql(u8, base, "raylib_wrap_subset.h");
+    if (!is_raylib_header) return;
 
     const header_dir = std.fs.path.dirname(header_path) orelse ".";
     const lib_dir = try std.fs.path.join(alloc, &[_][]const u8{ header_dir, "bin" });
@@ -1175,6 +1273,43 @@ fn needsWrapper(fn_info: FunctionInfo) bool {
     return false;
 }
 
+fn isBuiltinTypeName(type_name: []const u8) bool {
+    return std.mem.eql(u8, type_name, "void") or
+        std.mem.eql(u8, type_name, "bool") or
+        std.mem.eql(u8, type_name, "i8") or
+        std.mem.eql(u8, type_name, "i16") or
+        std.mem.eql(u8, type_name, "i32") or
+        std.mem.eql(u8, type_name, "i64") or
+        std.mem.eql(u8, type_name, "u8") or
+        std.mem.eql(u8, type_name, "u16") or
+        std.mem.eql(u8, type_name, "u32") or
+        std.mem.eql(u8, type_name, "u64") or
+        std.mem.eql(u8, type_name, "f16") or
+        std.mem.eql(u8, type_name, "f32") or
+        std.mem.eql(u8, type_name, "f64");
+}
+
+fn shouldSkipWrapper(fn_info: FunctionInfo, structs: *const StructMap) bool {
+    if (!needsWrapper(fn_info)) return false;
+
+    if (fn_info.ret_conversion == .none and !isBuiltinTypeName(fn_info.ret_z_type) and !isPointerType(fn_info.ret_z_type) and structs.contains(fn_info.ret_z_type)) {
+        return true;
+    }
+
+    for (fn_info.params.items) |param| {
+        if (param.conversion != .none) continue;
+        if (isBuiltinTypeName(param.z_type)) continue;
+        if (isPointerType(param.z_type)) continue;
+        if (structs.contains(param.z_type)) return true;
+    }
+
+    return false;
+}
+
+fn isKnownUnavailableLinkSymbol(name: []const u8) bool {
+    return std.mem.eql(u8, name, "DrawLineDashed");
+}
+
 fn emitCallArgs(writer: anytype, fn_info: FunctionInfo) !void {
     for (fn_info.params.items, 0..) |param, i| {
         if (i > 0) try writer.writeAll(", ");
@@ -1197,7 +1332,7 @@ fn emitCallArgs(writer: anytype, fn_info: FunctionInfo) !void {
     }
 }
 
-fn emitFunctionWrappers(writer: anytype, functions: []const FunctionInfo, used_helpers: *std.StringHashMap(void)) !void {
+fn emitFunctionWrappers(writer: anytype, functions: []const FunctionInfo, used_helpers: *std.StringHashMap(void), structs: *const StructMap) !void {
     for (functions) |fn_info| {
         const wrap_needed = needsWrapper(fn_info);
 
@@ -1208,9 +1343,20 @@ fn emitFunctionWrappers(writer: anytype, functions: []const FunctionInfo, used_h
             continue;
         }
 
+        if (isKnownUnavailableLinkSymbol(fn_info.name)) {
+            std.debug.print("warning: skipped function {s}: symbol may be unavailable in linked library\n", .{fn_info.name});
+            continue;
+        }
+
         try writer.print("fun @{s}(", .{fn_info.name});
         try emitParamList(writer, fn_info.params.items, true, fn_info.has_varargs);
         try writer.print(") >> {s};\n", .{fn_info.ret_abi_type});
+
+        if (shouldSkipWrapper(fn_info, structs)) {
+            std.debug.print("warning: skipped high-level wrapper for {s}: complex ABI signature\n", .{fn_info.name});
+            try writer.writeAll("\n");
+            continue;
+        }
 
         if (fn_info.has_varargs) {
             try writer.writeAll("\n");
@@ -1352,13 +1498,17 @@ pub fn generateFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out
 
     var emitted_const_names = std.StringHashMap(void).init(a);
     defer emitted_const_names.deinit();
-    try emitConstants(writer, constants.items, &enum_value_names, &emitted_const_names);
+    var skipped_const_names = std.StringHashMap(void).init(a);
+    defer skipped_const_names.deinit();
+    try emitConstants(writer, constants.items, &enum_value_names, &emitted_const_names, &skipped_const_names);
     if (emitted_const_names.count() > 0) {
         try writer.writeAll("\n");
     }
 
     for (functions.items) |fn_info| {
         if (!needsWrapper(fn_info)) continue;
+        if (isKnownUnavailableLinkSymbol(fn_info.name)) continue;
+        if (shouldSkipWrapper(fn_info, &structs)) continue;
 
         if (fn_info.ret_conversion != .none) {
             if (fn_info.ret_struct_name) |sn| {
@@ -1375,7 +1525,7 @@ pub fn generateFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out
     }
 
     try emitPackUnpackHelpers(writer, ordered_structs.items, &used_helpers);
-    try emitFunctionWrappers(writer, functions.items, &used_helpers);
+    try emitFunctionWrappers(writer, functions.items, &used_helpers, &structs);
 
     var out_file = try std.fs.cwd().createFile(out_path, .{ .truncate = true });
     defer out_file.close();
