@@ -16,12 +16,25 @@ pub fn generateEnumDeclaration(self: *CodeGenerator, enum_decl: ast.EnumDecl) er
         if (enum_value.value) |expr| {
             const const_value = try self.generateExpression(expr);
             if (c.LLVMIsConstant(const_value) == 0) {
-                return errors.CodegenError.TypeMismatch;
+                std.debug.print("warning: skipping enum value {s}.{s}: non-constant initializer\n", .{ enum_decl.name, enum_value.name });
+                current_value +%= 1;
+                continue;
             }
-            const int_value = c.LLVMConstIntGetSExtValue(const_value);
-            value = @intCast(int_value);
+
+            const const_type = c.LLVMTypeOf(const_value);
+            if (c.LLVMGetTypeKind(const_type) != c.LLVMIntegerTypeKind) {
+                std.debug.print("warning: skipping enum value {s}.{s}: unsupported initializer type\n", .{ enum_decl.name, enum_value.name });
+                current_value +%= 1;
+                continue;
+            }
+
+            const int_bits_64 = c.LLVMConstIntGetZExtValue(const_value);
+            const int_bits_32: u32 = @truncate(int_bits_64);
+            value = @bitCast(int_bits_32);
         }
-        const enum_const = c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
+
+        const value_bits: u32 = @bitCast(value);
+        const enum_const = c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), @as(c_ulonglong, value_bits), 0);
         const enum_name_z = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ enum_decl.name, enum_value.name });
         defer self.allocator.free(enum_name_z);
         const enum_name_z_null = utils.dupeZ(self.allocator, enum_name_z);
@@ -40,7 +53,7 @@ pub fn generateEnumDeclaration(self: *CodeGenerator, enum_decl: ast.EnumDecl) er
         try self.variables.put(utils.dupe(u8, self.allocator, enum_name_z), var_info);
         try self.variables.put(utils.dupe(u8, self.allocator, enum_value.name), var_info);
 
-        current_value = value + 1;
+        current_value = value +% 1;
     }
 }
 
