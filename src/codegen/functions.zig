@@ -881,6 +881,15 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
     if (param_count_llvm > 0) c.LLVMGetParamTypes(func_type, func_param_types.items.ptr);
     var final_args = std.ArrayList(c.LLVMValueRef){};
     defer final_args.deinit(cg.allocator);
+
+    const CallByValAttr = struct {
+        index: c_uint,
+        struct_ty: c.LLVMTypeRef,
+        alignment: u64,
+    };
+    var call_byval_attrs = std.ArrayList(CallByValAttr){};
+    defer call_byval_attrs.deinit(cg.allocator);
+
     const uses_sret = cg.sret_functions.get(resolved_name) != null;
     var sret_alloca: ?c.LLVMValueRef = null;
     if (uses_sret) {
@@ -959,13 +968,27 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                 const maybe_param_ty = utils.getLLVMTypeSilent(cg, tn) catch null;
                 if (maybe_param_ty) |param_ty| {
                     if (c.LLVMGetTypeKind(@ptrCast(param_ty)) == c.LLVMStructTypeKind and utils.shouldSplitAsVector(cg, @ptrCast(param_ty))) {
+                        var split_source = val;
+                        const split_source_ty = c.LLVMTypeOf(split_source);
+                        const split_source_kind = c.LLVMGetTypeKind(split_source_ty);
+
+                        if (split_source_kind == c.LLVMPointerTypeKind) {
+                            split_source = c.LLVMBuildLoad2(cg.builder, param_ty, split_source, "split_load");
+                        } else if (split_source_ty != param_ty) {
+                            split_source = try cg.castWithRules(split_source, param_ty, call.args.items[arg_idx]);
+                        }
+
+                        if (c.LLVMGetTypeKind(c.LLVMTypeOf(split_source)) != c.LLVMStructTypeKind) {
+                            return errors.CodegenError.TypeMismatch;
+                        }
+
                         const float_ty = c.LLVMFloatTypeInContext(cg.context);
                         const vec2_ty = c.LLVMVectorType(float_ty, 2);
                         const i32_ty = c.LLVMInt32TypeInContext(cg.context);
 
-                        const x = c.LLVMBuildExtractValue(cg.builder, val, 0, "split_x");
-                        const y = c.LLVMBuildExtractValue(cg.builder, val, 1, "split_y");
-                        const z = c.LLVMBuildExtractValue(cg.builder, val, 2, "split_z");
+                        const x = c.LLVMBuildExtractValue(cg.builder, split_source, 0, "split_x");
+                        const y = c.LLVMBuildExtractValue(cg.builder, split_source, 1, "split_y");
+                        const z = c.LLVMBuildExtractValue(cg.builder, split_source, 2, "split_z");
 
                         const idx0 = c.LLVMConstInt(i32_ty, 0, 0);
                         const idx1 = c.LLVMConstInt(i32_ty, 1, 0);
@@ -999,6 +1022,12 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                         _ = c.LLVMBuildStore(@ptrCast(cg.builder), val, temp);
                         final_arg = temp;
                     }
+
+                    try call_byval_attrs.append(cg.allocator, .{
+                        .index = @intCast(param_idx + 1),
+                        .struct_ty = @ptrCast(struct_ty),
+                        .alignment = cg.getAlignmentForType(@ptrCast(struct_ty)),
+                    });
                 }
             }
 
@@ -1040,6 +1069,14 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
         c.LLVMBuildCall2(cg.builder, func_type, func, final_args.items.ptr, @intCast(final_args.items.len), "")
     else
         c.LLVMBuildCall2(cg.builder, func_type, func, null, 0, "");
+
+    for (call_byval_attrs.items) |attr| {
+        const byval_attr = c.LLVMCreateTypeAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("byval", 5), attr.struct_ty);
+        c.LLVMAddCallSiteAttribute(call_inst, attr.index, byval_attr);
+
+        const align_attr = c.LLVMCreateEnumAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("align", 5), attr.alignment);
+        c.LLVMAddCallSiteAttribute(call_inst, attr.index, align_attr);
+    }
 
     if (uses_sret and sret_alloca != null) {
         if (cg.sret_functions.get(resolved_name)) |pt| {
