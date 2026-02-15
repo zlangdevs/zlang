@@ -1,3 +1,5 @@
+module std.assert;
+
 ?? ZLang Standard Library - Assert Module
 ?? Provides assertion functions for testing and debugging
 

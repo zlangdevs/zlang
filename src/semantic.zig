@@ -378,7 +378,7 @@ pub const Analyzer = struct {
 
     fn analyzeFunctionCall(self: *Analyzer, node: *ast.Node, call: ast.FunctionCall) errors.SemanticError!void {
         if (!call.is_libc and !self.functions.contains(call.name) and self.lookupVariable(call.name) == null) {
-            self.reportNodeErrorFmt(node, "Undefined function '{s}'", .{call.name}, "Declare or import the function before calling it");
+            self.reportNodeErrorFmt(node, "Undefined function '{s}'", .{call.name}, "Declare it or import its module with use (maybe you forgot to import it?)");
         }
 
         for (call.args.items) |arg| {

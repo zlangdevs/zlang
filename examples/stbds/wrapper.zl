@@ -1,3 +1,5 @@
+module wrapper;
+
 wrap @array_new() >> ptr<i32>;
 wrap @array_push(arr: ptr<ptr<i32>>, value: i32) >> void;
 wrap @array_length(arr: ptr<i32>) >> i32;

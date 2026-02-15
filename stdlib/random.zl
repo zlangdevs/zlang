@@ -1,3 +1,5 @@
+module std.random;
+
 use std.time
 
 wrap @srand(seed: u32) >> void;

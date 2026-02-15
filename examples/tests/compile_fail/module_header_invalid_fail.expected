@@ -1,0 +1,2 @@
+Invalid module header. Expected: module a.b.c;
+Use a dotted module path and terminate it with ';'

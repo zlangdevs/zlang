@@ -626,7 +626,8 @@ fn emitKnownHeaderFlags(writer: anytype, alloc: std.mem.Allocator, header_path: 
     try writer.writeAll("#flag -lpthread\n");
     try writer.writeAll("#flag -ldl\n");
     try writer.writeAll("#flag -lrt\n");
-    try writer.writeAll("#flag -lX11\n\n");
+    try writer.writeAll("#flag -lX11\n");
+    try writer.writeAll("module raylib;\n\n");
 }
 
 fn splitTopLevel(alloc: std.mem.Allocator, input: []const u8, delimiter: u8) !std.ArrayList([]const u8) {
