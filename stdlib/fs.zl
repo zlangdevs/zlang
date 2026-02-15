@@ -1,3 +1,5 @@
+module std.fs;
+
 ?? Filesystem module for zlang standard library
 ?? Provides file I/O operations and filesystem utilities
 

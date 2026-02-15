@@ -1,3 +1,5 @@
+module app;
+
 use utils
 
 fun main() >> i32 {
