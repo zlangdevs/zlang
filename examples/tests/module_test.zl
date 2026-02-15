@@ -1,0 +1,26 @@
+module app.module_test;
+use std
+
+fun main() >> i32 {
+    i32 str_ok = 0;
+    if (strEq("abc", "abc")) {
+        str_ok = 1;
+    }
+    @printf("expected 1):%d\n", str_ok);
+
+    i32 dice = randRange(1, 6);
+    i32 range_ok = 0;
+    if (dice >= 1 && dice <= 6) {
+        range_ok = 1;
+    }
+    @printf("expected 1):%d\n", range_ok);
+
+    i64 ts = now();
+    i32 time_ok = 0;
+    if (ts > 0) {
+        time_ok = 1;
+    }
+    @printf("expected 1):%d\n", time_ok);
+
+    return 0;
+}

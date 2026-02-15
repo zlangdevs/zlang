@@ -1,3 +1,5 @@
+module utils;
+
 fun add(a: i32, b: i32) >> i32 {
     @printf("add function from utils.zl called!\n");
     return a + b;

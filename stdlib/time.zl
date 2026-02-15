@@ -1,3 +1,5 @@
+module std.time;
+
 ?? Time module for zlang standard library
 ?? Provides time-related functions and utilities
 

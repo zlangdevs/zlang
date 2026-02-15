@@ -939,10 +939,11 @@ initializer_expression:
 
 module_path:
     TOKEN_IDENTIFIER { $$ = strdup($1); }
-    | TOKEN_IDENTIFIER TOKEN_DOT TOKEN_IDENTIFIER {
-        size_t len = strlen($1) + strlen($3) + 2; // +2 for dot and null terminator
+    | module_path TOKEN_DOT TOKEN_IDENTIFIER {
+        size_t len = strlen($1) + strlen($3) + 2; // dot + null terminator
         $$ = malloc(len);
         snprintf($$, len, "%s.%s", $1, $3);
+        free($1);
     }
 ;
 

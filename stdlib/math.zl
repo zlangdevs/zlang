@@ -1,3 +1,6 @@
+module std.math;
+#flag -lm
+
 ?? ZLang Standard Library - Math Module
 ?? Comprehensive mathematical functions wrapping C math library
 
@@ -203,7 +206,7 @@ fun smoothstep(edge0: f64, edge1: f64, x: f64) >> f64 {
 fun gcd(a: i32, b: i32) >> i32 {
     i32 temp_a = a;
     i32 temp_b = b;
-    
+
     i32 neg_a = -temp_a;
     if neg_a > 0 {
         temp_a = neg_a;
@@ -212,7 +215,7 @@ fun gcd(a: i32, b: i32) >> i32 {
     if neg_b > 0 {
         temp_b = neg_b;
     }
-    
+
     if temp_b == 0 {
         return temp_a;
     }
@@ -262,4 +265,3 @@ fun factorial(n: i32) >> i64 {
     i64 result = n64 * prev;
     return result;
 }
-

@@ -1,3 +1,5 @@
+module app;
+
 use wrapper
 
 fun main() >> i32 {

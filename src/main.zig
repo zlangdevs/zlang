@@ -16,13 +16,15 @@ const preprocessor = @import("preprocessor/preprocessor.zig");
 const allocator = std.heap.page_allocator;
 
 const ModuleInfo = struct {
+    name: []const u8,
     path: []const u8,
     ast: *ast.Node,
     dependencies: std.ArrayList([]const u8),
     linker_flags: std.ArrayList([]const u8),
 
-    pub fn init(alloc: std.mem.Allocator, path: []const u8, ast_node: *ast.Node) ModuleInfo {
+    pub fn init(alloc: std.mem.Allocator, name: []const u8, path: []const u8, ast_node: *ast.Node) ModuleInfo {
         return ModuleInfo{
+            .name = utils.dupe(u8, alloc, name),
             .path = utils.dupe(u8, alloc, path),
             .ast = ast_node,
             .dependencies = std.ArrayList([]const u8){},
@@ -31,6 +33,7 @@ const ModuleInfo = struct {
     }
 
     pub fn deinit(self: *ModuleInfo, alloc: std.mem.Allocator) void {
+        alloc.free(self.name);
         alloc.free(self.path);
         self.dependencies.deinit(alloc);
         self.linker_flags.deinit(alloc);
@@ -356,7 +359,28 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
     };
     defer preprocessed.deinitFlags(arena);
 
-    const ast_root = parser.parse(arena, preprocessed.text) catch |err| {
+    const parsed_header = parseModuleHeader(arena, preprocessed.text) catch |err| {
+        if (err == error.InvalidModuleHeader) {
+            const header_start = findModuleHeaderStart(preprocessed.text);
+            const header_pos = sourcePosAtOffset(preprocessed.text, header_start);
+            diagnostics.printDiagnostic(backing_alloc, .{
+                .file_path = file_path,
+                .line = header_pos.line,
+                .column = header_pos.column,
+                .message = "Invalid module header. Expected: module a.b.c;",
+                .severity = .Error,
+                .hint = "Use a dotted module path and terminate it with ';'",
+            });
+        }
+        return err;
+    };
+
+    const module_name = if (parsed_header.module_name) |name|
+        name
+    else
+        defaultModuleNameFromPath(file_path);
+
+    const ast_root = parser.parse(arena, parsed_header.text_for_parser) catch |err| {
         const parse_errors = parser.getParseErrors();
         if (parse_errors.len > 0) {
             for (parse_errors) |parse_err| {
@@ -387,7 +411,7 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
         return err;
     };
     if (ast_root) |root| {
-        var module = ModuleInfo.init(backing_alloc, file_path, root);
+        var module = ModuleInfo.init(backing_alloc, module_name, file_path, root);
         collectUseStatements(root, &module.dependencies);
         for (preprocessed.flags.items) |flag| {
             try module.linker_flags.append(backing_alloc, utils.dupe(u8, backing_alloc, flag));
@@ -413,6 +437,93 @@ fn resolvePathRelativeToModule(alloc: std.mem.Allocator, module_path: []const u8
     const joined = try std.fs.path.join(alloc, &[_][]const u8{ base_dir, raw_path });
     defer alloc.free(joined);
     return utils.dupe(u8, alloc, joined);
+}
+
+const ParsedModuleHeader = struct {
+    module_name: ?[]const u8,
+    text_for_parser: []const u8,
+};
+
+const SourcePos = struct {
+    line: usize,
+    column: usize,
+};
+
+fn sourcePosAtOffset(input: []const u8, offset_raw: usize) SourcePos {
+    const offset = @min(offset_raw, input.len);
+    var line: usize = 1;
+    var column: usize = 1;
+    var i: usize = 0;
+    while (i < offset) : (i += 1) {
+        if (input[i] == '\n') {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    return .{ .line = line, .column = column };
+}
+
+fn findModuleHeaderStart(input: []const u8) usize {
+    var i: usize = 0;
+    while (i < input.len and isSpace(input[i])) : (i += 1) {}
+    return i;
+}
+
+fn isModulePathChar(c: u8) bool {
+    return isIdentChar(c) or c == '.';
+}
+
+fn defaultModuleNameFromPath(file_path: []const u8) []const u8 {
+    const base = std.fs.path.basename(file_path);
+    if (std.mem.endsWith(u8, base, ".zl")) {
+        return base[0 .. base.len - 3];
+    }
+    return base;
+}
+
+fn parseModuleHeader(alloc: std.mem.Allocator, input: []const u8) !ParsedModuleHeader {
+    var i: usize = 0;
+    while (i < input.len and isSpace(input[i])) : (i += 1) {}
+
+    if (i + 6 > input.len or !std.mem.eql(u8, input[i .. i + 6], "module")) {
+        return .{
+            .module_name = null,
+            .text_for_parser = utils.dupe(u8, alloc, input),
+        };
+    }
+    if (i + 6 < input.len and isIdentChar(input[i + 6])) {
+        return .{
+            .module_name = null,
+            .text_for_parser = utils.dupe(u8, alloc, input),
+        };
+    }
+
+    var p = i + 6;
+    while (p < input.len and isSpace(input[p])) : (p += 1) {}
+    const name_start = p;
+    while (p < input.len and isModulePathChar(input[p])) : (p += 1) {}
+    const name_end = p;
+
+    if (name_start == name_end) return error.InvalidModuleHeader;
+    const module_name = trimSpaces(input[name_start..name_end]);
+    if (module_name.len == 0) return error.InvalidModuleHeader;
+
+    while (p < input.len and isSpace(input[p])) : (p += 1) {}
+    if (p >= input.len or input[p] != ';') return error.InvalidModuleHeader;
+    const header_end = p + 1;
+
+    var stripped = utils.dupe(u8, alloc, input);
+    var s: usize = i;
+    while (s < header_end) : (s += 1) {
+        if (stripped[s] != '\n') stripped[s] = ' ';
+    }
+
+    return .{
+        .module_name = utils.dupe(u8, alloc, module_name),
+        .text_for_parser = stripped,
+    };
 }
 
 fn appendModuleFlagsToContext(ctx: *Context, module: *const ModuleInfo, alloc: std.mem.Allocator) !void {
@@ -480,6 +591,66 @@ fn appendModuleFlagsToContext(ctx: *Context, module: *const ModuleInfo, alloc: s
     }
 }
 
+fn moduleContainsMain(module: *const ModuleInfo) bool {
+    if (module.ast.data != .program) return false;
+    const prog = module.ast.data.program;
+    for (prog.functions.items) |func| {
+        if (func.data == .function and std.mem.eql(u8, func.data.function.name, "main")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn moduleMatchesImport(import_path: []const u8, module_name: []const u8) bool {
+    if (std.mem.eql(u8, import_path, module_name)) return true;
+    if (module_name.len <= import_path.len) return false;
+    return std.mem.startsWith(u8, module_name, import_path) and module_name[import_path.len] == '.';
+}
+
+fn hasModuleByName(modules: []const ModuleInfo, module_name: []const u8) bool {
+    for (modules) |module| {
+        if (std.mem.eql(u8, module.name, module_name)) return true;
+    }
+    return false;
+}
+
+fn loadStdModulesForDep(dep: []const u8, modules: *std.ArrayList(ModuleInfo), loaded_paths: *std.StringHashMap(void), arena: std.mem.Allocator, alloc: std.mem.Allocator) !void {
+    if (std.mem.eql(u8, dep, "std")) {
+        const stdlib_path = try getStdlibPath(alloc);
+        defer alloc.free(stdlib_path);
+
+        var dir = try std.fs.cwd().openDir(stdlib_path, .{ .iterate = true });
+        defer dir.close();
+
+        var it = dir.iterate();
+        while (try it.next()) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".zl")) continue;
+
+            const full = try std.fs.path.join(alloc, &[_][]const u8{ stdlib_path, entry.name });
+            defer alloc.free(full);
+
+            if (loaded_paths.contains(full)) continue;
+
+            const module = try parseModuleFile(full, arena, alloc);
+            try loaded_paths.put(utils.dupe(u8, alloc, full), {});
+            try modules.append(alloc, module);
+        }
+        return;
+    }
+
+    var has_zstdpath: bool = false;
+    const std_path = resolveStdModule(dep, alloc, &has_zstdpath) orelse return error.ModuleNotFound;
+    defer alloc.free(std_path);
+
+    if (loaded_paths.contains(std_path)) return;
+
+    const std_module = try parseModuleFile(std_path, arena, alloc);
+    try loaded_paths.put(utils.dupe(u8, alloc, std_path), {});
+    try modules.append(alloc, std_module);
+}
+
 fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
     var arena_ast = ast.ArenaAST.init(alloc);
     const arena = arena_ast.allocator();
@@ -492,42 +663,99 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
         modules.deinit(alloc);
     }
 
-    var loaded_modules = std.StringHashMap(void).init(alloc);
-    defer loaded_modules.deinit();
-
-    var to_process = std.ArrayList([]const u8){};
-    defer to_process.deinit(alloc);
+    var loaded_paths = std.StringHashMap(void).init(alloc);
+    defer loaded_paths.deinit();
 
     for (ctx.input_files.items) |input_file| {
-        try to_process.append(alloc, input_file);
-    }
-
-    var i: usize = 0;
-    while (i < to_process.items.len) : (i += 1) {
-        const current_file = to_process.items[i];
-
-        if (loaded_modules.contains(current_file)) {
-            continue;
-        }
-
-        const module = try parseModuleFile(current_file, arena, alloc);
-        try appendModuleFlagsToContext(ctx, &module, alloc);
-        try loaded_modules.put(utils.dupe(u8, alloc, current_file), {});
-
-        for (module.dependencies.items) |dep| {
-            if (try resolveModulePath(current_file, dep, alloc)) |dep_path| {
-                if (!loaded_modules.contains(dep_path)) {
-                    try to_process.append(alloc, dep_path);
-                }
-            } else {
-                std.debug.print("\x1b[31mError:\x1b[0m Cannot resolve module '\x1b[33m{s}\x1b[0m' imported from {s}\n", .{ dep, current_file });
-                arena_ast.deinit();
-                return error.ModuleNotFound;
-            }
-        }
-
+        if (loaded_paths.contains(input_file)) continue;
+        const module = try parseModuleFile(input_file, arena, alloc);
+        try loaded_paths.put(utils.dupe(u8, alloc, input_file), {});
         try modules.append(alloc, module);
     }
+
+    var scan_idx: usize = 0;
+    while (scan_idx < modules.items.len) : (scan_idx += 1) {
+        const module = modules.items[scan_idx];
+        for (module.dependencies.items) |dep| {
+            if (!(std.mem.eql(u8, dep, "std") or std.mem.startsWith(u8, dep, "std."))) continue;
+            if (hasModuleByName(modules.items, dep)) continue;
+
+            loadStdModulesForDep(dep, &modules, &loaded_paths, arena, alloc) catch {
+                std.debug.print("\x1b[31mError:\x1b[0m Cannot resolve module '\x1b[33m{s}\x1b[0m' imported from {s}\n", .{ dep, module.path });
+                arena_ast.deinit();
+                return error.ModuleNotFound;
+            };
+        }
+    }
+
+    var module_names = std.StringHashMap(void).init(alloc);
+    defer module_names.deinit();
+    for (modules.items) |module| {
+        try module_names.put(module.name, {});
+    }
+
+    var root_modules = std.StringHashMap(void).init(alloc);
+    defer root_modules.deinit();
+    for (modules.items) |*module| {
+        if (moduleContainsMain(module)) {
+            try root_modules.put(module.name, {});
+        }
+    }
+    if (root_modules.count() == 0) {
+        for (ctx.input_files.items) |input_file| {
+            for (modules.items) |*module| {
+                if (std.mem.eql(u8, module.path, input_file)) {
+                    try root_modules.put(module.name, {});
+                }
+            }
+        }
+    }
+
+    var reachable_modules = std.StringHashMap(void).init(alloc);
+    defer reachable_modules.deinit();
+    var queue = std.ArrayList([]const u8){};
+    defer queue.deinit(alloc);
+
+    var root_it = root_modules.iterator();
+    while (root_it.next()) |entry| {
+        try reachable_modules.put(entry.key_ptr.*, {});
+        try queue.append(alloc, entry.key_ptr.*);
+    }
+
+    var q_idx: usize = 0;
+    while (q_idx < queue.items.len) : (q_idx += 1) {
+        const current_module_name = queue.items[q_idx];
+
+        for (modules.items) |module| {
+            if (!std.mem.eql(u8, module.name, current_module_name)) continue;
+
+            for (module.dependencies.items) |dep| {
+                var matched_any = false;
+                var names_it = module_names.iterator();
+                while (names_it.next()) |name_entry| {
+                    const candidate = name_entry.key_ptr.*;
+                    if (!moduleMatchesImport(dep, candidate)) continue;
+                    matched_any = true;
+                    if (!reachable_modules.contains(candidate)) {
+                        try reachable_modules.put(candidate, {});
+                        try queue.append(alloc, candidate);
+                    }
+                }
+                if (!matched_any) {
+                    std.debug.print("\x1b[31mError:\x1b[0m Cannot resolve module '\x1b[33m{s}\x1b[0m' imported from module {s}\n", .{ dep, current_module_name });
+                    arena_ast.deinit();
+                    return error.ModuleNotFound;
+                }
+            }
+        }
+    }
+
+    for (modules.items) |*module| {
+        if (reachable_modules.contains(module.name)) {
+            try appendModuleFlagsToContext(ctx, module, alloc);
+        }
+    }
+
     const merged_program_data = ast.NodeData{
         .program = ast.Program{
             .functions = std.ArrayList(*ast.Node){},
@@ -536,41 +764,10 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
     };
 
     const merged_program = ast.Node.create(arena, merged_program_data);
-    var module_name_map = std.StringHashMap([]const u8).init(alloc);
-    defer module_name_map.deinit();
-    var module_deps = std.StringHashMap(std.ArrayList([]const u8)).init(alloc);
-    defer {
-        var it = module_deps.iterator();
-        while (it.next()) |entry| entry.value_ptr.deinit(alloc);
-        module_deps.deinit();
-    }
-    for (modules.items) |module| {
-        const base = std.fs.path.basename(module.path);
-        const name_no_ext = if (std.mem.endsWith(u8, base, ".zl")) base[0 .. base.len - 3] else base;
-        try module_name_map.put(module.path, utils.dupe(u8, alloc, name_no_ext));
-        var deps = std.ArrayList([]const u8){};
-        for (module.dependencies.items) |d| try deps.append(alloc, utils.dupe(u8, alloc, d));
-        try module_deps.put(utils.dupe(u8, alloc, name_no_ext), deps);
-    }
-    var func_to_module = std.StringHashMap([]const u8).init(alloc);
-    defer func_to_module.deinit();
-    for (modules.items) |module| {
-        switch (module.ast.data) {
-            .program => |prog| {
-                for (prog.functions.items) |func| {
-                    const owner = module_name_map.get(module.path).?;
-                    if (func.data == .function) {
-                        try func_to_module.put(func.data.function.name, owner);
-                    } else if (func.data == .c_function_decl) {
-                        try func_to_module.put(func.data.c_function_decl.name, owner);
-                    }
-                }
-            },
-            else => {},
-        }
-    }
 
     for (modules.items) |module| {
+        if (!reachable_modules.contains(module.name)) continue;
+
         switch (module.ast.data) {
             .program => |prog| {
                 for (prog.functions.items) |func| {
@@ -1266,38 +1463,6 @@ pub fn main() !u8 {
     };
 
     defer code_generator.deinit();
-    {
-        for (ctx.input_files.items) |input_file| {
-            const input = read_file(input_file) catch continue;
-            var temp_arena = ast.ArenaAST.init(allocator);
-            defer temp_arena.deinit();
-            const preprocessed = preprocessor.preprocess(temp_arena.allocator(), input) catch continue;
-            const temp_root = parser.parse(temp_arena.allocator(), preprocessed) catch continue;
-            if (temp_root) |root| {
-                var deps = std.ArrayList([]const u8){};
-                defer deps.deinit(allocator);
-                collectUseStatements(root, &deps);
-                const base = std.fs.path.basename(input_file);
-                const name_no_ext = if (std.mem.endsWith(u8, base, ".zl")) base[0 .. base.len - 3] else base;
-                var dep_slices = std.ArrayList([]const u8){};
-                defer dep_slices.deinit(allocator);
-                for (deps.items) |d| dep_slices.append(allocator, d) catch {};
-                code_generator.registerModule(name_no_ext, input_file, dep_slices.items) catch {};
-                switch (root.data) {
-                    .program => |prog| {
-                        for (prog.functions.items) |fn_node| {
-                            if (fn_node.data == .function) {
-                                code_generator.registerFunctionModule(fn_node.data.function.name, name_no_ext) catch {};
-                            } else if (fn_node.data == .c_function_decl) {
-                                code_generator.registerFunctionModule(fn_node.data.c_function_decl.name, name_no_ext) catch {};
-                            }
-                        }
-                    },
-                    else => {},
-                }
-            }
-        }
-    }
     code_generator.generateCode(ast_root.getRoot()) catch |err| {
         const error_msg = switch (err) {
             error.FunctionCreationFailed => "Failed to create function.",

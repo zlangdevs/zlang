@@ -14,6 +14,7 @@ This example demonstrates how to use ZLang's multi-file compilation with C libra
 
 ### main.zl
 ```
+module app;
 use wrapper;
 
 fun main() >> i32 {
@@ -24,6 +25,8 @@ fun main() >> i32 {
 
 ### wrapper.zl
 ```zl
+module wrapper;
+
 fun @square(n: i32) >> i32;  // External C function declaration
 
 fun square(n: i32) >> i32 {  // ZLang wrapper function
@@ -115,7 +118,7 @@ The `build.sh` script has several configuration variables at the top that you ca
 1. **Multi-file compilation**: How to split ZLang code across multiple files
 2. **C integration**: How to call external C functions using `@` syntax
 3. **Wrapper functions**: Best practice of wrapping external C functions in ZLang functions
-4. **Import system**: Using `use` statements to import functions from other files
+4. **Import system**: Using `module` + `use` to import by module name
 5. **Linking**: How to link compiled C object files with ZLang code
 
 ## Technical Details

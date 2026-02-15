@@ -270,8 +270,29 @@ wrap @some_c_function(x: i32, y: f32) >> i32;
 
 ZLang supports importing other modules using the `use` directive.
 
-- **Local modules**: `use utils` loads `utils.zl` located relative to the importing file's directory.
+- **Modules are declared in source files**: `module net.http;`
+- **Imports are by module name**: `use net.http`
+- **Prefix imports include submodules**: `use net` imports `net` and `net.*`
 - **Standard library modules**: `use std.<module>` loads modules from the standard library.
+
+Example:
+
+```zl
+module app.main;
+use net.http;
+
+fun main() >> i32 {
+    return 0;
+}
+```
+
+```zl
+module net.http;
+
+fun get(url: ptr<u8>) >> i32 {
+    return 200;
+}
+```
 
 ### Standard Library Resolution
 

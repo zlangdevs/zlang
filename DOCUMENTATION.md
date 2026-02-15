@@ -123,6 +123,19 @@ Or pass a directory to compile all `.zl` files in it:
 zlang src/ -o program
 ```
 
+Use module headers to define logical modules independent of file paths:
+
+```zl
+module app.main;
+use net.http;
+```
+
+```zl
+module net.http;
+```
+
+`use net.http` imports only `net.http`, while `use net` imports `net` and all submodules (`net.*`).
+
 ### C Header Wrapper Generation
 
 Generate ZLang bindings from C headers:
