@@ -1,8 +1,12 @@
 const std = @import("std");
 
+fn makeNoOp(_: *std.Build.Step, _: std.Build.Step.MakeOptions) anyerror!void {}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const system_prefix = b.option([]const u8, "system-prefix", "Install root for zlang binary and stdlib") orelse "/usr/local/lib/zlang";
+    const system_symlink = b.option([]const u8, "system-symlink", "Symlink path for zlang executable") orelse "/usr/bin/zlang";
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -14,6 +18,10 @@ pub fn build(b: *std.Build) void {
         .name = "zlang",
         .root_module = exe_mod,
     });
+
+    const build_step = b.step("build", "Build zlang compiler");
+    b.default_step = build_step;
+    build_step.dependOn(&exe.step);
 
     // generating and linking parser (must be first to generate parser.h)
     const bison_cmd = b.addSystemCommand(&[_][]const u8{ "bison", "-d", "-o", "src/parser/parser.c", "src/parser/parser.y" });
@@ -51,9 +59,33 @@ pub fn build(b: *std.Build) void {
     exe.step.dependOn(&flex_cmd.step);
     exe.step.dependOn(&bison_cmd.step);
 
-    b.installArtifact(exe);
+    const install_exe = b.addInstallArtifact(exe, .{});
+
+    const install_system_cmd = b.addSystemCommand(&[_][]const u8{
+        "sh",
+        "-c",
+        b.fmt(
+            "set -e; install -d \"{0s}\"; rm -f \"{0s}/zlang\"; rm -rf \"{0s}/stdlib\"; install -m 755 \"zig-out/bin/zlang\" \"{0s}/zlang\"; cp -a \"stdlib\" \"{0s}/stdlib\"; ln -sfn \"{0s}/zlang\" \"{1s}\"",
+            .{ system_prefix, system_symlink },
+        ),
+    });
+    install_system_cmd.step.dependOn(&install_exe.step);
+
+    b.getInstallStep().dependOn(&install_system_cmd.step);
+
+    const uninstall_system_cmd = b.addSystemCommand(&[_][]const u8{
+        "sh",
+        "-c",
+        b.fmt(
+            "set -e; if [ -e \"{1s}\" ] && [ ! -L \"{1s}\" ]; then echo \"Refusing to remove non-symlink: {1s}\"; exit 1; fi; rm -f \"{1s}\"; rm -rf \"{0s}\"",
+            .{ system_prefix, system_symlink },
+        ),
+    });
+    const uninstall_step = b.getUninstallStep();
+    uninstall_step.makeFn = makeNoOp;
+    uninstall_step.dependOn(&uninstall_system_cmd.step);
+
     const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
