@@ -49,6 +49,14 @@ const ElementResult = struct {
     element_type: c.LLVMTypeRef,
 };
 
+fn pointerElementTypeFromName(cg: *llvm.CodeGenerator, type_name: []const u8) errors.CodegenError!?c.LLVMTypeRef {
+    if (!(std.mem.startsWith(u8, type_name, "ptr<") and std.mem.endsWith(u8, type_name, ">"))) {
+        return null;
+    }
+    const inner_name = type_name[4 .. type_name.len - 1];
+    return try utils.getLLVMType(cg, inner_name);
+}
+
 pub fn getStructTypeName(cg: *llvm.CodeGenerator, struct_type: c.LLVMTypeRef) ![]const u8 {
     const name_ptr = c.LLVMGetStructName(struct_type);
     if (name_ptr != null) {
@@ -85,7 +93,10 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
                     const element_ptr = c.LLVMBuildGEP2(cg.builder, current_type, current_value, &indices[0], 2, "array_element_ptr");
                     break :blk ElementResult{ .element_ptr = element_ptr, .element_type = element_type };
                 } else if (var_type_kind == c.LLVMPointerTypeKind) {
-                    const element_type = c.LLVMGetElementType(current_type);
+                    const element_type = if (try pointerElementTypeFromName(cg, current_type_name)) |named_type|
+                        named_type
+                    else
+                        c.LLVMGetElementType(current_type);
                     const loaded_ptr = c.LLVMBuildLoad2(cg.builder, current_type, current_value, "loaded_ptr");
                     var indices = [_]c.LLVMValueRef{index_expr};
                     const element_ptr = c.LLVMBuildGEP2(cg.builder, element_type, loaded_ptr, &indices[0], 1, "ptr_element_ptr");
@@ -136,12 +147,21 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
             const field_name = path[0..field_name_len];
             var var_type_kind = c.LLVMGetTypeKind(current_type);
             if (var_type_kind == c.LLVMPointerTypeKind) {
-                const element_type = c.LLVMGetElementType(current_type);
+                const element_type = if (try pointerElementTypeFromName(cg, current_type_name)) |named_type|
+                    named_type
+                else
+                    c.LLVMGetElementType(current_type);
                 if (c.LLVMGetTypeKind(element_type) == c.LLVMStructTypeKind) {
+                    current_value = c.LLVMBuildLoad2(cg.builder, current_type, current_value, "loaded_struct_ptr");
                     current_type = element_type;
                     var_type_kind = c.LLVMStructTypeKind;
                     if (std.mem.startsWith(u8, current_type_name, "ptr<") and std.mem.endsWith(u8, current_type_name, ">")) {
                         current_type_name = current_type_name[4 .. current_type_name.len - 1];
+                    } else {
+                        const name_ptr = c.LLVMGetStructName(element_type);
+                        if (name_ptr != null) {
+                            current_type_name = std.mem.sliceTo(name_ptr, 0);
+                        }
                     }
                 }
             }
@@ -316,7 +336,10 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
                     const element_ptr = c.LLVMBuildGEP2(cg.builder, current_type, current_value, &indices[0], 2, "array_element_ptr");
                     break :blk ElementResult{ .element_ptr = element_ptr, .element_type = element_type };
                 } else if (var_type_kind == c.LLVMPointerTypeKind) {
-                    const element_type = c.LLVMGetElementType(current_type);
+                    const element_type = if (try pointerElementTypeFromName(cg, current_type_name)) |named_type|
+                        named_type
+                    else
+                        c.LLVMGetElementType(current_type);
                     const loaded_ptr = c.LLVMBuildLoad2(cg.builder, current_type, current_value, "loaded_ptr");
                     var indices = [_]c.LLVMValueRef{index_expr};
                     const element_ptr = c.LLVMBuildGEP2(cg.builder, element_type, loaded_ptr, &indices[0], 1, "ptr_element_ptr");
