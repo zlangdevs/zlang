@@ -1,0 +1,76 @@
+module std.io;
+
+use std.string
+
+wrap @write(fd: i32, buf: ptr<u8>, count: u64) >> i64;
+wrap @read(fd: i32, buf: ptr<u8>, count: u64) >> i64;
+
+struct va_list {
+    gp_offset u32,
+    fp_offset u32,
+    overflow_arg_area ptr<void>,
+    reg_save_area ptr<void>
+}
+
+wrap @vprintf(format: ptr<u8>, ap: ptr<va_list>) >> i32;
+
+fun printf(format: ptr<u8>, args: vararg<_>) >> i32 {
+    va_list vl;
+    @va_start(&vl);
+    i32 result = vprintf(format, &vl);
+    @va_end(&vl);
+    return result;
+}
+
+fun print(text: ptr<u8>) >> i32 {
+    return printf("%s", text);
+}
+
+fun println(text: ptr<u8>) >> i32 {
+    return printf("%s\n", text);
+}
+
+fun printInt(value: i32) >> i32 {
+    return printf("%d", value);
+}
+
+fun printFloat(value: f64) >> i32 {
+    return printf("%f", value);
+}
+
+fun eprint(text: ptr<u8>) >> i32 {
+    u64 len = strlen(text);
+    i64 result = write(2, text, len);
+    return result as i32;
+}
+
+fun eprintln(text: ptr<u8>) >> i32 {
+    i32 first = eprint(text);
+    i64 second = write(2, "\n", 1);
+    return first + (second as i32);
+}
+
+fun readLine(buffer: ptr<u8>, max_len: i32) >> i32 {
+    if (max_len <= 1) {
+        if (max_len == 1) {
+            buffer[0] = 0;
+        }
+        return 0;
+    }
+
+    i64 count = read(0, buffer, (max_len - 1) as u64);
+    if (count <= 0) {
+        buffer[0] = 0;
+        return 0;
+    }
+
+    i32 n = count as i32;
+    buffer[n] = 0;
+
+    if (n > 0 && buffer[n - 1] == 10) {
+        buffer[n - 1] = 0;
+        return n - 1;
+    }
+
+    return n;
+}

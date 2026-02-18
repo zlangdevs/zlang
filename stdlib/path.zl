@@ -1,0 +1,69 @@
+module std.path;
+
+use std.string
+
+wrap @strrchr(s: ptr<u8>, c: i32) >> ptr<u8>;
+
+fun join(out: ptr<u8>, left: ptr<u8>, right: ptr<u8>) >> ptr<u8> {
+    strcpy(out, left);
+
+    u64 len = strlen(out);
+    if (len > 0) {
+        u8 last = out[len - 1];
+        if (last != 47) {
+            strcat(out, "/");
+        }
+    }
+
+    if (right[0] == 47) {
+        strcat(out, right + 1);
+    } else {
+        strcat(out, right);
+    }
+
+    return out;
+}
+
+fun basename(path: ptr<u8>) >> ptr<u8> {
+    ptr<u8> last = strrchr(path, 47);
+    if (last == null) {
+        return path;
+    }
+    return last + 1;
+}
+
+fun dirname(out: ptr<u8>, path: ptr<u8>) >> ptr<u8> {
+    strcpy(out, path);
+
+    ptr<u8> last = strrchr(out, 47);
+    if (last == null) {
+        strcpy(out, ".");
+        return out;
+    }
+
+    if (last == out) {
+        out[1] = 0;
+        return out;
+    }
+
+    *last = 0;
+    return out;
+}
+
+fun ext(path: ptr<u8>) >> ptr<u8> {
+    ptr<u8> base = basename(path);
+    ptr<u8> dot = strrchr(base, 46);
+    if (dot == null) {
+        return "";
+    }
+    return dot + 1;
+}
+
+fun stem(out: ptr<u8>, path: ptr<u8>) >> ptr<u8> {
+    strcpy(out, basename(path));
+    ptr<u8> dot = strrchr(out, 46);
+    if (dot != null) {
+        *dot = 0;
+    }
+    return out;
+}
