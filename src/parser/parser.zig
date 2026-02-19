@@ -1161,6 +1161,33 @@ export fn zig_create_cast(expr_ptr: ?*anyopaque, type_name_ptr: [*c]const u8, au
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_expression_block(type_name_ptr: [*c]const u8, statements_ptr: ?*anyopaque, result_ptr: ?*anyopaque) ?*anyopaque {
+    if (result_ptr == null) return null;
+
+    const type_name = std.mem.span(type_name_ptr);
+    const type_name_copy = utils.dupe(u8, global_allocator, type_name);
+
+    var statements = std.ArrayList(*ast.Node){};
+    if (statements_ptr) |ptr| {
+        const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
+        statements = node_list.items;
+    }
+
+    const result = @as(*ast.Node, @ptrFromInt(@intFromPtr(result_ptr.?)));
+
+    const expression_block_data = ast.NodeData{
+        .expression_block = ast.ExpressionBlock{
+            .type_name = type_name_copy,
+            .statements = statements,
+            .result = result,
+        },
+    };
+
+    const node = ast.Node.create(global_allocator, expression_block_data);
+    set_node_location(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_record_parse_error(line: c_int, col: c_int, msg_ptr: [*c]const u8) void {
     if (!error_list_initialized) return;
     const msg = std.mem.span(msg_ptr);

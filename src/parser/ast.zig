@@ -44,6 +44,7 @@ pub const NodeType = enum {
     struct_initializer,
     qualified_identifier,
     cast,
+    expression_block,
     match_stmt,
 };
 
@@ -283,6 +284,12 @@ pub const Cast = struct {
     auto: bool,
 };
 
+pub const ExpressionBlock = struct {
+    type_name: []const u8,
+    statements: std.ArrayList(*Node),
+    result: *Node,
+};
+
 pub const MatchCase = struct {
     values: std.ArrayList(*Node),
     body: std.ArrayList(*Node),
@@ -336,6 +343,7 @@ pub const NodeData = union(NodeType) {
     struct_initializer: StructInitializer,
     qualified_identifier: QualifiedIdentifier,
     cast: Cast,
+    expression_block: ExpressionBlock,
     match_stmt: MatchStmt,
 };
 
@@ -572,6 +580,14 @@ pub const Node = struct {
             .cast => |c| {
                 c.expr.destroy();
                 if (c.type_name) |tn| self.allocator.free(tn);
+            },
+            .expression_block => |*block| {
+                self.allocator.free(block.type_name);
+                for (block.statements.items) |stmt| {
+                    stmt.destroy();
+                }
+                block.statements.deinit(self.allocator);
+                block.result.destroy();
             },
             .goto_stmt => |goto_stmt| {
                 self.allocator.free(goto_stmt.label);
@@ -992,6 +1008,13 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
                 std.debug.print("🎯 Cast\n", .{});
             }
             printAST(c.expr, indent + 1, true, false);
+        },
+        .expression_block => |block| {
+            std.debug.print("🧩 Expression Block: \x1b[33m{s}\x1b[0m\n", .{block.type_name});
+            for (block.statements.items) |stmt| {
+                printAST(stmt, indent + 1, false, false);
+            }
+            printAST(block.result, indent + 1, true, false);
         },
     }
 }

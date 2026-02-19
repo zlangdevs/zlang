@@ -1,0 +1,45 @@
+fun makeValue() >> i32 {
+    return <i32> {
+        i32 a = 10;
+        i32 b = 5;
+        a + b
+    };
+}
+
+fun main() >> i32 {
+    i32 value = <i32> {
+        i32 a = 3;
+        i32 b = 4;
+        a * b
+    };
+    @printf("(expected 12):%d\n", value);
+
+    i32 assigned = 0;
+    assigned = <i32> {
+        i32 t = value;
+        t + 8
+    };
+    @printf("(expected 20):%d\n", assigned);
+
+    if (<bool> {
+        i32 x = assigned;
+        x == 20
+    }) {
+        @printf("(expected 1):%d\n", 1);
+    } else {
+        @printf("(expected 0):%d\n", 0);
+    }
+
+    i32 sum = 0;
+    i32 i = 0;
+    for (<bool> {
+        i < 4
+    }) {
+        sum += i;
+        i += 1;
+    }
+    @printf("(expected 6):%d\n", sum);
+
+    @printf("(expected 15):%d\n", makeValue());
+    return 0;
+}
