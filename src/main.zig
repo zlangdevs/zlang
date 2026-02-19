@@ -193,6 +193,10 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
                     collectUseStatements(bop.rhs, dependencies);
                 },
                 .unary_op => |un| collectUseStatements(un.operand, dependencies),
+                .expression_block => |block| {
+                    for (block.statements.items) |stmt| collectUseStatements(stmt, dependencies);
+                    collectUseStatements(block.result, dependencies);
+                },
                 else => {},
             }
         },

@@ -190,6 +190,7 @@ pub const CodeGenerator = struct {
             .simd_compound_assignment => |as| tokenTextForNode(as.simd),
             .unary_op => |un| tokenTextForNode(un.operand),
             .cast => |cast_expr| tokenTextForNode(cast_expr.expr),
+            .expression_block => |block| tokenTextForNode(block.result),
             else => null,
         };
     }
@@ -1371,8 +1372,29 @@ pub const CodeGenerator = struct {
             .unary_op => {
                 _ = try self.generateExpression(stmt);
             },
+            .expression_block => {
+                _ = try self.generateExpression(stmt);
+            },
             else => {},
         }
+    }
+
+    fn generateExpressionBlock(self: *CodeGenerator, block: ast.ExpressionBlock) errors.CodegenError!c.LLVMValueRef {
+        const target_type = try self.getLLVMType(block.type_name);
+
+        try CodeGenerator.pushScope(self);
+        defer CodeGenerator.popScope(self);
+
+        for (block.statements.items) |stmt| {
+            try self.generateStatement(stmt);
+            if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) != null) {
+                self.reportError("Expression block terminated before final value", "Remove return/break/continue/goto from expression block body");
+                return errors.CodegenError.TypeMismatch;
+            }
+        }
+
+        const value_raw = try self.generateExpressionWithContext(block.result, block.type_name);
+        return try self.castWithRules(value_raw, target_type, block.result);
     }
 
     fn generateIfStatement(self: *CodeGenerator, if_stmt: ast.IfStmt) errors.CodegenError!void {
@@ -2387,6 +2409,9 @@ pub const CodeGenerator = struct {
             .function_call => |call| {
                 return try CodeGenerator.generateFunctionCall(self, call, expected_type);
             },
+            .expression_block => |block| {
+                return try self.generateExpressionBlock(block);
+            },
             else => return self.generateExpression(expr),
         }
     }
@@ -2426,6 +2451,7 @@ pub const CodeGenerator = struct {
                 if (cst.type_name) |tn| return tn;
                 return self.inferType(cst.expr);
             },
+            .expression_block => |block| return block.type_name,
             .binary_op => |bin_op| {
                 if (bin_op.op == '&' or bin_op.op == '|') return "bool";
                 const lhs_type = try self.inferType(bin_op.lhs);
@@ -2502,6 +2528,9 @@ pub const CodeGenerator = struct {
                     return self.castToTypeWithSourceInfo(inner, @ptrCast(target_ty), source_type_name);
                 }
                 return errors.CodegenError.TypeMismatch;
+            },
+            .expression_block => |block| {
+                return try self.generateExpressionBlock(block);
             },
             .identifier => |ident| {
                 if (std.mem.eql(u8, ident.name, "true")) {
