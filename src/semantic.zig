@@ -157,6 +157,9 @@ pub const Analyzer = struct {
                     try self.collectLabels(case.body.items, labels);
                 }
             },
+            .expression_block => |block| {
+                try self.collectLabels(block.statements.items, labels);
+            },
             else => {},
         }
     }
@@ -425,6 +428,22 @@ pub const Analyzer = struct {
             .cast => |cast_expr| {
                 try self.analyzeExpression(cast_expr.expr);
             },
+            .expression_block => |block| {
+                try self.pushScope();
+                defer self.popScope();
+
+                var block_labels = std.StringHashMap(void).init(self.allocator);
+                defer block_labels.deinit();
+                try self.collectLabels(block.statements.items, &block_labels);
+
+                for (block.statements.items) |stmt| {
+                    if (stmt.data == .return_stmt) {
+                        self.reportNodeError(stmt, "'return' is not allowed inside expression block", "Use the final expression as the block result");
+                    }
+                    try self.analyzeStatement(stmt, &block_labels);
+                }
+                try self.analyzeExpression(block.result);
+            },
             .array_initializer => |arr_init| {
                 for (arr_init.elements.items) |element| {
                     try self.analyzeExpression(element);
@@ -538,6 +557,7 @@ fn tokenTextForNode(node: *ast.Node) ?[]const u8 {
         .simd_compound_assignment => |as| tokenTextForNode(as.simd),
         .unary_op => |un| tokenTextForNode(un.operand),
         .cast => |cast_expr| tokenTextForNode(cast_expr.expr),
+        .expression_block => |block| tokenTextForNode(block.result),
         else => null,
     };
 }

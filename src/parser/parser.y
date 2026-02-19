@@ -67,6 +67,7 @@ extern void zig_add_global_to_program(void* program, void* global);
 extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
 extern void* zig_create_cast(void* expr, const char* type_name, int auto_flag);
+extern void* zig_create_expression_block(const char* type_name, void* statements, void* result);
 extern void zlang_set_location(int line, int col);
 extern void zig_record_parse_error(int line, int col, const char* msg);
 
@@ -85,7 +86,7 @@ void* ast_root = NULL;
    - State ~68: TOKEN_IDENTIFIER as ref_base vs function_call vs struct_initializer
    - State ~236: TOKEN_IDENTIFIER in multiple contexts (label, type, ref_base)
    These ambiguities are inherent to the language syntax and correctly resolved. */
-%expect 3
+%expect 4
 %expect-rr 0
 
 %define parse.error verbose
@@ -139,7 +140,7 @@ void* ast_root = NULL;
 %type <node> program function_list function statement_list statement
 %type <node> var_declaration global_variable_declaration function_call return_statement assignment brainfuck_statement
 %type <node> expression logical_or_expression logical_and_expression bitwise_or_expression bitwise_xor_expression bitwise_and_expression shift_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression postfix_expression argument_list arguments
-%type <node> cast_expression
+%type <node> cast_expression expression_block
 %type <node> c_for_statement for_increment
 %type <node> array_initializer c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration union_declaration wrap_statement
 %type <node> enum_values enum_value_list struct_fields struct_field_list
@@ -780,14 +781,22 @@ cast_expression:
     }
 ;
 
+expression_block:
+    TOKEN_LESS type_name TOKEN_GREATER TOKEN_LBRACE statement_list initializer_expression TOKEN_RBRACE {
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_expression_block($2, $5, $6);
+        free($2);
+    }
+;
+
 primary_expression:
-     array_initializer { $$ = $1; }
+      array_initializer { $$ = $1; }
     | TOKEN_FLOAT { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_float_literal($1); }
     | TOKEN_NUMBER { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_number_literal($1); }
     | TOKEN_CHAR { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_char_literal($1); }
     | string_literal { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_string_literal($1); free($1); }
     | function_call { $$ = $1; }
     | TOKEN_LPAREN expression TOKEN_RPAREN { $$ = $2; }
+    | expression_block { $$ = $1; }
     | TOKEN_NULL { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_null_literal(); }
 ;
 
