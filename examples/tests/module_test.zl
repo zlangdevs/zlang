@@ -21,6 +21,6 @@ fun main() >> i32 {
         time_ok = 1;
     }
     @printf("expected 1):%d\n", time_ok);
-
+    
     return 0;
 }

@@ -1,0 +1,58 @@
+module std.mem;
+
+wrap @malloc(size: u64) >> ptr<void>;
+wrap @calloc(nmemb: u64, size: u64) >> ptr<void>;
+wrap @realloc(ptr: ptr<void>, size: u64) >> ptr<void>;
+wrap @free(ptr: ptr<void>) >> void;
+wrap @memcpy(dest: ptr<void>, src: ptr<void>, n: u64) >> ptr<void>;
+wrap @memmove(dest: ptr<void>, src: ptr<void>, n: u64) >> ptr<void>;
+wrap @memset(s: ptr<void>, c: i32, n: u64) >> ptr<void>;
+wrap @memcmp(s1: ptr<void>, s2: ptr<void>, n: u64) >> i32;
+
+fun alloc(size: u64) >> ptr<void> {
+    return malloc(size);
+}
+
+fun allocBytes(size: u64) >> ptr<u8> {
+    return malloc(size) as ptr<u8>;
+}
+
+fun allocZeroed(count: u64, size: u64) >> ptr<void> {
+    return calloc(count, size);
+}
+
+fun allocZeroedBytes(count: u64) >> ptr<u8> {
+    return calloc(count, 1) as ptr<u8>;
+}
+
+fun resize(ptr: ptr<void>, new_size: u64) >> ptr<void> {
+    return realloc(ptr, new_size);
+}
+
+fun freeMem(ptr: ptr<void>) >> void {
+    free(ptr);
+}
+
+fun copy(dest: ptr<void>, src: ptr<void>, size: u64) >> ptr<void> {
+    return memcpy(dest, src, size);
+}
+
+fun move(dest: ptr<void>, src: ptr<void>, size: u64) >> ptr<void> {
+    return memmove(dest, src, size);
+}
+
+fun set(dest: ptr<void>, value: i32, size: u64) >> ptr<void> {
+    return memset(dest, value, size);
+}
+
+fun zero(dest: ptr<void>, size: u64) >> ptr<void> {
+    return memset(dest, 0, size);
+}
+
+fun compare(left: ptr<void>, right: ptr<void>, size: u64) >> i32 {
+    return memcmp(left, right, size);
+}
+
+fun equals(left: ptr<void>, right: ptr<void>, size: u64) >> bool {
+    return memcmp(left, right, size) == 0;
+}
