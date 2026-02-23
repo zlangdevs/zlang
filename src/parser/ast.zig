@@ -138,6 +138,7 @@ pub const Function = struct {
     name: []const u8,
     return_type: []const u8,
     parameters: std.ArrayList(Parameter),
+    guard: ?*Node,
     body: std.ArrayList(*Node),
 };
 
@@ -405,6 +406,9 @@ pub const Node = struct {
                 prog.globals.deinit(self.allocator);
             },
             .function => |*func| {
+                if (func.guard) |guard| {
+                    guard.destroy();
+                }
                 for (func.body.items) |stmt| {
                     stmt.destroy();
                 }
@@ -656,6 +660,9 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             for (func.body.items, 0..) |stmt, i| {
                 const is_stmt_last = i == func.body.items.len - 1;
                 printAST(stmt, indent + 1, is_stmt_last, false);
+            }
+            if (func.guard) |guard| {
+                printAST(guard, indent + 1, true, false);
             }
         },
         .assignment => |as| {
