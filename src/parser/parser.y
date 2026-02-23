@@ -11,7 +11,7 @@ extern void* zig_create_program(void);
 extern void* zig_create_parameter(const char* name, const char* type_name);
 extern void* zig_create_param_list(void);
 extern void zig_add_to_param_list(void* list, void* param);
-extern void* zig_create_function(const char* name, const char* return_type, void* params, void* body);
+extern void* zig_create_function(const char* name, const char* return_type, void* params, void* guard, void* body);
 extern void* zig_create_var_decl(const char* type_name, const char* name, void* initializer, int is_const);
 extern void* zig_create_function_call(const char* name, int is_libc, void* args);
 extern void* zig_create_method_call(void* object, const char* method_name, void* args);
@@ -104,7 +104,7 @@ void* ast_root = NULL;
 %token <number> TOKEN_CHAR
 %token <number> TOKEN_REASSIGN
 
-%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_GOTO TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_UNION TOKEN_DOT TOKEN_NULL TOKEN_CONST
+%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_GOTO TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_UNION TOKEN_DOT TOKEN_NULL TOKEN_CONST TOKEN_WHEN
 %token TOKEN_AS TOKEN_UNDERSCORE TOKEN_MATCH
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
@@ -280,9 +280,23 @@ function:
         } else {
             return_type_str = strdup($8);
         }
-        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_function($2, return_type_str, $5, $10);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_function($2, return_type_str, $5, NULL, $10);
         free($2);
         free($8);
+        free(return_type_str);
+    }
+  | TOKEN_FUN function_name template_params TOKEN_LPAREN parameter_list TOKEN_RPAREN TOKEN_WHEN TOKEN_LPAREN expression TOKEN_RPAREN TOKEN_RSHIFT type_name TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        char* return_type_str;
+        if ($3) {
+            return_type_str = malloc(strlen($3) + strlen($12) + 3);
+            sprintf(return_type_str, "%s>>%s", $3, $12);
+            free($3);
+        } else {
+            return_type_str = strdup($12);
+        }
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_function($2, return_type_str, $5, $9, $14);
+        free($2);
+        free($12);
         free(return_type_str);
     }
 ;

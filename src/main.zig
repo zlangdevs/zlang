@@ -144,6 +144,9 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
             }
         },
         .function => |func| {
+            if (func.guard) |guard| {
+                collectUseStatements(guard, dependencies);
+            }
             for (func.body.items) |stmt| {
                 collectUseStatements(stmt, dependencies);
             }

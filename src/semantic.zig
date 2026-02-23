@@ -121,6 +121,10 @@ pub const Analyzer = struct {
                 try self.declareVariable(node, param.name, false);
             }
 
+            if (func.guard) |guard| {
+                try self.analyzeExpression(guard);
+            }
+
             try self.analyzeStatementList(func.body.items, &labels);
         }
     }

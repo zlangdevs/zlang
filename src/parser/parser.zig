@@ -116,7 +116,7 @@ export fn zig_add_to_param_list(list_ptr: ?*anyopaque, param_ptr: ?*anyopaque) v
     param_list.items.append(global_allocator, param.*) catch return;
 }
 
-export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const u8, params_ptr: ?*anyopaque, body_ptr: ?*anyopaque) ?*anyopaque {
+export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const u8, params_ptr: ?*anyopaque, guard_ptr: ?*anyopaque, body_ptr: ?*anyopaque) ?*anyopaque {
     const name = std.mem.span(name_ptr);
     const return_type = std.mem.span(return_type_ptr);
 
@@ -135,11 +135,17 @@ export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const
         body = node_list.items;
     }
 
+    const guard_expr: ?*ast.Node = if (guard_ptr) |ptr|
+        @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)))
+    else
+        null;
+
     const function_data = ast.NodeData{
         .function = ast.Function{
             .name = name_copy,
             .return_type = return_type_copy,
             .parameters = parameters,
+            .guard = guard_expr,
             .body = body,
         },
     };
