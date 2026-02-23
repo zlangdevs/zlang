@@ -317,6 +317,49 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
         param_idx += 1;
     }
 
+    if (func.guard) |guard_expr| {
+        const guard_val = try cg.generateExpressionWithContext(guard_expr, "bool");
+        const i1_ty = c.LLVMInt1TypeInContext(cg.context);
+        var cond = guard_val;
+        if (c.LLVMTypeOf(cond) != i1_ty) {
+            cond = try cg.castWithRules(cond, i1_ty, guard_expr);
+        }
+
+        const pass_block = c.LLVMAppendBasicBlockInContext(cg.context, @ptrCast(llvm_func), "guard.pass");
+        const fail_block = c.LLVMAppendBasicBlockInContext(cg.context, @ptrCast(llvm_func), "guard.fail");
+        _ = c.LLVMBuildCondBr(@ptrCast(cg.builder), cond, pass_block, fail_block);
+
+        c.LLVMPositionBuilderAtEnd(@ptrCast(cg.builder), fail_block);
+
+        var values_buf = std.ArrayList(u8){};
+        defer values_buf.deinit(cg.allocator);
+        for (func.parameters.items, 0..) |p, i| {
+            if (i > 0) try values_buf.appendSlice(cg.allocator, ", ");
+            try values_buf.appendSlice(cg.allocator, p.name);
+        }
+        const values_text = if (values_buf.items.len == 0) "<none>" else values_buf.items;
+
+        const panic_message = try std.fmt.allocPrint(cg.allocator, "panic: values: {s} do not match condition in function {s}", .{ values_text, func.name });
+        defer cg.allocator.free(panic_message);
+        const panic_message_z = utils.dupeZ(cg.allocator, panic_message);
+        defer cg.allocator.free(panic_message_z);
+
+        const msg_ptr = c.LLVMBuildGlobalStringPtr(cg.builder, panic_message_z.ptr, "guard_panic_msg");
+        const puts_fn = try declareLibcFunction(cg, "puts");
+        const puts_ty = c.LLVMGlobalGetValueType(puts_fn);
+        var puts_args = [_]c.LLVMValueRef{msg_ptr};
+        _ = c.LLVMBuildCall2(cg.builder, puts_ty, puts_fn, &puts_args, 1, "");
+
+        const exit_fn = try declareLibcFunction(cg, "exit");
+        const exit_ty = c.LLVMGlobalGetValueType(exit_fn);
+        const exit_code = c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 1, 0);
+        var exit_args = [_]c.LLVMValueRef{exit_code};
+        _ = c.LLVMBuildCall2(cg.builder, exit_ty, exit_fn, &exit_args, 1, "");
+        _ = c.LLVMBuildUnreachable(cg.builder);
+
+        c.LLVMPositionBuilderAtEnd(@ptrCast(cg.builder), pass_block);
+    }
+
     const valid_control_flow = try hasValidControlFlow(cg, func);
 
     for (func.body.items) |stmt| {
