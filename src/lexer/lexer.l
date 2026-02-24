@@ -63,6 +63,12 @@ FLOAT_DOT  \.{DIGIT_WITH_DELIM}{EXPONENT}?
 "fun"       { return TOKEN_FUN; }
 "return"    { return TOKEN_RETURN; }
 "when"      { return TOKEN_WHEN; }
+<<<<<<< HEAD
+=======
+"error"     { return TOKEN_ERROR; }
+"send"      { return TOKEN_SEND; }
+"on"        { return TOKEN_ON; }
+>>>>>>> 2cdb9c9 (fancy error handling: send/solicit)
 "const"     { return TOKEN_CONST; }
 "break"     { return TOKEN_BREAK; }
 "continue"  { return TOKEN_CONTINUE; }

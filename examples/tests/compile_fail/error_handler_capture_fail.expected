@@ -1,0 +1,3 @@
+# Expected diagnostic fragments
+Undefined variable 'x'
+Variable is not declared in this scope

@@ -53,6 +53,9 @@ pub const CodeGenerator = struct {
     template_substitutions: ?std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     function_overloads: std.HashMap([]const u8, std.ArrayList(structs.FunctionOverload), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     pending_template_instantiations: std.ArrayList(structs.TemplateInstantiation),
+    error_codes: std.HashMap([]const u8, i32, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    next_error_code: i32,
+    last_error_global: ?c.LLVMValueRef,
 
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
         _ = c.LLVMInitializeNativeTarget();
@@ -104,6 +107,9 @@ pub const CodeGenerator = struct {
             .template_substitutions = null,
             .function_overloads = std.HashMap([]const u8, std.ArrayList(structs.FunctionOverload), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .pending_template_instantiations = std.ArrayList(structs.TemplateInstantiation){},
+            .error_codes = std.HashMap([]const u8, i32, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .next_error_code = 1,
+            .last_error_global = null,
         };
     }
 
@@ -134,6 +140,7 @@ pub const CodeGenerator = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.function_overloads.deinit();
+        self.error_codes.deinit();
 
         self.module_manager.deinit();
         for (self.variable_scopes.items) |*scope| {
@@ -191,6 +198,9 @@ pub const CodeGenerator = struct {
             .unary_op => |un| tokenTextForNode(un.operand),
             .cast => |cast_expr| tokenTextForNode(cast_expr.expr),
             .expression_block => |block| tokenTextForNode(block.result),
+            .error_decl => |decl| decl.name,
+            .send_stmt => |send_stmt| send_stmt.error_name,
+            .handled_call_stmt => |handled| tokenTextForNode(handled.call),
             else => null,
         };
     }
@@ -591,6 +601,23 @@ pub const CodeGenerator = struct {
     pub fn generateCode(self: *CodeGenerator, program: *ast.Node) errors.CodegenError!void {
         switch (program.data) {
             .program => |prog| {
+                try self.registerBuiltinErrorGuard();
+                for (prog.functions.items) |func| {
+                    if (func.data == .error_decl) {
+                        const error_decl = func.data.error_decl;
+                        if (error_decl.code_kind != .alias) {
+                            try self.registerErrorDeclaration(error_decl);
+                        }
+                    }
+                }
+                for (prog.functions.items) |func| {
+                    if (func.data == .error_decl) {
+                        const error_decl = func.data.error_decl;
+                        if (error_decl.code_kind == .alias) {
+                            try self.registerErrorDeclaration(error_decl);
+                        }
+                    }
+                }
                 for (prog.functions.items) |func| {
                     if (func.data == .enum_decl) {
                         try enums.generateEnumDeclaration(self, func.data.enum_decl);
@@ -1189,8 +1216,62 @@ pub const CodeGenerator = struct {
             .function_call => {
                 _ = try self.generateExpression(stmt);
             },
+            .handled_call_stmt => |handled| {
+                const err_global = self.ensureLastErrorGlobal();
+                const i32_ty = c.LLVMInt32TypeInContext(self.context);
+                _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 0, 0), err_global);
+                _ = try self.generateExpression(handled.call);
+
+                for (handled.handlers.items) |handler| {
+                    const current_bb = c.LLVMGetInsertBlock(self.builder);
+                    if (c.LLVMGetBasicBlockTerminator(current_bb) != null) break;
+
+                    const current_fn = self.current_function orelse return errors.CodegenError.TypeMismatch;
+                    const handler_bb = c.LLVMAppendBasicBlockInContext(self.context, current_fn, "err.handler");
+                    const next_bb = c.LLVMAppendBasicBlockInContext(self.context, current_fn, "err.next");
+                    const err_now = c.LLVMBuildLoad2(self.builder, i32_ty, err_global, "err.code");
+
+                    const cond = if (handler.error_name) |error_name| blk: {
+                        const code = self.error_codes.get(error_name) orelse return errors.CodegenError.TypeMismatch;
+                        const code_bits: c_ulonglong = @bitCast(@as(i64, code));
+                        const code_val = c.LLVMConstInt(i32_ty, code_bits, 1);
+                        break :blk c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, err_now, code_val, "err.match");
+                    } else blk: {
+                        const zero = c.LLVMConstInt(i32_ty, 0, 0);
+                        break :blk c.LLVMBuildICmp(self.builder, c.LLVMIntNE, err_now, zero, "err.any");
+                    };
+
+                    _ = c.LLVMBuildCondBr(self.builder, cond, handler_bb, next_bb);
+
+                    c.LLVMPositionBuilderAtEnd(self.builder, handler_bb);
+                    for (handler.body.items) |handler_stmt| {
+                        try self.generateStatement(handler_stmt);
+                        if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) != null) break;
+                    }
+                    if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
+                        _ = c.LLVMBuildBr(self.builder, next_bb);
+                    }
+
+                    c.LLVMPositionBuilderAtEnd(self.builder, next_bb);
+                }
+            },
             .method_call => {
                 _ = try self.generateExpression(stmt);
+            },
+            .send_stmt => |send_stmt| {
+                const code = self.error_codes.get(send_stmt.error_name) orelse return errors.CodegenError.TypeMismatch;
+                const err_global = self.ensureLastErrorGlobal();
+                const i32_ty = c.LLVMInt32TypeInContext(self.context);
+                const code_bits: c_ulonglong = @bitCast(@as(i64, code));
+                const code_val = c.LLVMConstInt(i32_ty, code_bits, 1);
+                _ = c.LLVMBuildStore(self.builder, code_val, err_global);
+
+                if (std.mem.eql(u8, self.current_function_return_type, "void")) {
+                    _ = c.LLVMBuildRetVoid(self.builder);
+                } else {
+                    const default_value = utils.getDefaultValueForType(self, self.current_function_return_type);
+                    _ = c.LLVMBuildRet(self.builder, default_value);
+                }
             },
             .return_stmt => |ret| {
                 if (ret.expression) |expr| {
@@ -1367,6 +1448,9 @@ pub const CodeGenerator = struct {
             },
             .enum_decl => |enum_decl| {
                 try enums.generateEnumDeclaration(self, enum_decl);
+            },
+            .error_decl => |error_decl| {
+                try self.registerErrorDeclaration(error_decl);
             },
             .struct_decl => {},
             .unary_op => {
@@ -1668,6 +1752,62 @@ pub const CodeGenerator = struct {
     }
 
     pub const processGlobalEnums = enums.processGlobalEnums;
+
+    fn ensureLastErrorGlobal(self: *CodeGenerator) c.LLVMValueRef {
+        if (self.last_error_global) |g| return g;
+
+        const name_z = utils.dupeZ(self.allocator, "__zlang_last_error");
+        defer self.allocator.free(name_z);
+        const i32_ty = c.LLVMInt32TypeInContext(self.context);
+        const global_var = c.LLVMAddGlobal(self.module, i32_ty, name_z.ptr);
+        c.LLVMSetInitializer(global_var, c.LLVMConstInt(i32_ty, 0, 0));
+        c.LLVMSetLinkage(global_var, c.LLVMInternalLinkage);
+        self.last_error_global = global_var;
+        return global_var;
+    }
+
+    fn nextFreeErrorCode(self: *CodeGenerator) i32 {
+        var code = self.next_error_code;
+        while (true) : (code += 1) {
+            var used = false;
+            var it = self.error_codes.iterator();
+            while (it.next()) |entry| {
+                if (entry.value_ptr.* == code) {
+                    used = true;
+                    break;
+                }
+            }
+            if (!used) {
+                self.next_error_code = code + 1;
+                return code;
+            }
+        }
+    }
+
+    fn registerBuiltinErrorGuard(self: *CodeGenerator) !void {
+        if (self.error_codes.contains("ErrorGuard")) return;
+        const code = self.nextFreeErrorCode();
+        try self.error_codes.put("ErrorGuard", code);
+    }
+
+    fn registerErrorDeclaration(self: *CodeGenerator, error_decl: ast.ErrorDecl) errors.CodegenError!void {
+        if (self.error_codes.contains(error_decl.name)) return;
+
+        var code: i32 = 0;
+        switch (error_decl.code_kind) {
+            .explicit => {
+                code = error_decl.explicit_code;
+            },
+            .alias => {
+                const alias_name = error_decl.alias_name orelse return errors.CodegenError.TypeMismatch;
+                code = self.error_codes.get(alias_name) orelse return errors.CodegenError.TypeMismatch;
+            },
+            .auto => {
+                code = self.nextFreeErrorCode();
+            },
+        }
+        try self.error_codes.put(error_decl.name, code);
+    }
 
     fn generateGlobalDeclaration(self: *CodeGenerator, global_node: *ast.Node) errors.CodegenError!void {
         switch (global_node.data) {
@@ -2438,6 +2578,7 @@ pub const CodeGenerator = struct {
         switch (node.data) {
             .identifier => |ident| {
                 if (std.mem.eql(u8, ident.name, "true") or std.mem.eql(u8, ident.name, "false")) return "bool";
+                if (self.error_codes.contains(ident.name)) return "error";
                 if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                     return var_info.type_name;
                 }
@@ -2537,6 +2678,11 @@ pub const CodeGenerator = struct {
                     return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 1, 0);
                 } else if (std.mem.eql(u8, ident.name, "false")) {
                     return c.LLVMConstInt(c.LLVMInt1TypeInContext(self.context), 0, 0);
+                }
+
+                if (self.error_codes.get(ident.name)) |code| {
+                    const code_bits: c_ulonglong = @bitCast(@as(i64, code));
+                    return c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), code_bits, 1);
                 }
 
                 if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
