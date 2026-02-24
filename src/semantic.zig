@@ -14,9 +14,13 @@ pub const Analyzer = struct {
     functions: std.StringHashMap(void),
     enum_types: std.StringHashMap(void),
     enum_values: std.StringHashMap(void),
+    error_codes: std.StringHashMap(i32),
+    function_errors: std.StringHashMap(std.ArrayList([]const u8)),
     globals: std.StringHashMap(VarInfo),
     scopes: std.ArrayList(std.StringHashMap(VarInfo)),
     loop_depth: usize,
+    current_function_name: ?[]const u8,
+    handler_scope_floor: ?usize,
 
     pub fn init(allocator: std.mem.Allocator, fallback_file_path: []const u8) Analyzer {
         return Analyzer{
@@ -26,9 +30,13 @@ pub const Analyzer = struct {
             .functions = std.StringHashMap(void).init(allocator),
             .enum_types = std.StringHashMap(void).init(allocator),
             .enum_values = std.StringHashMap(void).init(allocator),
+            .error_codes = std.StringHashMap(i32).init(allocator),
+            .function_errors = std.StringHashMap(std.ArrayList([]const u8)).init(allocator),
             .globals = std.StringHashMap(VarInfo).init(allocator),
             .scopes = std.ArrayList(std.StringHashMap(VarInfo)){},
             .loop_depth = 0,
+            .current_function_name = null,
+            .handler_scope_floor = null,
         };
     }
 
@@ -36,6 +44,12 @@ pub const Analyzer = struct {
         self.functions.deinit();
         self.enum_types.deinit();
         self.enum_values.deinit();
+        self.error_codes.deinit();
+        var function_errors_it = self.function_errors.iterator();
+        while (function_errors_it.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.function_errors.deinit();
         self.globals.deinit();
         for (self.scopes.items) |*scope| {
             scope.deinit();
@@ -61,6 +75,8 @@ pub const Analyzer = struct {
     }
 
     fn collectTopLevelSymbols(self: *Analyzer, program: ast.Program) errors.SemanticError!void {
+        try self.error_codes.put("ErrorGuard", 0);
+
         for (program.functions.items) |node| {
             switch (node.data) {
                 .function => |func| {
@@ -73,6 +89,13 @@ pub const Analyzer = struct {
                     try self.enum_types.put(enum_decl.name, {});
                     for (enum_decl.values.items) |value| {
                         try self.enum_values.put(value.name, {});
+                    }
+                },
+                .error_decl => |error_decl| {
+                    if (self.error_codes.contains(error_decl.name)) {
+                        self.reportNodeErrorFmt(node, "Redeclared error '{s}'", .{error_decl.name}, "Error names must be unique");
+                    } else {
+                        try self.error_codes.put(error_decl.name, 0);
                     }
                 },
                 else => {},
@@ -105,9 +128,18 @@ pub const Analyzer = struct {
     fn analyzeFunctions(self: *Analyzer, program: ast.Program) errors.SemanticError!void {
         for (program.functions.items) |node| {
             if (node.data != .function) continue;
+            var list = std.ArrayList([]const u8){};
+            try self.collectFunctionSends(node.data.function.body.items, &list);
+            try self.function_errors.put(node.data.function.name, list);
+        }
+
+        for (program.functions.items) |node| {
+            if (node.data != .function) continue;
 
             const func = node.data.function;
             self.loop_depth = 0;
+            self.current_function_name = func.name;
+            defer self.current_function_name = null;
 
             var labels = std.StringHashMap(void).init(self.allocator);
             defer labels.deinit();
@@ -164,7 +196,55 @@ pub const Analyzer = struct {
             .expression_block => |block| {
                 try self.collectLabels(block.statements.items, labels);
             },
+            .handled_call_stmt => |handled| {
+                for (handled.handlers.items) |handler| {
+                    try self.collectLabels(handler.body.items, labels);
+                }
+            },
             else => {},
+        }
+    }
+
+    fn appendUniqueErrorName(self: *Analyzer, list: *std.ArrayList([]const u8), name: []const u8) errors.SemanticError!void {
+        for (list.items) |existing| {
+            if (std.mem.eql(u8, existing, name)) return;
+        }
+        try list.append(self.allocator, name);
+    }
+
+    fn collectFunctionSends(self: *Analyzer, statements: []const *ast.Node, list: *std.ArrayList([]const u8)) errors.SemanticError!void {
+        for (statements) |stmt| {
+            switch (stmt.data) {
+                .send_stmt => |send_stmt| {
+                    try self.appendUniqueErrorName(list, send_stmt.error_name);
+                },
+                .if_stmt => |if_stmt| {
+                    try self.collectFunctionSends(if_stmt.then_body.items, list);
+                    if (if_stmt.else_body) |else_body| {
+                        try self.collectFunctionSends(else_body.items, list);
+                    }
+                },
+                .for_stmt => |for_stmt| {
+                    try self.collectFunctionSends(for_stmt.body.items, list);
+                },
+                .c_for_stmt => |c_for| {
+                    try self.collectFunctionSends(c_for.body.items, list);
+                },
+                .match_stmt => |match_stmt| {
+                    for (match_stmt.cases.items) |case| {
+                        try self.collectFunctionSends(case.body.items, list);
+                    }
+                },
+                .expression_block => |block| {
+                    try self.collectFunctionSends(block.statements.items, list);
+                },
+                .handled_call_stmt => |handled| {
+                    for (handled.handlers.items) |handler| {
+                        try self.collectFunctionSends(handler.body.items, list);
+                    }
+                },
+                else => {},
+            }
         }
     }
 
@@ -194,9 +274,11 @@ pub const Analyzer = struct {
     }
 
     fn lookupVariable(self: *Analyzer, name: []const u8) ?VarInfo {
+        const floor = self.handler_scope_floor orelse 0;
         var i = self.scopes.items.len;
         while (i > 0) {
             i -= 1;
+            if (i < floor) break;
             if (self.scopes.items[i].get(name)) |info| {
                 return info;
             }
@@ -232,12 +314,83 @@ pub const Analyzer = struct {
                 try self.analyzeExpression(as.value);
             },
             .function_call => |call| {
-                try self.analyzeFunctionCall(stmt, call);
+                try self.analyzeFunctionCall(stmt, call, false);
+            },
+            .handled_call_stmt => |handled| {
+                if (handled.call.data != .function_call) {
+                    self.reportNodeError(stmt, "Invalid handled call target", "Only function calls can use on-handlers");
+                } else {
+                    try self.analyzeFunctionCall(handled.call, handled.call.data.function_call, true);
+                }
+
+                const call_name = if (handled.call.data == .function_call)
+                    handled.call.data.function_call.name
+                else
+                    "";
+
+                var has_catch_all = false;
+                for (handled.handlers.items) |handler| {
+                    if (handler.error_name) |error_name| {
+                        if (!self.error_codes.contains(error_name)) {
+                            self.reportNodeErrorFmt(stmt, "Unknown error '{s}' in handler", .{error_name}, "Declare the error before using it in on-handler");
+                        }
+                    } else {
+                        has_catch_all = true;
+                    }
+
+                    try self.pushScope();
+                    const saved_floor = self.handler_scope_floor;
+                    self.handler_scope_floor = self.scopes.items.len - 1;
+                    defer {
+                        self.handler_scope_floor = saved_floor;
+                        self.popScope();
+                    }
+                    try self.analyzeStatementList(handler.body.items, labels);
+                }
+
+                if (self.function_errors.get(call_name)) |sent_errors| {
+                    for (handled.handlers.items) |handler| {
+                        if (handler.error_name) |error_name| {
+                            var matched = false;
+                            for (sent_errors.items) |sent_name| {
+                                if (std.mem.eql(u8, sent_name, error_name)) {
+                                    matched = true;
+                                    break;
+                                }
+                            }
+                            if (!matched) {
+                                self.reportNodeWarningFmt(stmt, "Handler for '{s}' is ignored", .{error_name}, "Called function never sends this error");
+                            }
+                        }
+                    }
+
+                    if (!has_catch_all) {
+                        for (sent_errors.items) |sent_name| {
+                            var handled_error = false;
+                            for (handled.handlers.items) |handler| {
+                                if (handler.error_name) |error_name| {
+                                    if (std.mem.eql(u8, error_name, sent_name)) {
+                                        handled_error = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!handled_error) {
+                                self.reportNodeWarningFmt(stmt, "Unhandled error '{s}' from function call", .{sent_name}, "Add an on-handler or on _ block");
+                            }
+                        }
+                    }
+                }
             },
             .method_call => |method| {
                 try self.analyzeExpression(method.object);
                 for (method.args.items) |arg| {
                     try self.analyzeExpression(arg);
+                }
+            },
+            .send_stmt => |send_stmt| {
+                if (!self.error_codes.contains(send_stmt.error_name)) {
+                    self.reportNodeErrorFmt(stmt, "Unknown error '{s}'", .{send_stmt.error_name}, "Declare the error before sending it");
                 }
             },
             .return_stmt => |ret| {
@@ -338,7 +491,7 @@ pub const Analyzer = struct {
                     try self.analyzeStatementList(case.body.items, labels);
                 }
             },
-            .c_function_decl, .use_stmt, .enum_decl, .struct_decl => {},
+            .c_function_decl, .use_stmt, .enum_decl, .struct_decl, .error_decl => {},
             else => {
                 try self.analyzeExpression(stmt);
             },
@@ -383,9 +536,17 @@ pub const Analyzer = struct {
         }
     }
 
-    fn analyzeFunctionCall(self: *Analyzer, node: *ast.Node, call: ast.FunctionCall) errors.SemanticError!void {
+    fn analyzeFunctionCall(self: *Analyzer, node: *ast.Node, call: ast.FunctionCall, suppress_unhandled_warning: bool) errors.SemanticError!void {
         if (!call.is_libc and !self.functions.contains(call.name) and self.lookupVariable(call.name) == null) {
             self.reportNodeErrorFmt(node, "Undefined function '{s}'", .{call.name}, "Declare it or import its module with use (maybe you forgot to import it?)");
+        }
+
+        if (!suppress_unhandled_warning) {
+            if (self.function_errors.get(call.name)) |sent_errors| {
+                if (sent_errors.items.len > 0) {
+                    self.reportNodeWarningFmt(node, "Unhandled errors from function '{s}'", .{call.name}, "Use on-handlers to handle possible errors");
+                }
+            }
         }
 
         for (call.args.items) |arg| {
@@ -398,6 +559,7 @@ pub const Analyzer = struct {
             .identifier => |ident| {
                 if (self.isBuiltinIdentifier(ident.name)) return;
                 if (self.enum_values.contains(ident.name)) return;
+                if (self.error_codes.contains(ident.name)) return;
                 if (self.lookupVariable(ident.name) != null) return;
                 if (self.functions.contains(ident.name)) return;
 
@@ -410,7 +572,7 @@ pub const Analyzer = struct {
                 try self.analyzeExpression(qual.base);
             },
             .function_call => |call| {
-                try self.analyzeFunctionCall(expr, call);
+                try self.analyzeFunctionCall(expr, call, false);
             },
             .method_call => |method| {
                 try self.analyzeExpression(method.object);
@@ -501,6 +663,9 @@ pub const Analyzer = struct {
             .simd_assignment,
             .simd_compound_assignment,
             .simd_method_call,
+            .error_decl,
+            .send_stmt,
+            .handled_call_stmt,
             => {},
         }
     }
@@ -530,6 +695,27 @@ pub const Analyzer = struct {
         };
         defer self.allocator.free(msg);
         self.reportNodeError(node, msg, hint);
+    }
+
+    fn reportNodeWarning(self: *Analyzer, node: *ast.Node, message: []const u8, hint: ?[]const u8) void {
+        diagnostics.printDiagnostic(self.allocator, .{
+            .file_path = self.fallback_file_path,
+            .line = if (node.line == 0) 1 else node.line,
+            .column = if (node.column == 0) 1 else node.column,
+            .message = message,
+            .severity = .Warning,
+            .hint = hint,
+            .token_text = tokenTextForNode(node),
+        });
+    }
+
+    fn reportNodeWarningFmt(self: *Analyzer, node: *ast.Node, comptime fmt: []const u8, args: anytype, hint: ?[]const u8) void {
+        const msg = std.fmt.allocPrint(self.allocator, fmt, args) catch {
+            self.reportNodeWarning(node, "Semantic warning", hint);
+            return;
+        };
+        defer self.allocator.free(msg);
+        self.reportNodeWarning(node, msg, hint);
     }
 };
 
@@ -562,6 +748,9 @@ fn tokenTextForNode(node: *ast.Node) ?[]const u8 {
         .unary_op => |un| tokenTextForNode(un.operand),
         .cast => |cast_expr| tokenTextForNode(cast_expr.expr),
         .expression_block => |block| tokenTextForNode(block.result),
+        .error_decl => |err| err.name,
+        .send_stmt => |send_stmt| send_stmt.error_name,
+        .handled_call_stmt => |handled| tokenTextForNode(handled.call),
         else => null,
     };
 }
