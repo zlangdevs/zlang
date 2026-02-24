@@ -200,6 +200,12 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
                     for (block.statements.items) |stmt| collectUseStatements(stmt, dependencies);
                     collectUseStatements(block.result, dependencies);
                 },
+                .handled_call_stmt => |handled| {
+                    collectUseStatements(handled.call, dependencies);
+                    for (handled.handlers.items) |handler| {
+                        for (handler.body.items) |stmt| collectUseStatements(stmt, dependencies);
+                    }
+                },
                 else => {},
             }
         },
