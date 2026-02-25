@@ -20,7 +20,10 @@ pub const Analyzer = struct {
     scopes: std.ArrayList(std.StringHashMap(VarInfo)),
     loop_depth: usize,
     current_function_name: ?[]const u8,
+<<<<<<< HEAD
     handler_scope_floor: ?usize,
+=======
+>>>>>>> 6d63e72 (smart byref values in send callbacks)
 
     pub fn init(allocator: std.mem.Allocator, fallback_file_path: []const u8) Analyzer {
         return Analyzer{
@@ -36,7 +39,10 @@ pub const Analyzer = struct {
             .scopes = std.ArrayList(std.StringHashMap(VarInfo)){},
             .loop_depth = 0,
             .current_function_name = null,
+<<<<<<< HEAD
             .handler_scope_floor = null,
+=======
+>>>>>>> 6d63e72 (smart byref values in send callbacks)
         };
     }
 
@@ -317,6 +323,7 @@ pub const Analyzer = struct {
                 try self.analyzeFunctionCall(stmt, call, false);
             },
             .handled_call_stmt => |handled| {
+<<<<<<< HEAD
                 if (handled.call.data != .function_call) {
                     self.reportNodeError(stmt, "Invalid handled call target", "Only function calls can use on-handlers");
                 } else {
@@ -381,6 +388,9 @@ pub const Analyzer = struct {
                         }
                     }
                 }
+=======
+                try self.analyzeHandledCall(stmt, handled, labels);
+>>>>>>> 6d63e72 (smart byref values in send callbacks)
             },
             .method_call => |method| {
                 try self.analyzeExpression(method.object);
@@ -536,6 +546,71 @@ pub const Analyzer = struct {
         }
     }
 
+<<<<<<< HEAD
+=======
+    fn analyzeHandledCall(self: *Analyzer, node: *ast.Node, handled: ast.HandledCallStmt, labels: *const std.StringHashMap(void)) errors.SemanticError!void {
+        if (handled.call.data != .function_call) {
+            self.reportNodeError(node, "Invalid handled call target", "Only function calls can use on-handlers");
+        } else {
+            try self.analyzeFunctionCall(handled.call, handled.call.data.function_call, true);
+        }
+
+        const call_name = if (handled.call.data == .function_call)
+            handled.call.data.function_call.name
+        else
+            "";
+
+        var has_catch_all = false;
+        for (handled.handlers.items) |handler| {
+            if (handler.error_name) |error_name| {
+                if (!self.error_codes.contains(error_name)) {
+                    self.reportNodeErrorFmt(node, "Unknown error '{s}' in handler", .{error_name}, "Declare the error before using it in on-handler");
+                }
+            } else {
+                has_catch_all = true;
+            }
+
+            try self.pushScope();
+            defer self.popScope();
+            try self.analyzeStatementList(handler.body.items, labels);
+        }
+
+        if (self.function_errors.get(call_name)) |sent_errors| {
+            for (handled.handlers.items) |handler| {
+                if (handler.error_name) |error_name| {
+                    var matched = false;
+                    for (sent_errors.items) |sent_name| {
+                        if (std.mem.eql(u8, sent_name, error_name)) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (!matched) {
+                        self.reportNodeWarningFmt(node, "Handler for '{s}' is ignored", .{error_name}, "Called function never sends this error");
+                    }
+                }
+            }
+
+            if (!has_catch_all) {
+                for (sent_errors.items) |sent_name| {
+                    var handled_error = false;
+                    for (handled.handlers.items) |handler| {
+                        if (handler.error_name) |error_name| {
+                            if (std.mem.eql(u8, error_name, sent_name)) {
+                                handled_error = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!handled_error) {
+                        self.reportNodeWarningFmt(node, "Unhandled error '{s}' from function call", .{sent_name}, "Add an on-handler or on _ block");
+                    }
+                }
+            }
+        }
+    }
+
+>>>>>>> 6d63e72 (smart byref values in send callbacks)
     fn analyzeFunctionCall(self: *Analyzer, node: *ast.Node, call: ast.FunctionCall, suppress_unhandled_warning: bool) errors.SemanticError!void {
         if (!call.is_libc and !self.functions.contains(call.name) and self.lookupVariable(call.name) == null) {
             self.reportNodeErrorFmt(node, "Undefined function '{s}'", .{call.name}, "Declare it or import its module with use (maybe you forgot to import it?)");
@@ -573,6 +648,14 @@ pub const Analyzer = struct {
             },
             .function_call => |call| {
                 try self.analyzeFunctionCall(expr, call, false);
+<<<<<<< HEAD
+=======
+            },
+            .handled_call_stmt => |handled| {
+                var empty_labels = std.StringHashMap(void).init(self.allocator);
+                defer empty_labels.deinit();
+                try self.analyzeHandledCall(expr, handled, &empty_labels);
+>>>>>>> 6d63e72 (smart byref values in send callbacks)
             },
             .method_call => |method| {
                 try self.analyzeExpression(method.object);
@@ -665,7 +748,10 @@ pub const Analyzer = struct {
             .simd_method_call,
             .error_decl,
             .send_stmt,
+<<<<<<< HEAD
             .handled_call_stmt,
+=======
+>>>>>>> 6d63e72 (smart byref values in send callbacks)
             => {},
         }
     }

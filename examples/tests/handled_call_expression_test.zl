@@ -1,0 +1,17 @@
+error TestError = _;
+
+fun handler_test() >> i32 {
+    send TestError;
+    return 7;
+}
+
+fun main() >> i32 {
+    bool err = false;
+    i32 res = handler_test() on _ {
+        err = true;
+    };
+
+    @printf("(expected 1):%d\n", err as i32);
+    @printf("(expected 0):%d\n", res);
+    return 0;
+}

@@ -113,6 +113,7 @@ void* ast_root = NULL;
 
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 %token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_GOTO TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_UNION TOKEN_DOT TOKEN_NULL TOKEN_CONST TOKEN_WHEN
 =======
 %token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_GOTO TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_UNION TOKEN_DOT TOKEN_NULL TOKEN_CONST TOKEN_WHEN TOKEN_ERROR TOKEN_SEND TOKEN_ON
@@ -120,6 +121,9 @@ void* ast_root = NULL;
 =======
 %token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_GOTO TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_UNION TOKEN_DOT TOKEN_NULL TOKEN_CONST TOKEN_WHEN TOKEN_ERROR TOKEN_SEND TOKEN_ON
 >>>>>>> 4a3da3e (warning tests)
+=======
+%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_GOTO TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_UNION TOKEN_DOT TOKEN_NULL TOKEN_CONST TOKEN_WHEN TOKEN_ERROR TOKEN_SEND TOKEN_ON
+>>>>>>> 6d63e72 (smart byref values in send callbacks)
 %token TOKEN_AS TOKEN_UNDERSCORE TOKEN_MATCH
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
@@ -510,7 +514,10 @@ statement:
    | assignment TOKEN_SEMICOLON { $$ = $1; }
    | return_statement TOKEN_SEMICOLON { $$ = $1; }
    | send_statement TOKEN_SEMICOLON { $$ = $1; }
+<<<<<<< HEAD
    | handled_call_statement TOKEN_SEMICOLON { $$ = $1; }
+=======
+>>>>>>> 6d63e72 (smart byref values in send callbacks)
    | brainfuck_statement TOKEN_SEMICOLON { $$ = $1; }
    | if_statement { $$ = $1; }
    | for_statement { $$ = $1; }
@@ -888,6 +895,7 @@ primary_expression:
     | TOKEN_NUMBER { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_number_literal($1); }
     | TOKEN_CHAR { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_char_literal($1); }
     | string_literal { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_string_literal($1); free($1); }
+    | handled_call_statement { $$ = $1; }
     | function_call { $$ = $1; }
     | TOKEN_LPAREN expression TOKEN_RPAREN { $$ = $2; }
     | expression_block { $$ = $1; }
