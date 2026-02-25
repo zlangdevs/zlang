@@ -23,6 +23,25 @@ CLEAR_EACH_TEST="${CLEAR_EACH_TEST:-1}"
 # Set ZSTDPATH to the stdlib directory relative to the project root
 export ZSTDPATH="$(pwd)/stdlib"
 
+compiler_label() {
+    if [ "${USE_LOCAL_APP:-0}" = "1" ] && [ -x "$APP" ]; then
+        printf "%s" "$APP"
+    else
+        printf "%s" "zig build run --"
+    fi
+}
+
+run_compiler() {
+    local test_file="$1"
+    shift
+    local forced_output="$(pwd)/output"
+    if [ "${USE_LOCAL_APP:-0}" = "1" ] && [ -x "$APP" ]; then
+        "$APP" "$test_file" -o "$forced_output" "$@"
+    else
+        zig build run -- "$test_file" -o "$forced_output" "$@"
+    fi
+}
+
 maybe_clear_screen() {
     if [ "$CLEAR_EACH_TEST" = "1" ] && [ -t 1 ]; then
         clear
@@ -88,8 +107,8 @@ test_single_file() {
         math_link="-lm"
     fi
     
-    echo "Compiling with $APP:"
-    if $APP "$test_file" $math_link; then
+    echo "Compiling with $(compiler_label):"
+    if run_compiler "$test_file" $math_link; then
         if [ -f "a.out" ]; then
             BINARY="a.out"
         elif [ -f "output" ]; then
@@ -166,7 +185,7 @@ test_compile_fail_file() {
     echo "====================================================="
 
     local output
-    output=$($APP "$test_file" 2>&1)
+    output=$(run_compiler "$test_file" 2>&1)
     local compile_exit=$?
 
     rm -f "output" "a.out"
@@ -236,7 +255,11 @@ test_warning_file() {
     fi
 
     local output
+<<<<<<< HEAD
     output=$($APP "$test_file" $math_link 2>&1)
+=======
+    output=$(run_compiler "$test_file" $math_link 2>&1)
+>>>>>>> 6d63e72 (smart byref values in send callbacks)
     local compile_exit=$?
 
     rm -f "output" "a.out"
@@ -362,7 +385,7 @@ for test_file in "$TEST_DIR"/*.zl; do
     echo "Testing $filename..."
     echo "====================================================="
     
-    if $APP "$test_file" $math_link 2>/dev/null; then
+    if run_compiler "$test_file" $math_link 2>/dev/null; then
         if [ -f "a.out" ]; then
             BINARY="a.out"
         elif [ -f "output" ]; then
