@@ -1217,6 +1217,7 @@ pub const CodeGenerator = struct {
                 _ = try self.generateExpression(stmt);
             },
             .handled_call_stmt => |handled| {
+<<<<<<< HEAD
                 const err_global = self.ensureLastErrorGlobal();
                 const i32_ty = c.LLVMInt32TypeInContext(self.context);
                 _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 0, 0), err_global);
@@ -1254,6 +1255,9 @@ pub const CodeGenerator = struct {
 
                     c.LLVMPositionBuilderAtEnd(self.builder, next_bb);
                 }
+=======
+                _ = try self.generateHandledCall(handled, null);
+>>>>>>> 6d63e72 (smart byref values in send callbacks)
             },
             .method_call => {
                 _ = try self.generateExpression(stmt);
@@ -1809,6 +1813,445 @@ pub const CodeGenerator = struct {
         try self.error_codes.put(error_decl.name, code);
     }
 
+<<<<<<< HEAD
+=======
+    fn getScopedVariable(self: *CodeGenerator, name: []const u8) ?structs.VariableInfo {
+        var i = self.variable_scopes.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.variable_scopes.items[i].get(name)) |var_info| {
+                return var_info;
+            }
+        }
+        return null;
+    }
+
+    fn getOrCreateStackSaveIntrinsic(self: *CodeGenerator) c.LLVMValueRef {
+        var f = c.LLVMGetNamedFunction(self.module, "llvm.stacksave");
+        if (f == null) {
+            const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+            const fn_ty = c.LLVMFunctionType(i8_ptr, null, 0, 0);
+            f = c.LLVMAddFunction(self.module, "llvm.stacksave", fn_ty);
+        }
+        return f;
+    }
+
+    fn getOrCreateStackRestoreIntrinsic(self: *CodeGenerator) c.LLVMValueRef {
+        var f = c.LLVMGetNamedFunction(self.module, "llvm.stackrestore");
+        if (f == null) {
+            const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+            var params = [_]c.LLVMTypeRef{i8_ptr};
+            const fn_ty = c.LLVMFunctionType(c.LLVMVoidTypeInContext(self.context), &params, 1, 0);
+            f = c.LLVMAddFunction(self.module, "llvm.stackrestore", fn_ty);
+        }
+        return f;
+    }
+
+    fn appendUniqueCaptureName(self: *CodeGenerator, captures: *std.ArrayList([]const u8), name: []const u8, locals: *std.StringHashMap(void)) !void {
+        if (std.mem.eql(u8, name, "true") or std.mem.eql(u8, name, "false")) return;
+        if (locals.contains(name)) return;
+        for (captures.items) |existing| {
+            if (std.mem.eql(u8, existing, name)) return;
+        }
+        try captures.append(self.allocator, name);
+    }
+
+    fn appendUniqueName(self: *CodeGenerator, names: *std.ArrayList([]const u8), name: []const u8) !void {
+        for (names.items) |existing| {
+            if (std.mem.eql(u8, existing, name)) return;
+        }
+        try names.append(self.allocator, name);
+    }
+
+    fn collectHandlerLocalDecls(self: *CodeGenerator, statements: []const *ast.Node, locals: *std.StringHashMap(void)) errors.CodegenError!void {
+        for (statements) |stmt| {
+            switch (stmt.data) {
+                .var_decl => |decl| {
+                    try locals.put(decl.name, {});
+                },
+                .if_stmt => |if_stmt| {
+                    try self.collectHandlerLocalDecls(if_stmt.then_body.items, locals);
+                    if (if_stmt.else_body) |else_body| {
+                        try self.collectHandlerLocalDecls(else_body.items, locals);
+                    }
+                },
+                .for_stmt => |for_stmt| {
+                    try self.collectHandlerLocalDecls(for_stmt.body.items, locals);
+                },
+                .c_for_stmt => |c_for| {
+                    if (c_for.init) |init_node| {
+                        var one = [_]*ast.Node{init_node};
+                        try self.collectHandlerLocalDecls(one[0..], locals);
+                    }
+                    try self.collectHandlerLocalDecls(c_for.body.items, locals);
+                },
+                .match_stmt => |match_stmt| {
+                    for (match_stmt.cases.items) |case| {
+                        try self.collectHandlerLocalDecls(case.body.items, locals);
+                    }
+                },
+                .expression_block => |block| {
+                    try self.collectHandlerLocalDecls(block.statements.items, locals);
+                },
+                .handled_call_stmt => |handled| {
+                    for (handled.handlers.items) |nested_handler| {
+                        try self.collectHandlerLocalDecls(nested_handler.body.items, locals);
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn collectHandlerCapturesFromExpression(self: *CodeGenerator, expr: *ast.Node, captures: *std.ArrayList([]const u8), locals: *std.StringHashMap(void)) errors.CodegenError!void {
+        switch (expr.data) {
+            .identifier => |ident| {
+                try self.appendUniqueCaptureName(captures, ident.name, locals);
+            },
+            .qualified_identifier => |qual| {
+                try self.collectHandlerCapturesFromExpression(qual.base, captures, locals);
+            },
+            .function_call => |call| {
+                for (call.args.items) |arg| {
+                    try self.collectHandlerCapturesFromExpression(arg, captures, locals);
+                }
+            },
+            .method_call => |method| {
+                try self.collectHandlerCapturesFromExpression(method.object, captures, locals);
+                for (method.args.items) |arg| {
+                    try self.collectHandlerCapturesFromExpression(arg, captures, locals);
+                }
+            },
+            .unary_op => |un| {
+                try self.collectHandlerCapturesFromExpression(un.operand, captures, locals);
+            },
+            .binary_op => |bin| {
+                try self.collectHandlerCapturesFromExpression(bin.lhs, captures, locals);
+                try self.collectHandlerCapturesFromExpression(bin.rhs, captures, locals);
+            },
+            .comparison => |cmp| {
+                try self.collectHandlerCapturesFromExpression(cmp.lhs, captures, locals);
+                try self.collectHandlerCapturesFromExpression(cmp.rhs, captures, locals);
+            },
+            .array_initializer => |arr| {
+                for (arr.elements.items) |elem| {
+                    try self.collectHandlerCapturesFromExpression(elem, captures, locals);
+                }
+            },
+            .array_index => |arr_idx| {
+                try self.collectHandlerCapturesFromExpression(arr_idx.array, captures, locals);
+                try self.collectHandlerCapturesFromExpression(arr_idx.index, captures, locals);
+            },
+            .simd_initializer => |simd_init| {
+                for (simd_init.elements.items) |elem| {
+                    try self.collectHandlerCapturesFromExpression(elem, captures, locals);
+                }
+            },
+            .simd_index => |simd_idx| {
+                try self.collectHandlerCapturesFromExpression(simd_idx.simd, captures, locals);
+                try self.collectHandlerCapturesFromExpression(simd_idx.index, captures, locals);
+            },
+            .simd_method_call => |simd_method| {
+                try self.collectHandlerCapturesFromExpression(simd_method.simd, captures, locals);
+                for (simd_method.args.items) |arg| {
+                    try self.collectHandlerCapturesFromExpression(arg, captures, locals);
+                }
+            },
+            .struct_initializer => |struct_init| {
+                for (struct_init.field_values.items) |field| {
+                    try self.collectHandlerCapturesFromExpression(field.value, captures, locals);
+                }
+            },
+            .cast => |cast_expr| {
+                try self.collectHandlerCapturesFromExpression(cast_expr.expr, captures, locals);
+            },
+            .expression_block => |block| {
+                try self.collectHandlerCapturesFromStatements(block.statements.items, captures, locals);
+                try self.collectHandlerCapturesFromExpression(block.result, captures, locals);
+            },
+            else => {},
+        }
+    }
+
+    fn collectHandlerCapturesFromStatements(self: *CodeGenerator, statements: []const *ast.Node, captures: *std.ArrayList([]const u8), locals: *std.StringHashMap(void)) errors.CodegenError!void {
+        for (statements) |stmt| {
+            switch (stmt.data) {
+                .assignment => |as| {
+                    try self.collectHandlerCapturesFromExpression(as.target, captures, locals);
+                    try self.collectHandlerCapturesFromExpression(as.value, captures, locals);
+                },
+                .compound_assignment => |as| {
+                    try self.collectHandlerCapturesFromExpression(as.target, captures, locals);
+                    try self.collectHandlerCapturesFromExpression(as.value, captures, locals);
+                },
+                .array_assignment => |arr| {
+                    try self.collectHandlerCapturesFromExpression(arr.array, captures, locals);
+                    try self.collectHandlerCapturesFromExpression(arr.index, captures, locals);
+                    try self.collectHandlerCapturesFromExpression(arr.value, captures, locals);
+                },
+                .array_compound_assignment => |arr| {
+                    try self.collectHandlerCapturesFromExpression(arr.array, captures, locals);
+                    try self.collectHandlerCapturesFromExpression(arr.index, captures, locals);
+                    try self.collectHandlerCapturesFromExpression(arr.value, captures, locals);
+                },
+                .simd_assignment => |simd_ass| {
+                    try self.collectHandlerCapturesFromExpression(simd_ass.simd, captures, locals);
+                    try self.collectHandlerCapturesFromExpression(simd_ass.index, captures, locals);
+                    try self.collectHandlerCapturesFromExpression(simd_ass.value, captures, locals);
+                },
+                .simd_compound_assignment => |simd_ass| {
+                    try self.collectHandlerCapturesFromExpression(simd_ass.simd, captures, locals);
+                    try self.collectHandlerCapturesFromExpression(simd_ass.index, captures, locals);
+                    try self.collectHandlerCapturesFromExpression(simd_ass.value, captures, locals);
+                },
+                .var_decl => |decl| {
+                    if (decl.initializer) |init_expr| {
+                        try self.collectHandlerCapturesFromExpression(init_expr, captures, locals);
+                    }
+                },
+                .function_call, .method_call, .unary_op, .binary_op, .comparison, .array_index, .array_initializer, .identifier, .qualified_identifier, .struct_initializer, .cast, .expression_block, .simd_initializer, .simd_index, .simd_method_call => {
+                    try self.collectHandlerCapturesFromExpression(stmt, captures, locals);
+                },
+                .return_stmt => |ret| {
+                    if (ret.expression) |expr| {
+                        try self.collectHandlerCapturesFromExpression(expr, captures, locals);
+                    }
+                },
+                .if_stmt => |if_stmt| {
+                    try self.collectHandlerCapturesFromExpression(if_stmt.condition, captures, locals);
+                    try self.collectHandlerCapturesFromStatements(if_stmt.then_body.items, captures, locals);
+                    if (if_stmt.else_body) |else_body| {
+                        try self.collectHandlerCapturesFromStatements(else_body.items, captures, locals);
+                    }
+                },
+                .for_stmt => |for_stmt| {
+                    if (for_stmt.condition) |cond| {
+                        try self.collectHandlerCapturesFromExpression(cond, captures, locals);
+                    }
+                    try self.collectHandlerCapturesFromStatements(for_stmt.body.items, captures, locals);
+                },
+                .c_for_stmt => |c_for| {
+                    if (c_for.init) |init_node| {
+                        try self.collectHandlerCapturesFromStatements(&[_]*ast.Node{init_node}, captures, locals);
+                    }
+                    if (c_for.condition) |cond| {
+                        try self.collectHandlerCapturesFromExpression(cond, captures, locals);
+                    }
+                    if (c_for.increment) |inc| {
+                        try self.collectHandlerCapturesFromStatements(&[_]*ast.Node{inc}, captures, locals);
+                    }
+                    try self.collectHandlerCapturesFromStatements(c_for.body.items, captures, locals);
+                },
+                .match_stmt => |match_stmt| {
+                    try self.collectHandlerCapturesFromExpression(match_stmt.condition, captures, locals);
+                    for (match_stmt.cases.items) |case| {
+                        for (case.values.items) |val| {
+                            try self.collectHandlerCapturesFromExpression(val, captures, locals);
+                        }
+                        try self.collectHandlerCapturesFromStatements(case.body.items, captures, locals);
+                    }
+                },
+                .handled_call_stmt => |handled| {
+                    try self.collectHandlerCapturesFromExpression(handled.call, captures, locals);
+                    for (handled.handlers.items) |nested_handler| {
+                        try self.collectHandlerCapturesFromStatements(nested_handler.body.items, captures, locals);
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn collectMutatedCaptureFromTarget(self: *CodeGenerator, target: *ast.Node, mutated: *std.ArrayList([]const u8), locals: *std.StringHashMap(void)) errors.CodegenError!void {
+        switch (target.data) {
+            .identifier => |ident| {
+                if (std.mem.eql(u8, ident.name, "true") or std.mem.eql(u8, ident.name, "false")) return;
+                if (locals.contains(ident.name)) return;
+                try self.appendUniqueName(mutated, ident.name);
+            },
+            .qualified_identifier => |qual| {
+                try self.collectMutatedCaptureFromTarget(qual.base, mutated, locals);
+            },
+            .array_index => |arr_idx| {
+                try self.collectMutatedCaptureFromTarget(arr_idx.array, mutated, locals);
+            },
+            .simd_index => |simd_idx| {
+                try self.collectMutatedCaptureFromTarget(simd_idx.simd, mutated, locals);
+            },
+            else => {},
+        }
+    }
+
+    fn collectHandlerMutatedCaptures(self: *CodeGenerator, statements: []const *ast.Node, mutated: *std.ArrayList([]const u8), locals: *std.StringHashMap(void)) errors.CodegenError!void {
+        for (statements) |stmt| {
+            switch (stmt.data) {
+                .assignment => |as| {
+                    try self.collectMutatedCaptureFromTarget(as.target, mutated, locals);
+                },
+                .compound_assignment => |as| {
+                    try self.collectMutatedCaptureFromTarget(as.target, mutated, locals);
+                },
+                .array_assignment => |arr| {
+                    try self.collectMutatedCaptureFromTarget(arr.array, mutated, locals);
+                },
+                .array_compound_assignment => |arr| {
+                    try self.collectMutatedCaptureFromTarget(arr.array, mutated, locals);
+                },
+                .simd_assignment => |simd_ass| {
+                    try self.collectMutatedCaptureFromTarget(simd_ass.simd, mutated, locals);
+                },
+                .simd_compound_assignment => |simd_ass| {
+                    try self.collectMutatedCaptureFromTarget(simd_ass.simd, mutated, locals);
+                },
+                .if_stmt => |if_stmt| {
+                    try self.collectHandlerMutatedCaptures(if_stmt.then_body.items, mutated, locals);
+                    if (if_stmt.else_body) |else_body| {
+                        try self.collectHandlerMutatedCaptures(else_body.items, mutated, locals);
+                    }
+                },
+                .for_stmt => |for_stmt| {
+                    try self.collectHandlerMutatedCaptures(for_stmt.body.items, mutated, locals);
+                },
+                .c_for_stmt => |c_for| {
+                    if (c_for.init) |init_node| {
+                        try self.collectHandlerMutatedCaptures(&[_]*ast.Node{init_node}, mutated, locals);
+                    }
+                    if (c_for.increment) |inc_node| {
+                        try self.collectHandlerMutatedCaptures(&[_]*ast.Node{inc_node}, mutated, locals);
+                    }
+                    try self.collectHandlerMutatedCaptures(c_for.body.items, mutated, locals);
+                },
+                .match_stmt => |match_stmt| {
+                    for (match_stmt.cases.items) |case| {
+                        try self.collectHandlerMutatedCaptures(case.body.items, mutated, locals);
+                    }
+                },
+                .expression_block => |block| {
+                    try self.collectHandlerMutatedCaptures(block.statements.items, mutated, locals);
+                },
+                .handled_call_stmt => |handled| {
+                    for (handled.handlers.items) |nested_handler| {
+                        try self.collectHandlerMutatedCaptures(nested_handler.body.items, mutated, locals);
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn nameInList(names: []const []const u8, name: []const u8) bool {
+        for (names) |entry| {
+            if (std.mem.eql(u8, entry, name)) return true;
+        }
+        return false;
+    }
+
+    fn materializeHandlerCaptures(self: *CodeGenerator, statements: []const *ast.Node) errors.CodegenError!void {
+        var locals = std.StringHashMap(void).init(self.allocator);
+        defer locals.deinit();
+        try self.collectHandlerLocalDecls(statements, &locals);
+
+        var captures = std.ArrayList([]const u8){};
+        defer captures.deinit(self.allocator);
+        try self.collectHandlerCapturesFromStatements(statements, &captures, &locals);
+
+        var mutated = std.ArrayList([]const u8){};
+        defer mutated.deinit(self.allocator);
+        try self.collectHandlerMutatedCaptures(statements, &mutated, &locals);
+
+        for (captures.items) |name| {
+            if (CodeGenerator.variableExistsInCurrentScope(self, name)) continue;
+            const outer_var = self.getScopedVariable(name) orelse continue;
+            if (outer_var.value == null) continue;
+
+            if (nameInList(mutated.items, name)) {
+                try CodeGenerator.putVariable(self, name, structs.VariableInfo{
+                    .value = outer_var.value,
+                    .type_ref = outer_var.type_ref,
+                    .type_name = outer_var.type_name,
+                    .is_byval_param = outer_var.is_byval_param,
+                    .is_const = outer_var.is_const,
+                });
+                continue;
+            }
+
+            const slot = c.LLVMBuildAlloca(self.builder, outer_var.type_ref, name.ptr);
+            const loaded = c.LLVMBuildLoad2(self.builder, outer_var.type_ref, outer_var.value, "capture.load");
+            _ = c.LLVMBuildStore(self.builder, loaded, slot);
+
+            try CodeGenerator.putVariable(self, name, structs.VariableInfo{
+                .value = slot,
+                .type_ref = outer_var.type_ref,
+                .type_name = outer_var.type_name,
+                .is_byval_param = outer_var.is_byval_param,
+                .is_const = outer_var.is_const,
+            });
+        }
+    }
+
+    fn generateHandledCall(self: *CodeGenerator, handled: ast.HandledCallStmt, expected_type: ?[]const u8) errors.CodegenError!c.LLVMValueRef {
+        const err_global = self.ensureLastErrorGlobal();
+        const i32_ty = c.LLVMInt32TypeInContext(self.context);
+        _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 0, 0), err_global);
+
+        var call_result: c.LLVMValueRef = undefined;
+        if (handled.call.data == .function_call) {
+            call_result = try functions.generateFunctionCall(self, handled.call.data.function_call, expected_type);
+        } else {
+            call_result = try self.generateExpressionWithContext(handled.call, expected_type);
+        }
+
+        for (handled.handlers.items) |handler| {
+            const current_bb = c.LLVMGetInsertBlock(self.builder);
+            if (c.LLVMGetBasicBlockTerminator(current_bb) != null) break;
+
+            const current_fn = self.current_function orelse return errors.CodegenError.TypeMismatch;
+            const handler_bb = c.LLVMAppendBasicBlockInContext(self.context, current_fn, "err.handler");
+            const next_bb = c.LLVMAppendBasicBlockInContext(self.context, current_fn, "err.next");
+            const err_now = c.LLVMBuildLoad2(self.builder, i32_ty, err_global, "err.code");
+
+            const cond = if (handler.error_name) |error_name| blk: {
+                const code = self.error_codes.get(error_name) orelse return errors.CodegenError.TypeMismatch;
+                const code_bits: c_ulonglong = @bitCast(@as(i64, code));
+                const code_val = c.LLVMConstInt(i32_ty, code_bits, 1);
+                break :blk c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, err_now, code_val, "err.match");
+            } else blk: {
+                const zero = c.LLVMConstInt(i32_ty, 0, 0);
+                break :blk c.LLVMBuildICmp(self.builder, c.LLVMIntNE, err_now, zero, "err.any");
+            };
+
+            _ = c.LLVMBuildCondBr(self.builder, cond, handler_bb, next_bb);
+
+            c.LLVMPositionBuilderAtEnd(self.builder, handler_bb);
+
+            const stacksave_fn = self.getOrCreateStackSaveIntrinsic();
+            const stacksave_ty = c.LLVMGlobalGetValueType(stacksave_fn);
+            const stack_ptr = c.LLVMBuildCall2(self.builder, stacksave_ty, stacksave_fn, null, 0, "handler.stack");
+
+            try CodeGenerator.pushScope(self);
+            errdefer CodeGenerator.popScope(self);
+            try self.materializeHandlerCaptures(handler.body.items);
+            for (handler.body.items) |handler_stmt| {
+                try self.generateStatement(handler_stmt);
+                if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) != null) break;
+            }
+            CodeGenerator.popScope(self);
+
+            if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
+                const stackrestore_fn = self.getOrCreateStackRestoreIntrinsic();
+                const stackrestore_ty = c.LLVMGlobalGetValueType(stackrestore_fn);
+                var restore_args = [_]c.LLVMValueRef{stack_ptr};
+                _ = c.LLVMBuildCall2(self.builder, stackrestore_ty, stackrestore_fn, &restore_args, 1, "");
+                _ = c.LLVMBuildBr(self.builder, next_bb);
+            }
+
+            c.LLVMPositionBuilderAtEnd(self.builder, next_bb);
+        }
+
+        return call_result;
+    }
+
+>>>>>>> 6d63e72 (smart byref values in send callbacks)
     fn generateGlobalDeclaration(self: *CodeGenerator, global_node: *ast.Node) errors.CodegenError!void {
         switch (global_node.data) {
             .var_decl => |decl| {
@@ -2549,6 +2992,9 @@ pub const CodeGenerator = struct {
             .function_call => |call| {
                 return try CodeGenerator.generateFunctionCall(self, call, expected_type);
             },
+            .handled_call_stmt => |handled| {
+                return try self.generateHandledCall(handled, expected_type);
+            },
             .expression_block => |block| {
                 return try self.generateExpressionBlock(block);
             },
@@ -2628,6 +3074,9 @@ pub const CodeGenerator = struct {
                 }
                 return "i32";
             },
+            .handled_call_stmt => |handled| {
+                return self.inferType(handled.call);
+            },
             .array_index => |idx| {
                 const arr_type = try self.inferType(idx.array);
                 if (std.mem.startsWith(u8, arr_type, "arr<")) {
@@ -2672,6 +3121,9 @@ pub const CodeGenerator = struct {
             },
             .expression_block => |block| {
                 return try self.generateExpressionBlock(block);
+            },
+            .handled_call_stmt => |handled| {
+                return try self.generateHandledCall(handled, null);
             },
             .identifier => |ident| {
                 if (std.mem.eql(u8, ident.name, "true")) {
