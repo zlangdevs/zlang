@@ -2,17 +2,20 @@
 
 TEST_DIR="./examples/tests"
 COMPILE_FAIL_DIR="./examples/tests/compile_fail"
+WARNING_DIR="./examples/tests/warning"
 APP="./zig-out/bin/zlang"
 OUTPUT_BIN="./output"
 FAILED_COMPILE=0
 FAILED_EXPECTED=0
 FAILED_COMPILE_FAIL=0
+FAILED_WARNING=0
 TOTAL_TESTS=0
 PASSED_TESTS=0
 COMPILE_ONLY_FILES="void_test.zl,test_simple.zl,complex_test.zl,multi_test.zl"
 declare -a FAILED_COMPILE_FILES
 declare -a FAILED_EXPECTED_FILES
 declare -a FAILED_COMPILE_FAIL_FILES
+declare -a FAILED_WARNING_FILES
 declare -a PASSED_FILES
 TABLE_NAME_WIDTH=28
 CLEAR_EACH_TEST="${CLEAR_EACH_TEST:-1}"
@@ -38,18 +41,23 @@ format_table_name() {
 find_file_by_pattern() {
     local pattern="$1"
     local found_files=()
+    local search_dirs=("$TEST_DIR" "$COMPILE_FAIL_DIR" "$WARNING_DIR")
     
-    for file in "$TEST_DIR"/"$pattern"*.zl; do
-        if [ -f "$file" ]; then
-            found_files+=("$file")
-        fi
-    done
-    
-    if [ ${#found_files[@]} -eq 0 ]; then
-        for file in "$TEST_DIR"/*"$pattern"*.zl; do
+    for dir in "${search_dirs[@]}"; do
+        for file in "$dir"/"$pattern"*.zl; do
             if [ -f "$file" ]; then
                 found_files+=("$file")
             fi
+        done
+    done
+    
+    if [ ${#found_files[@]} -eq 0 ]; then
+        for dir in "${search_dirs[@]}"; do
+            for file in "$dir"/*"$pattern"*.zl; do
+                if [ -f "$file" ]; then
+                    found_files+=("$file")
+                fi
+            done
         done
     fi
     
@@ -213,6 +221,79 @@ test_compile_fail_file() {
     return 1
 }
 
+test_warning_file() {
+    local test_file="$1"
+    local filename=$(basename "$test_file")
+    local expected_file="${test_file%.zl}.expected"
+    local strict_warning="${STRICT_WARNING:-0}"
+
+    echo "Testing warning $filename..."
+    echo "====================================================="
+
+    local math_link=""
+    if [[ "$filename" == *"math"* ]] || grep -q "use std\.math" "$test_file" 2>/dev/null; then
+        math_link="-lm"
+    fi
+
+    local output
+    output=$($APP "$test_file" $math_link 2>&1)
+    local compile_exit=$?
+
+    rm -f "output" "a.out"
+
+    if [ $compile_exit -ne 0 ]; then
+        echo "❌ $filename - FAILED (Compilation failed, warning test expects success)"
+        echo "---- compiler output ----"
+        echo "$output"
+        echo "-------------------------"
+        return 1
+    fi
+
+    if [ ! -f "$expected_file" ]; then
+        echo "✅ $filename - PASSED (compiled, no expectation file)"
+        return 0
+    fi
+
+    local missing=0
+    local matched=0
+    local expected_count=0
+    while IFS= read -r expected_line; do
+        if [ -z "$expected_line" ] || [[ "$expected_line" =~ ^[[:space:]]*# ]]; then
+            continue
+        fi
+        expected_count=$((expected_count + 1))
+        if ! printf "%s" "$output" | grep -Fq "$expected_line"; then
+            missing=$((missing + 1))
+        else
+            matched=$((matched + 1))
+        fi
+    done < "$expected_file"
+
+    if [ $missing -eq 0 ]; then
+        echo "✅ $filename - PASSED"
+        return 0
+    fi
+
+    if [ "$strict_warning" = "0" ] && [ $matched -gt 0 ]; then
+        echo "✅ $filename - PASSED (matched $matched/$expected_count expected fragments)"
+        return 0
+    fi
+
+    while IFS= read -r expected_line; do
+        if [ -z "$expected_line" ] || [[ "$expected_line" =~ ^[[:space:]]*# ]]; then
+            continue
+        fi
+        if ! printf "%s" "$output" | grep -Fq "$expected_line"; then
+            echo "❌ Missing expected warning text: $expected_line"
+        fi
+    done < "$expected_file"
+
+    echo "---- compiler output ----"
+    echo "$output"
+    echo "-------------------------"
+    return 1
+}
+
 if [ $# -gt 0 ]; then
     maybe_clear_screen
     if [[ "$1" == *.zl ]]; then
@@ -236,8 +317,20 @@ if [ $# -gt 0 ]; then
         fi
     fi
     
-    test_single_file "$test_file"
-    exit $?
+    case "$test_file" in
+        "$COMPILE_FAIL_DIR"/*)
+            test_compile_fail_file "$test_file"
+            exit $?
+            ;;
+        "$WARNING_DIR"/*)
+            test_warning_file "$test_file"
+            exit $?
+            ;;
+        *)
+            test_single_file "$test_file"
+            exit $?
+            ;;
+    esac
 fi
 
 echo "Building compiler..."
@@ -363,6 +456,27 @@ if [ -d "$COMPILE_FAIL_DIR" ]; then
     done
 fi
 
+if [ -d "$WARNING_DIR" ]; then
+    for test_file in "$WARNING_DIR"/*.zl; do
+        if [ ! -f "$test_file" ]; then
+            continue
+        fi
+
+        TOTAL_TESTS=$((TOTAL_TESTS + 1))
+        filename=$(basename "$test_file")
+
+        maybe_clear_screen
+
+        if test_warning_file "$test_file"; then
+            PASSED_FILES+=("$filename")
+            PASSED_TESTS=$((PASSED_TESTS + 1))
+        else
+            FAILED_WARNING_FILES+=("$filename")
+            FAILED_WARNING=$((FAILED_WARNING + 1))
+        fi
+    done
+fi
+
 maybe_clear_screen
 echo "====================================================="
 echo "TEST SUMMARY"
@@ -372,6 +486,7 @@ echo "Passed: $PASSED_TESTS"
 echo "Failed compilation: $FAILED_COMPILE"
 echo "Failed expected values: $FAILED_EXPECTED"
 echo "Failed compile-fail checks: $FAILED_COMPILE_FAIL"
+echo "Failed warning checks: $FAILED_WARNING"
 echo ""
 echo "┌──────────────────────────────┬──────────────┐"
 echo "│           FILENAME           │   STATUS     │"
@@ -389,9 +504,17 @@ for file in "${FAILED_EXPECTED_FILES[@]}"; do
     printf "│ %-28s │ \033[31mEXPECTED\033[0m     │\n" "$(format_table_name "$file")"
 done
 
+for file in "${FAILED_COMPILE_FAIL_FILES[@]}"; do
+    printf "│ %-28s │ \033[31mCFAIL\033[0m        │\n" "$(format_table_name "$file")"
+done
+
+for file in "${FAILED_WARNING_FILES[@]}"; do
+    printf "│ %-28s │ \033[31mWARNING\033[0m      │\n" "$(format_table_name "$file")"
+done
+
 echo "├──────────────────────────────┼──────────────┤"
 printf "│ TOTAL: %-21d │ \033[32m%3d\033[0m \033[31m%3d\033[0m      │\n" \
-       $TOTAL_TESTS $PASSED_TESTS $((FAILED_COMPILE + FAILED_EXPECTED + FAILED_COMPILE_FAIL))
+       $TOTAL_TESTS $PASSED_TESTS $((FAILED_COMPILE + FAILED_EXPECTED + FAILED_COMPILE_FAIL + FAILED_WARNING))
 echo "└──────────────────────────────┴──────────────┘"
 echo ""
 
@@ -419,7 +542,15 @@ if [ ${#FAILED_COMPILE_FAIL_FILES[@]} -gt 0 ]; then
     echo ""
 fi
 
-if [ $FAILED_COMPILE -eq 0 ] && [ $FAILED_EXPECTED -eq 0 ] && [ $FAILED_COMPILE_FAIL -eq 0 ]; then
+if [ ${#FAILED_WARNING_FILES[@]} -gt 0 ]; then
+    echo "Failed warning checks:"
+    for file in "${FAILED_WARNING_FILES[@]}"; do
+        echo "  - $file"
+    done
+    echo ""
+fi
+
+if [ $FAILED_COMPILE -eq 0 ] && [ $FAILED_EXPECTED -eq 0 ] && [ $FAILED_COMPILE_FAIL -eq 0 ] && [ $FAILED_WARNING -eq 0 ]; then
     echo "🎉 All tests passed!"
 else
     echo "❌ Some tests failed."
