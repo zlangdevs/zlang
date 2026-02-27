@@ -12,6 +12,10 @@ fun main() >> i32 {
     };
 
     @printf("(expected 1):%d\n", err as i32);
+<<<<<<< HEAD
     @printf("(expected 0):%d\n", res);
+=======
+    @printf("(expected 7):%d\n", res);
+>>>>>>> b9d8f8f (solicit implemented)
     return 0;
 }
