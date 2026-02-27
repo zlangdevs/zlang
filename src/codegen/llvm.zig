@@ -56,6 +56,24 @@ pub const CodeGenerator = struct {
     error_codes: std.HashMap([]const u8, i32, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     next_error_code: i32,
     last_error_global: ?c.LLVMValueRef,
+<<<<<<< HEAD
+=======
+    last_error_mode_global: ?c.LLVMValueRef,
+    solicit_callback_global: ?c.LLVMValueRef,
+    solicit_var_slots: std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    solicit_capture_slots: std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    next_solicit_callback_id: usize,
+    function_asts: std.HashMap([]const u8, ast.Function, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    current_source_function_name: ?[]const u8,
+
+    const SolicitCaptureBinding = struct {
+        name: []const u8,
+        type_ref: c.LLVMTypeRef,
+        type_name: []const u8,
+        mutated: bool,
+        slot: c.LLVMValueRef,
+    };
+>>>>>>> b9d8f8f (solicit implemented)
 
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
         _ = c.LLVMInitializeNativeTarget();
@@ -110,6 +128,16 @@ pub const CodeGenerator = struct {
             .error_codes = std.HashMap([]const u8, i32, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .next_error_code = 1,
             .last_error_global = null,
+<<<<<<< HEAD
+=======
+            .last_error_mode_global = null,
+            .solicit_callback_global = null,
+            .solicit_var_slots = std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .solicit_capture_slots = std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .next_solicit_callback_id = 1,
+            .function_asts = std.HashMap([]const u8, ast.Function, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .current_source_function_name = null,
+>>>>>>> b9d8f8f (solicit implemented)
         };
     }
 
@@ -141,6 +169,12 @@ pub const CodeGenerator = struct {
         }
         self.function_overloads.deinit();
         self.error_codes.deinit();
+<<<<<<< HEAD
+=======
+        self.solicit_var_slots.deinit();
+        self.solicit_capture_slots.deinit();
+        self.function_asts.deinit();
+>>>>>>> b9d8f8f (solicit implemented)
 
         self.module_manager.deinit();
         for (self.variable_scopes.items) |*scope| {
@@ -200,6 +234,10 @@ pub const CodeGenerator = struct {
             .expression_block => |block| tokenTextForNode(block.result),
             .error_decl => |decl| decl.name,
             .send_stmt => |send_stmt| send_stmt.error_name,
+<<<<<<< HEAD
+=======
+            .solicit_stmt => |solicit_stmt| solicit_stmt.error_name,
+>>>>>>> b9d8f8f (solicit implemented)
             .handled_call_stmt => |handled| tokenTextForNode(handled.call),
             else => null,
         };
@@ -626,6 +664,7 @@ pub const CodeGenerator = struct {
                     } else if (func.data == .c_function_decl) {
                         try self.generateCFunctionDeclaration(func.data.c_function_decl);
                     } else if (func.data == .function) {
+                        try self.function_asts.put(func.data.function.name, func.data.function);
                         try self.declareFunction(func.data.function);
                     }
                 }
@@ -1218,6 +1257,7 @@ pub const CodeGenerator = struct {
             },
             .handled_call_stmt => |handled| {
 <<<<<<< HEAD
+<<<<<<< HEAD
                 const err_global = self.ensureLastErrorGlobal();
                 const i32_ty = c.LLVMInt32TypeInContext(self.context);
                 _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 0, 0), err_global);
@@ -1258,6 +1298,9 @@ pub const CodeGenerator = struct {
 =======
                 _ = try self.generateHandledCall(handled, null);
 >>>>>>> 6d63e72 (smart byref values in send callbacks)
+=======
+                _ = try self.generateHandledCall(handled, null);
+>>>>>>> b9d8f8f (solicit implemented)
             },
             .method_call => {
                 _ = try self.generateExpression(stmt);
@@ -1265,10 +1308,15 @@ pub const CodeGenerator = struct {
             .send_stmt => |send_stmt| {
                 const code = self.error_codes.get(send_stmt.error_name) orelse return errors.CodegenError.TypeMismatch;
                 const err_global = self.ensureLastErrorGlobal();
+<<<<<<< HEAD
+=======
+                const mode_global = self.ensureLastErrorModeGlobal();
+>>>>>>> b9d8f8f (solicit implemented)
                 const i32_ty = c.LLVMInt32TypeInContext(self.context);
                 const code_bits: c_ulonglong = @bitCast(@as(i64, code));
                 const code_val = c.LLVMConstInt(i32_ty, code_bits, 1);
                 _ = c.LLVMBuildStore(self.builder, code_val, err_global);
+<<<<<<< HEAD
 
                 if (std.mem.eql(u8, self.current_function_return_type, "void")) {
                     _ = c.LLVMBuildRetVoid(self.builder);
@@ -1276,6 +1324,44 @@ pub const CodeGenerator = struct {
                     const default_value = utils.getDefaultValueForType(self, self.current_function_return_type);
                     _ = c.LLVMBuildRet(self.builder, default_value);
                 }
+=======
+                _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 1, 0), mode_global);
+            },
+            .solicit_stmt => |solicit_stmt| {
+                const code = self.error_codes.get(solicit_stmt.error_name) orelse return errors.CodegenError.TypeMismatch;
+                const err_global = self.ensureLastErrorGlobal();
+                const mode_global = self.ensureLastErrorModeGlobal();
+                const callback_global = self.ensureSolicitCallbackGlobal();
+                const i32_ty = c.LLVMInt32TypeInContext(self.context);
+                const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+                const code_bits: c_ulonglong = @bitCast(@as(i64, code));
+                const code_val = c.LLVMConstInt(i32_ty, code_bits, 1);
+                _ = c.LLVMBuildStore(self.builder, code_val, err_global);
+                _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 2, 0), mode_global);
+
+                try self.exposeCurrentFunctionVarsForSolicit();
+
+                const callback_raw = c.LLVMBuildLoad2(self.builder, i8_ptr, callback_global, "solicit.cb.raw");
+                const has_callback = c.LLVMBuildICmp(self.builder, c.LLVMIntNE, callback_raw, c.LLVMConstNull(i8_ptr), "solicit.has_cb");
+
+                const current_fn = self.current_function orelse return errors.CodegenError.TypeMismatch;
+                const call_bb = c.LLVMAppendBasicBlockInContext(self.context, current_fn, "solicit.cb.call");
+                const cont_bb = c.LLVMAppendBasicBlockInContext(self.context, current_fn, "solicit.cb.cont");
+                _ = c.LLVMBuildCondBr(self.builder, has_callback, call_bb, cont_bb);
+
+                c.LLVMPositionBuilderAtEnd(self.builder, call_bb);
+                var callback_params = [_]c.LLVMTypeRef{i32_ty};
+                const callback_fn_ty = c.LLVMFunctionType(c.LLVMVoidTypeInContext(self.context), &callback_params, 1, 0);
+                const callback_ptr_ty = c.LLVMPointerType(callback_fn_ty, 0);
+                const callback_fn = c.LLVMBuildBitCast(self.builder, callback_raw, callback_ptr_ty, "solicit.cb.fn");
+                var callback_args = [_]c.LLVMValueRef{code_val};
+                _ = c.LLVMBuildCall2(self.builder, callback_fn_ty, callback_fn, &callback_args, 1, "");
+                _ = c.LLVMBuildBr(self.builder, cont_bb);
+
+                c.LLVMPositionBuilderAtEnd(self.builder, cont_bb);
+                _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 0, 0), err_global);
+                _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 0, 0), mode_global);
+>>>>>>> b9d8f8f (solicit implemented)
             },
             .return_stmt => |ret| {
                 if (ret.expression) |expr| {
@@ -1770,6 +1856,75 @@ pub const CodeGenerator = struct {
         return global_var;
     }
 
+<<<<<<< HEAD
+=======
+    fn ensureLastErrorModeGlobal(self: *CodeGenerator) c.LLVMValueRef {
+        if (self.last_error_mode_global) |g| return g;
+
+        const name_z = utils.dupeZ(self.allocator, "__zlang_last_error_mode");
+        defer self.allocator.free(name_z);
+        const i32_ty = c.LLVMInt32TypeInContext(self.context);
+        const global_var = c.LLVMAddGlobal(self.module, i32_ty, name_z.ptr);
+        c.LLVMSetInitializer(global_var, c.LLVMConstInt(i32_ty, 0, 0));
+        c.LLVMSetLinkage(global_var, c.LLVMInternalLinkage);
+        self.last_error_mode_global = global_var;
+        return global_var;
+    }
+
+    fn ensureSolicitCallbackGlobal(self: *CodeGenerator) c.LLVMValueRef {
+        if (self.solicit_callback_global) |g| return g;
+
+        const name_z = utils.dupeZ(self.allocator, "__zlang_solicit_callback");
+        defer self.allocator.free(name_z);
+        const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+        const global_var = c.LLVMAddGlobal(self.module, i8_ptr, name_z.ptr);
+        c.LLVMSetInitializer(global_var, c.LLVMConstNull(i8_ptr));
+        c.LLVMSetLinkage(global_var, c.LLVMInternalLinkage);
+        self.solicit_callback_global = global_var;
+        return global_var;
+    }
+
+    fn ensureSolicitVarSlot(self: *CodeGenerator, function_name: []const u8, var_name: []const u8) errors.CodegenError!c.LLVMValueRef {
+        const key = try std.fmt.allocPrint(self.allocator, "{s}::{s}", .{ function_name, var_name });
+        defer self.allocator.free(key);
+
+        if (self.solicit_var_slots.get(key)) |slot| return slot;
+
+        const global_name = try std.fmt.allocPrint(self.allocator, "__zlang_solicit_var_{s}_{s}", .{ function_name, var_name });
+        defer self.allocator.free(global_name);
+        const global_name_z = utils.dupeZ(self.allocator, global_name);
+        defer self.allocator.free(global_name_z);
+
+        const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+        const global_var = c.LLVMAddGlobal(self.module, i8_ptr, global_name_z.ptr);
+        c.LLVMSetInitializer(global_var, c.LLVMConstNull(i8_ptr));
+        c.LLVMSetLinkage(global_var, c.LLVMInternalLinkage);
+
+        try self.solicit_var_slots.put(utils.dupe(u8, self.allocator, key), global_var);
+        return global_var;
+    }
+
+    fn ensureSolicitCaptureSlot(self: *CodeGenerator, callback_id: usize, var_name: []const u8) errors.CodegenError!c.LLVMValueRef {
+        const key = try std.fmt.allocPrint(self.allocator, "{d}::{s}", .{ callback_id, var_name });
+        defer self.allocator.free(key);
+
+        if (self.solicit_capture_slots.get(key)) |slot| return slot;
+
+        const global_name = try std.fmt.allocPrint(self.allocator, "__zlang_solicit_capture_{d}_{s}", .{ callback_id, var_name });
+        defer self.allocator.free(global_name);
+        const global_name_z = utils.dupeZ(self.allocator, global_name);
+        defer self.allocator.free(global_name_z);
+
+        const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+        const global_var = c.LLVMAddGlobal(self.module, i8_ptr, global_name_z.ptr);
+        c.LLVMSetInitializer(global_var, c.LLVMConstNull(i8_ptr));
+        c.LLVMSetLinkage(global_var, c.LLVMInternalLinkage);
+
+        try self.solicit_capture_slots.put(utils.dupe(u8, self.allocator, key), global_var);
+        return global_var;
+    }
+
+>>>>>>> b9d8f8f (solicit implemented)
     fn nextFreeErrorCode(self: *CodeGenerator) i32 {
         var code = self.next_error_code;
         while (true) : (code += 1) {
@@ -1814,7 +1969,10 @@ pub const CodeGenerator = struct {
     }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> b9d8f8f (solicit implemented)
     fn getScopedVariable(self: *CodeGenerator, name: []const u8) ?structs.VariableInfo {
         var i = self.variable_scopes.items.len;
         while (i > 0) {
@@ -2189,10 +2347,297 @@ pub const CodeGenerator = struct {
         }
     }
 
+<<<<<<< HEAD
     fn generateHandledCall(self: *CodeGenerator, handled: ast.HandledCallStmt, expected_type: ?[]const u8) errors.CodegenError!c.LLVMValueRef {
         const err_global = self.ensureLastErrorGlobal();
         const i32_ty = c.LLVMInt32TypeInContext(self.context);
         _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 0, 0), err_global);
+=======
+    fn collectFunctionVarTypesFromStatements(self: *CodeGenerator, statements: []const *ast.Node, out: *std.StringHashMap([]const u8)) errors.CodegenError!void {
+        for (statements) |stmt| {
+            switch (stmt.data) {
+                .var_decl => |decl| {
+                    if (!out.contains(decl.name)) {
+                        try out.put(decl.name, decl.type_name);
+                    }
+                },
+                .if_stmt => |if_stmt| {
+                    try self.collectFunctionVarTypesFromStatements(if_stmt.then_body.items, out);
+                    if (if_stmt.else_body) |else_body| {
+                        try self.collectFunctionVarTypesFromStatements(else_body.items, out);
+                    }
+                },
+                .for_stmt => |for_stmt| {
+                    try self.collectFunctionVarTypesFromStatements(for_stmt.body.items, out);
+                },
+                .c_for_stmt => |c_for| {
+                    if (c_for.init) |init_node| {
+                        try self.collectFunctionVarTypesFromStatements(&[_]*ast.Node{init_node}, out);
+                    }
+                    try self.collectFunctionVarTypesFromStatements(c_for.body.items, out);
+                },
+                .match_stmt => |match_stmt| {
+                    for (match_stmt.cases.items) |case| {
+                        try self.collectFunctionVarTypesFromStatements(case.body.items, out);
+                    }
+                },
+                .expression_block => |block| {
+                    try self.collectFunctionVarTypesFromStatements(block.statements.items, out);
+                },
+                .handled_call_stmt => |handled| {
+                    for (handled.handlers.items) |handler| {
+                        try self.collectFunctionVarTypesFromStatements(handler.body.items, out);
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn collectFunctionVarTypes(self: *CodeGenerator, function_name: []const u8, out: *std.StringHashMap([]const u8)) errors.CodegenError!void {
+        if (self.function_asts.get(function_name)) |func| {
+            for (func.parameters.items) |param| {
+                if (!out.contains(param.name)) {
+                    try out.put(param.name, param.type_name);
+                }
+            }
+            try self.collectFunctionVarTypesFromStatements(func.body.items, out);
+        }
+    }
+
+    fn collectSolicitHandlerCaptureSets(self: *CodeGenerator, handled: ast.HandledCallStmt, captures: *std.ArrayList([]const u8), mutated: *std.ArrayList([]const u8)) errors.CodegenError!void {
+        for (handled.handlers.items) |handler| {
+            if (handler.kind != .solicit) continue;
+
+            var locals = std.StringHashMap(void).init(self.allocator);
+            defer locals.deinit();
+            try self.collectHandlerLocalDecls(handler.body.items, &locals);
+
+            var handler_caps = std.ArrayList([]const u8){};
+            defer handler_caps.deinit(self.allocator);
+            try self.collectHandlerCapturesFromStatements(handler.body.items, &handler_caps, &locals);
+            for (handler_caps.items) |name| {
+                try self.appendUniqueName(captures, name);
+            }
+
+            var handler_mut = std.ArrayList([]const u8){};
+            defer handler_mut.deinit(self.allocator);
+            try self.collectHandlerMutatedCaptures(handler.body.items, &handler_mut, &locals);
+            for (handler_mut.items) |name| {
+                try self.appendUniqueName(mutated, name);
+            }
+        }
+    }
+
+    fn exposeCurrentFunctionVarsForSolicit(self: *CodeGenerator) errors.CodegenError!void {
+        const source_name = self.current_source_function_name orelse return;
+
+        var seen = std.StringHashMap(void).init(self.allocator);
+        defer seen.deinit();
+
+        var scope_index = self.variable_scopes.items.len;
+        while (scope_index > 0) {
+            scope_index -= 1;
+            var it = self.variable_scopes.items[scope_index].iterator();
+            while (it.next()) |entry| {
+                const var_name = entry.key_ptr.*;
+                if (seen.contains(var_name)) continue;
+                try seen.put(var_name, {});
+
+                const slot = try self.ensureSolicitVarSlot(source_name, var_name);
+                const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+                const raw_ptr = c.LLVMBuildBitCast(self.builder, entry.value_ptr.value, i8_ptr, "solicit.var.ptr");
+                _ = c.LLVMBuildStore(self.builder, raw_ptr, slot);
+            }
+        }
+    }
+
+    fn generateSolicitCallback(self: *CodeGenerator, callback_id: usize, handled: ast.HandledCallStmt, caller_bindings: []const SolicitCaptureBinding, callee_bindings: []const SolicitCaptureBinding) errors.CodegenError!c.LLVMValueRef {
+        const i32_ty = c.LLVMInt32TypeInContext(self.context);
+        var param_types = [_]c.LLVMTypeRef{i32_ty};
+        const callback_fn_ty = c.LLVMFunctionType(c.LLVMVoidTypeInContext(self.context), &param_types, 1, 0);
+
+        const callback_name = try std.fmt.allocPrint(self.allocator, "__zlang_solicit_cb_{d}", .{callback_id});
+        defer self.allocator.free(callback_name);
+        const callback_name_z = utils.dupeZ(self.allocator, callback_name);
+        defer self.allocator.free(callback_name_z);
+
+        const callback_fn = c.LLVMAddFunction(self.module, callback_name_z.ptr, callback_fn_ty);
+        const entry_bb = c.LLVMAppendBasicBlockInContext(self.context, callback_fn, "entry");
+
+        const saved_bb = c.LLVMGetInsertBlock(self.builder);
+        const saved_current_function = self.current_function;
+        const saved_return_type = self.current_function_return_type;
+        const saved_source_name = self.current_source_function_name;
+        const saved_scopes = self.variable_scopes;
+
+        self.variable_scopes = std.ArrayList(std.HashMap([]const u8, structs.VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage)){};
+        defer {
+            for (self.variable_scopes.items) |*scope| {
+                scope.deinit();
+            }
+            self.variable_scopes.deinit(self.allocator);
+            self.variable_scopes = saved_scopes;
+            self.current_function = saved_current_function;
+            self.current_function_return_type = saved_return_type;
+            self.current_source_function_name = saved_source_name;
+            if (saved_bb != null) {
+                c.LLVMPositionBuilderAtEnd(self.builder, saved_bb);
+            }
+        }
+
+        try self.variable_scopes.append(self.allocator, std.HashMap([]const u8, structs.VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(self.allocator));
+        self.current_function = callback_fn;
+        self.current_function_return_type = "void";
+        self.current_source_function_name = null;
+        c.LLVMPositionBuilderAtEnd(self.builder, entry_bb);
+
+        const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+        const all_bindings = [_][]const SolicitCaptureBinding{ caller_bindings, callee_bindings };
+        for (all_bindings) |bindings| {
+            for (bindings) |binding| {
+                const raw_ptr = c.LLVMBuildLoad2(self.builder, i8_ptr, binding.slot, "solicit.cap.raw");
+                const typed_ptr_ty = c.LLVMPointerType(binding.type_ref, 0);
+                const typed_ptr = c.LLVMBuildBitCast(self.builder, raw_ptr, typed_ptr_ty, "solicit.cap.ptr");
+
+                if (binding.mutated) {
+                    try CodeGenerator.putVariable(self, binding.name, structs.VariableInfo{
+                        .value = typed_ptr,
+                        .type_ref = binding.type_ref,
+                        .type_name = binding.type_name,
+                    });
+                } else {
+                    const copy_slot = c.LLVMBuildAlloca(self.builder, binding.type_ref, binding.name.ptr);
+                    const loaded = c.LLVMBuildLoad2(self.builder, binding.type_ref, typed_ptr, "solicit.cap.load");
+                    _ = c.LLVMBuildStore(self.builder, loaded, copy_slot);
+                    try CodeGenerator.putVariable(self, binding.name, structs.VariableInfo{
+                        .value = copy_slot,
+                        .type_ref = binding.type_ref,
+                        .type_name = binding.type_name,
+                    });
+                }
+            }
+        }
+
+        const err_code_param = c.LLVMGetParam(callback_fn, 0);
+        for (handled.handlers.items) |handler| {
+            if (handler.kind != .solicit) continue;
+
+            const current_bb = c.LLVMGetInsertBlock(self.builder);
+            if (c.LLVMGetBasicBlockTerminator(current_bb) != null) break;
+
+            const handler_bb = c.LLVMAppendBasicBlockInContext(self.context, callback_fn, "solicit.handler");
+            const next_bb = c.LLVMAppendBasicBlockInContext(self.context, callback_fn, "solicit.next");
+
+            const cond = if (handler.error_name) |error_name| blk: {
+                const code = self.error_codes.get(error_name) orelse return errors.CodegenError.TypeMismatch;
+                const code_bits: c_ulonglong = @bitCast(@as(i64, code));
+                const code_val = c.LLVMConstInt(i32_ty, code_bits, 1);
+                break :blk c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, err_code_param, code_val, "solicit.match");
+            } else blk: {
+                const zero = c.LLVMConstInt(i32_ty, 0, 0);
+                break :blk c.LLVMBuildICmp(self.builder, c.LLVMIntNE, err_code_param, zero, "solicit.any");
+            };
+
+            _ = c.LLVMBuildCondBr(self.builder, cond, handler_bb, next_bb);
+            c.LLVMPositionBuilderAtEnd(self.builder, handler_bb);
+            for (handler.body.items) |handler_stmt| {
+                try self.generateStatement(handler_stmt);
+                if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) != null) break;
+            }
+            if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
+                _ = c.LLVMBuildBr(self.builder, next_bb);
+            }
+            c.LLVMPositionBuilderAtEnd(self.builder, next_bb);
+        }
+
+        if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
+            _ = c.LLVMBuildRetVoid(self.builder);
+        }
+
+        return callback_fn;
+    }
+
+    // Handler safety contract (draft for docs):
+    // - Handlers run synchronously in caller context.
+    // - Captured values are non-escaping: no storing of temporary capture references beyond handler execution.
+    // - By-ref captures are only for variables proven mutated by handler body; read-only captures are copied by value.
+    // - Handler stack temporaries are bounded to handler lifetime via stacksave/stackrestore.
+    // - `send` and `solicit` are tracked as separate flow modes; each `on` handler kind matches only its mode.
+    // - Runtime split: `send` handlers execute after the call returns; `solicit` handlers execute immediately
+    //   via a synchronous callback trampoline while callee locals are still live.
+    fn generateHandledCall(self: *CodeGenerator, handled: ast.HandledCallStmt, expected_type: ?[]const u8) errors.CodegenError!c.LLVMValueRef {
+        const err_global = self.ensureLastErrorGlobal();
+        const mode_global = self.ensureLastErrorModeGlobal();
+        const callback_global = self.ensureSolicitCallbackGlobal();
+        const i32_ty = c.LLVMInt32TypeInContext(self.context);
+        const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+        _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 0, 0), err_global);
+        _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 0, 0), mode_global);
+        _ = c.LLVMBuildStore(self.builder, c.LLVMConstNull(i8_ptr), callback_global);
+
+        var has_solicit_handlers = false;
+        for (handled.handlers.items) |handler| {
+            if (handler.kind == .solicit) {
+                has_solicit_handlers = true;
+                break;
+            }
+        }
+
+        if (has_solicit_handlers and handled.call.data == .function_call) {
+            const call_name = handled.call.data.function_call.name;
+            var captures = std.ArrayList([]const u8){};
+            defer captures.deinit(self.allocator);
+            var mutated = std.ArrayList([]const u8){};
+            defer mutated.deinit(self.allocator);
+            try self.collectSolicitHandlerCaptureSets(handled, &captures, &mutated);
+
+            var callee_var_types = std.StringHashMap([]const u8).init(self.allocator);
+            defer callee_var_types.deinit();
+            try self.collectFunctionVarTypes(call_name, &callee_var_types);
+
+            var caller_bindings = std.ArrayList(SolicitCaptureBinding){};
+            defer caller_bindings.deinit(self.allocator);
+            var callee_bindings = std.ArrayList(SolicitCaptureBinding){};
+            defer callee_bindings.deinit(self.allocator);
+
+            const callback_id = self.next_solicit_callback_id;
+            self.next_solicit_callback_id += 1;
+
+            for (captures.items) |name| {
+                const is_mutated = nameInList(mutated.items, name);
+                if (self.getScopedVariable(name)) |outer_var| {
+                    const slot = try self.ensureSolicitCaptureSlot(callback_id, name);
+                    const raw_ptr = c.LLVMBuildBitCast(self.builder, outer_var.value, i8_ptr, "solicit.capture.ptr");
+                    _ = c.LLVMBuildStore(self.builder, raw_ptr, slot);
+                    try caller_bindings.append(self.allocator, .{
+                        .name = name,
+                        .type_ref = outer_var.type_ref,
+                        .type_name = outer_var.type_name,
+                        .mutated = is_mutated,
+                        .slot = slot,
+                    });
+                    continue;
+                }
+
+                if (callee_var_types.get(name)) |type_name| {
+                    const type_ref = try self.getLLVMType(type_name);
+                    const slot = try self.ensureSolicitVarSlot(call_name, name);
+                    try callee_bindings.append(self.allocator, .{
+                        .name = name,
+                        .type_ref = type_ref,
+                        .type_name = type_name,
+                        .mutated = is_mutated,
+                        .slot = slot,
+                    });
+                }
+            }
+
+            const callback_fn = try self.generateSolicitCallback(callback_id, handled, caller_bindings.items, callee_bindings.items);
+            const callback_ptr = c.LLVMBuildBitCast(self.builder, callback_fn, i8_ptr, "solicit.callback.ptr");
+            _ = c.LLVMBuildStore(self.builder, callback_ptr, callback_global);
+        }
+>>>>>>> b9d8f8f (solicit implemented)
 
         var call_result: c.LLVMValueRef = undefined;
         if (handled.call.data == .function_call) {
@@ -2201,7 +2646,14 @@ pub const CodeGenerator = struct {
             call_result = try self.generateExpressionWithContext(handled.call, expected_type);
         }
 
+<<<<<<< HEAD
         for (handled.handlers.items) |handler| {
+=======
+        _ = c.LLVMBuildStore(self.builder, c.LLVMConstNull(i8_ptr), callback_global);
+
+        for (handled.handlers.items) |handler| {
+            if (handler.kind == .solicit) continue;
+>>>>>>> b9d8f8f (solicit implemented)
             const current_bb = c.LLVMGetInsertBlock(self.builder);
             if (c.LLVMGetBasicBlockTerminator(current_bb) != null) break;
 
@@ -2209,8 +2661,19 @@ pub const CodeGenerator = struct {
             const handler_bb = c.LLVMAppendBasicBlockInContext(self.context, current_fn, "err.handler");
             const next_bb = c.LLVMAppendBasicBlockInContext(self.context, current_fn, "err.next");
             const err_now = c.LLVMBuildLoad2(self.builder, i32_ty, err_global, "err.code");
+<<<<<<< HEAD
 
             const cond = if (handler.error_name) |error_name| blk: {
+=======
+            const mode_now = c.LLVMBuildLoad2(self.builder, i32_ty, mode_global, "err.mode");
+            const expected_mode = switch (handler.kind) {
+                .send => c.LLVMConstInt(i32_ty, 1, 0),
+                .solicit => c.LLVMConstInt(i32_ty, 2, 0),
+            };
+            const mode_match = c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, mode_now, expected_mode, "err.mode.match");
+
+            const error_cond = if (handler.error_name) |error_name| blk: {
+>>>>>>> b9d8f8f (solicit implemented)
                 const code = self.error_codes.get(error_name) orelse return errors.CodegenError.TypeMismatch;
                 const code_bits: c_ulonglong = @bitCast(@as(i64, code));
                 const code_val = c.LLVMConstInt(i32_ty, code_bits, 1);
@@ -2219,6 +2682,10 @@ pub const CodeGenerator = struct {
                 const zero = c.LLVMConstInt(i32_ty, 0, 0);
                 break :blk c.LLVMBuildICmp(self.builder, c.LLVMIntNE, err_now, zero, "err.any");
             };
+<<<<<<< HEAD
+=======
+            const cond = c.LLVMBuildAnd(self.builder, mode_match, error_cond, "err.cond");
+>>>>>>> b9d8f8f (solicit implemented)
 
             _ = c.LLVMBuildCondBr(self.builder, cond, handler_bb, next_bb);
 
@@ -2251,7 +2718,10 @@ pub const CodeGenerator = struct {
         return call_result;
     }
 
+<<<<<<< HEAD
 >>>>>>> 6d63e72 (smart byref values in send callbacks)
+=======
+>>>>>>> b9d8f8f (solicit implemented)
     fn generateGlobalDeclaration(self: *CodeGenerator, global_node: *ast.Node) errors.CodegenError!void {
         switch (global_node.data) {
             .var_decl => |decl| {

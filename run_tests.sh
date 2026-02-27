@@ -256,10 +256,14 @@ test_warning_file() {
 
     local output
 <<<<<<< HEAD
+<<<<<<< HEAD
     output=$($APP "$test_file" $math_link 2>&1)
 =======
     output=$(run_compiler "$test_file" $math_link 2>&1)
 >>>>>>> 6d63e72 (smart byref values in send callbacks)
+=======
+    output=$(run_compiler "$test_file" $math_link 2>&1)
+>>>>>>> b9d8f8f (solicit implemented)
     local compile_exit=$?
 
     rm -f "output" "a.out"
