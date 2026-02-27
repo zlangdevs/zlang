@@ -250,6 +250,7 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
     const llvm_func = cg.functions.get(mangled_name) orelse return errors.CodegenError.UndefinedFunction;
     cg.setCurrentModuleByFunction(mangled_name);
     cg.current_function = llvm_func;
+    cg.current_source_function_name = func.name;
     cg.current_function_return_type = getActualReturnType(func.return_type);
     const entry_block = c.LLVMAppendBasicBlockInContext(@ptrCast(cg.context), @ptrCast(llvm_func), "entry");
     c.LLVMPositionBuilderAtEnd(@ptrCast(cg.builder), entry_block);
