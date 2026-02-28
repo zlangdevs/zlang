@@ -129,6 +129,7 @@ pub fn printHelpSyntax() void {
         \\
         \\{s}Functions:{s}
         \\  fun name(arg: type) >> return_type {{ ... }}
+        \\  fun name(arg: type) when (condition) >> return_type {{ ... }}
         \\
         \\{s}Variables:{s}
         \\  i32 x = 10;
