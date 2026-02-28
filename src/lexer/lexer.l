@@ -63,31 +63,10 @@ FLOAT_DOT  \.{DIGIT_WITH_DELIM}{EXPONENT}?
 "fun"       { return TOKEN_FUN; }
 "return"    { return TOKEN_RETURN; }
 "when"      { return TOKEN_WHEN; }
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-"error"     { return TOKEN_ERROR; }
-"send"      { return TOKEN_SEND; }
-"on"        { return TOKEN_ON; }
->>>>>>> 2cdb9c9 (fancy error handling: send/solicit)
-=======
-"error"     { return TOKEN_ERROR; }
-"send"      { return TOKEN_SEND; }
-"on"        { return TOKEN_ON; }
->>>>>>> 4a3da3e (warning tests)
-=======
-"error"     { return TOKEN_ERROR; }
-"send"      { return TOKEN_SEND; }
-"on"        { return TOKEN_ON; }
->>>>>>> 6d63e72 (smart byref values in send callbacks)
-=======
 "error"     { return TOKEN_ERROR; }
 "send"      { return TOKEN_SEND; }
 "solicit"   { return TOKEN_SOLICIT; }
 "on"        { return TOKEN_ON; }
->>>>>>> b9d8f8f (solicit implemented)
 "const"     { return TOKEN_CONST; }
 "break"     { return TOKEN_BREAK; }
 "continue"  { return TOKEN_CONTINUE; }

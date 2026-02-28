@@ -56,8 +56,6 @@ pub const CodeGenerator = struct {
     error_codes: std.HashMap([]const u8, i32, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     next_error_code: i32,
     last_error_global: ?c.LLVMValueRef,
-<<<<<<< HEAD
-=======
     last_error_mode_global: ?c.LLVMValueRef,
     solicit_callback_global: ?c.LLVMValueRef,
     solicit_var_slots: std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
@@ -73,7 +71,6 @@ pub const CodeGenerator = struct {
         mutated: bool,
         slot: c.LLVMValueRef,
     };
->>>>>>> b9d8f8f (solicit implemented)
 
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
         _ = c.LLVMInitializeNativeTarget();
@@ -128,8 +125,6 @@ pub const CodeGenerator = struct {
             .error_codes = std.HashMap([]const u8, i32, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .next_error_code = 1,
             .last_error_global = null,
-<<<<<<< HEAD
-=======
             .last_error_mode_global = null,
             .solicit_callback_global = null,
             .solicit_var_slots = std.HashMap([]const u8, c.LLVMValueRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
@@ -137,7 +132,6 @@ pub const CodeGenerator = struct {
             .next_solicit_callback_id = 1,
             .function_asts = std.HashMap([]const u8, ast.Function, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .current_source_function_name = null,
->>>>>>> b9d8f8f (solicit implemented)
         };
     }
 
@@ -169,12 +163,9 @@ pub const CodeGenerator = struct {
         }
         self.function_overloads.deinit();
         self.error_codes.deinit();
-<<<<<<< HEAD
-=======
         self.solicit_var_slots.deinit();
         self.solicit_capture_slots.deinit();
         self.function_asts.deinit();
->>>>>>> b9d8f8f (solicit implemented)
 
         self.module_manager.deinit();
         for (self.variable_scopes.items) |*scope| {
@@ -234,10 +225,7 @@ pub const CodeGenerator = struct {
             .expression_block => |block| tokenTextForNode(block.result),
             .error_decl => |decl| decl.name,
             .send_stmt => |send_stmt| send_stmt.error_name,
-<<<<<<< HEAD
-=======
             .solicit_stmt => |solicit_stmt| solicit_stmt.error_name,
->>>>>>> b9d8f8f (solicit implemented)
             .handled_call_stmt => |handled| tokenTextForNode(handled.call),
             else => null,
         };
@@ -1256,51 +1244,7 @@ pub const CodeGenerator = struct {
                 _ = try self.generateExpression(stmt);
             },
             .handled_call_stmt => |handled| {
-<<<<<<< HEAD
-<<<<<<< HEAD
-                const err_global = self.ensureLastErrorGlobal();
-                const i32_ty = c.LLVMInt32TypeInContext(self.context);
-                _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 0, 0), err_global);
-                _ = try self.generateExpression(handled.call);
-
-                for (handled.handlers.items) |handler| {
-                    const current_bb = c.LLVMGetInsertBlock(self.builder);
-                    if (c.LLVMGetBasicBlockTerminator(current_bb) != null) break;
-
-                    const current_fn = self.current_function orelse return errors.CodegenError.TypeMismatch;
-                    const handler_bb = c.LLVMAppendBasicBlockInContext(self.context, current_fn, "err.handler");
-                    const next_bb = c.LLVMAppendBasicBlockInContext(self.context, current_fn, "err.next");
-                    const err_now = c.LLVMBuildLoad2(self.builder, i32_ty, err_global, "err.code");
-
-                    const cond = if (handler.error_name) |error_name| blk: {
-                        const code = self.error_codes.get(error_name) orelse return errors.CodegenError.TypeMismatch;
-                        const code_bits: c_ulonglong = @bitCast(@as(i64, code));
-                        const code_val = c.LLVMConstInt(i32_ty, code_bits, 1);
-                        break :blk c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, err_now, code_val, "err.match");
-                    } else blk: {
-                        const zero = c.LLVMConstInt(i32_ty, 0, 0);
-                        break :blk c.LLVMBuildICmp(self.builder, c.LLVMIntNE, err_now, zero, "err.any");
-                    };
-
-                    _ = c.LLVMBuildCondBr(self.builder, cond, handler_bb, next_bb);
-
-                    c.LLVMPositionBuilderAtEnd(self.builder, handler_bb);
-                    for (handler.body.items) |handler_stmt| {
-                        try self.generateStatement(handler_stmt);
-                        if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) != null) break;
-                    }
-                    if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(self.builder)) == null) {
-                        _ = c.LLVMBuildBr(self.builder, next_bb);
-                    }
-
-                    c.LLVMPositionBuilderAtEnd(self.builder, next_bb);
-                }
-=======
                 _ = try self.generateHandledCall(handled, null);
->>>>>>> 6d63e72 (smart byref values in send callbacks)
-=======
-                _ = try self.generateHandledCall(handled, null);
->>>>>>> b9d8f8f (solicit implemented)
             },
             .method_call => {
                 _ = try self.generateExpression(stmt);
@@ -1308,23 +1252,11 @@ pub const CodeGenerator = struct {
             .send_stmt => |send_stmt| {
                 const code = self.error_codes.get(send_stmt.error_name) orelse return errors.CodegenError.TypeMismatch;
                 const err_global = self.ensureLastErrorGlobal();
-<<<<<<< HEAD
-=======
                 const mode_global = self.ensureLastErrorModeGlobal();
->>>>>>> b9d8f8f (solicit implemented)
                 const i32_ty = c.LLVMInt32TypeInContext(self.context);
                 const code_bits: c_ulonglong = @bitCast(@as(i64, code));
                 const code_val = c.LLVMConstInt(i32_ty, code_bits, 1);
                 _ = c.LLVMBuildStore(self.builder, code_val, err_global);
-<<<<<<< HEAD
-
-                if (std.mem.eql(u8, self.current_function_return_type, "void")) {
-                    _ = c.LLVMBuildRetVoid(self.builder);
-                } else {
-                    const default_value = utils.getDefaultValueForType(self, self.current_function_return_type);
-                    _ = c.LLVMBuildRet(self.builder, default_value);
-                }
-=======
                 _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 1, 0), mode_global);
             },
             .solicit_stmt => |solicit_stmt| {
@@ -1361,7 +1293,6 @@ pub const CodeGenerator = struct {
                 c.LLVMPositionBuilderAtEnd(self.builder, cont_bb);
                 _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 0, 0), err_global);
                 _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 0, 0), mode_global);
->>>>>>> b9d8f8f (solicit implemented)
             },
             .return_stmt => |ret| {
                 if (ret.expression) |expr| {
@@ -1856,8 +1787,6 @@ pub const CodeGenerator = struct {
         return global_var;
     }
 
-<<<<<<< HEAD
-=======
     fn ensureLastErrorModeGlobal(self: *CodeGenerator) c.LLVMValueRef {
         if (self.last_error_mode_global) |g| return g;
 
@@ -1924,7 +1853,6 @@ pub const CodeGenerator = struct {
         return global_var;
     }
 
->>>>>>> b9d8f8f (solicit implemented)
     fn nextFreeErrorCode(self: *CodeGenerator) i32 {
         var code = self.next_error_code;
         while (true) : (code += 1) {
@@ -1968,11 +1896,6 @@ pub const CodeGenerator = struct {
         try self.error_codes.put(error_decl.name, code);
     }
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> b9d8f8f (solicit implemented)
     fn getScopedVariable(self: *CodeGenerator, name: []const u8) ?structs.VariableInfo {
         var i = self.variable_scopes.items.len;
         while (i > 0) {
@@ -2347,12 +2270,6 @@ pub const CodeGenerator = struct {
         }
     }
 
-<<<<<<< HEAD
-    fn generateHandledCall(self: *CodeGenerator, handled: ast.HandledCallStmt, expected_type: ?[]const u8) errors.CodegenError!c.LLVMValueRef {
-        const err_global = self.ensureLastErrorGlobal();
-        const i32_ty = c.LLVMInt32TypeInContext(self.context);
-        _ = c.LLVMBuildStore(self.builder, c.LLVMConstInt(i32_ty, 0, 0), err_global);
-=======
     fn collectFunctionVarTypesFromStatements(self: *CodeGenerator, statements: []const *ast.Node, out: *std.StringHashMap([]const u8)) errors.CodegenError!void {
         for (statements) |stmt| {
             switch (stmt.data) {
@@ -2637,7 +2554,6 @@ pub const CodeGenerator = struct {
             const callback_ptr = c.LLVMBuildBitCast(self.builder, callback_fn, i8_ptr, "solicit.callback.ptr");
             _ = c.LLVMBuildStore(self.builder, callback_ptr, callback_global);
         }
->>>>>>> b9d8f8f (solicit implemented)
 
         var call_result: c.LLVMValueRef = undefined;
         if (handled.call.data == .function_call) {
@@ -2646,14 +2562,10 @@ pub const CodeGenerator = struct {
             call_result = try self.generateExpressionWithContext(handled.call, expected_type);
         }
 
-<<<<<<< HEAD
-        for (handled.handlers.items) |handler| {
-=======
         _ = c.LLVMBuildStore(self.builder, c.LLVMConstNull(i8_ptr), callback_global);
 
         for (handled.handlers.items) |handler| {
             if (handler.kind == .solicit) continue;
->>>>>>> b9d8f8f (solicit implemented)
             const current_bb = c.LLVMGetInsertBlock(self.builder);
             if (c.LLVMGetBasicBlockTerminator(current_bb) != null) break;
 
@@ -2661,10 +2573,6 @@ pub const CodeGenerator = struct {
             const handler_bb = c.LLVMAppendBasicBlockInContext(self.context, current_fn, "err.handler");
             const next_bb = c.LLVMAppendBasicBlockInContext(self.context, current_fn, "err.next");
             const err_now = c.LLVMBuildLoad2(self.builder, i32_ty, err_global, "err.code");
-<<<<<<< HEAD
-
-            const cond = if (handler.error_name) |error_name| blk: {
-=======
             const mode_now = c.LLVMBuildLoad2(self.builder, i32_ty, mode_global, "err.mode");
             const expected_mode = switch (handler.kind) {
                 .send => c.LLVMConstInt(i32_ty, 1, 0),
@@ -2673,7 +2581,6 @@ pub const CodeGenerator = struct {
             const mode_match = c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, mode_now, expected_mode, "err.mode.match");
 
             const error_cond = if (handler.error_name) |error_name| blk: {
->>>>>>> b9d8f8f (solicit implemented)
                 const code = self.error_codes.get(error_name) orelse return errors.CodegenError.TypeMismatch;
                 const code_bits: c_ulonglong = @bitCast(@as(i64, code));
                 const code_val = c.LLVMConstInt(i32_ty, code_bits, 1);
@@ -2682,10 +2589,7 @@ pub const CodeGenerator = struct {
                 const zero = c.LLVMConstInt(i32_ty, 0, 0);
                 break :blk c.LLVMBuildICmp(self.builder, c.LLVMIntNE, err_now, zero, "err.any");
             };
-<<<<<<< HEAD
-=======
             const cond = c.LLVMBuildAnd(self.builder, mode_match, error_cond, "err.cond");
->>>>>>> b9d8f8f (solicit implemented)
 
             _ = c.LLVMBuildCondBr(self.builder, cond, handler_bb, next_bb);
 
@@ -2718,10 +2622,6 @@ pub const CodeGenerator = struct {
         return call_result;
     }
 
-<<<<<<< HEAD
->>>>>>> 6d63e72 (smart byref values in send callbacks)
-=======
->>>>>>> b9d8f8f (solicit implemented)
     fn generateGlobalDeclaration(self: *CodeGenerator, global_node: *ast.Node) errors.CodegenError!void {
         switch (global_node.data) {
             .var_decl => |decl| {
