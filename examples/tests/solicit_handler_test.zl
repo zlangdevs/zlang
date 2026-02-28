@@ -1,0 +1,38 @@
+error TestError = _;
+
+fun may_fail(mode: i32) >> i32 {
+    if mode == 0 {
+        send TestError;
+    }
+    if mode == 1 {
+        solicit TestError;
+    }
+    return 77;
+}
+
+fun main() >> i32 {
+    i32 send_path = 1;
+    i32 solicit_path = 1;
+
+    i32 r0 = may_fail(0)
+        on TestError {
+            send_path = 10;
+        }
+        on solicit TestError {
+            send_path = 20;
+        };
+
+    i32 r1 = may_fail(1)
+        on TestError {
+            solicit_path = 20;
+        }
+        on solicit TestError {
+            solicit_path = 30;
+        };
+
+    @printf("(expected 10):%d\n", send_path);
+    @printf("(expected 30):%d\n", solicit_path);
+    @printf("(expected 77):%d\n", r0);
+    @printf("(expected 77):%d\n", r1);
+    return 0;
+}

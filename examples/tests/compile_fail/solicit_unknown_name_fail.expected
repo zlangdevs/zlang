@@ -1,0 +1,3 @@
+# Expected diagnostic fragments
+Undefined variable 'ret_val_typo'
+Variable is not declared in this scope

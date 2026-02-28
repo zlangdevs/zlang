@@ -1,0 +1,13 @@
+fun incrementPositive(x: i32) when (x > 0) >> i32 {
+    return x + 1;
+}
+
+fun nonZeroDiv(a: i32, b: i32) when (b != 0) >> i32 {
+    return a / b;
+}
+
+fun main() >> i32 {
+    @printf("(expected 6):%d\n", incrementPositive(5));
+    @printf("(expected 4):%d\n", nonZeroDiv(20, 5));
+    return 0;
+}

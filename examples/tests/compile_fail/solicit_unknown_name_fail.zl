@@ -1,0 +1,14 @@
+error E = _;
+
+fun callee() >> i32 {
+    i32 ret_val = 0;
+    solicit E;
+    return ret_val;
+}
+
+fun main() >> i32 {
+    i32 x = callee() on solicit E {
+        ret_val_typo = 1;
+    };
+    return x;
+}

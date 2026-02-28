@@ -1,0 +1,16 @@
+error E1 = 1;
+error E2 = _;
+
+fun may_fail(mode: i32) >> i32 {
+    if mode == 0 {
+        send E1;
+    }
+    return 5;
+}
+
+fun main() >> i32 {
+    may_fail(0) on E2 {
+        @printf("(expected 1):%d\n", 1);
+    };
+    return 0;
+}
