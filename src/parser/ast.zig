@@ -48,10 +48,7 @@ pub const NodeType = enum {
     match_stmt,
     error_decl,
     send_stmt,
-<<<<<<< HEAD
-=======
     solicit_stmt,
->>>>>>> b9d8f8f (solicit implemented)
     handled_call_stmt,
 };
 
@@ -325,9 +322,6 @@ pub const SendStmt = struct {
     error_name: []const u8,
 };
 
-<<<<<<< HEAD
-pub const ErrorHandler = struct {
-=======
 pub const SolicitStmt = struct {
     error_name: []const u8,
 };
@@ -339,7 +333,6 @@ pub const ErrorHandlerKind = enum {
 
 pub const ErrorHandler = struct {
     kind: ErrorHandlerKind,
->>>>>>> b9d8f8f (solicit implemented)
     error_name: ?[]const u8,
     body: std.ArrayList(*Node),
 };
@@ -396,10 +389,7 @@ pub const NodeData = union(NodeType) {
     match_stmt: MatchStmt,
     error_decl: ErrorDecl,
     send_stmt: SendStmt,
-<<<<<<< HEAD
-=======
     solicit_stmt: SolicitStmt,
->>>>>>> b9d8f8f (solicit implemented)
     handled_call_stmt: HandledCallStmt,
 };
 
@@ -673,12 +663,9 @@ pub const Node = struct {
             .send_stmt => |send_stmt| {
                 self.allocator.free(send_stmt.error_name);
             },
-<<<<<<< HEAD
-=======
             .solicit_stmt => |solicit_stmt| {
                 self.allocator.free(solicit_stmt.error_name);
             },
->>>>>>> b9d8f8f (solicit implemented)
             .handled_call_stmt => |*handled_call| {
                 handled_call.call.destroy();
                 for (handled_call.handlers.items) |*handler| {
@@ -1116,12 +1103,9 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         .send_stmt => |send_stmt| {
             std.debug.print("📤 Send: \x1b[36m{s}\x1b[0m\n", .{send_stmt.error_name});
         },
-<<<<<<< HEAD
-=======
         .solicit_stmt => |solicit_stmt| {
             std.debug.print("🗣️ Solicit: \x1b[36m{s}\x1b[0m\n", .{solicit_stmt.error_name});
         },
->>>>>>> b9d8f8f (solicit implemented)
         .handled_call_stmt => |handled_call| {
             std.debug.print("🛟 Handled Call\n", .{});
             const no_handlers = handled_call.handlers.items.len == 0;
@@ -1129,15 +1113,11 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             for (handled_call.handlers.items, 0..) |handler, i| {
                 const is_last_handler = i == handled_call.handlers.items.len - 1;
                 printIndent(indent + 1, is_last_handler and handler.body.items.len == 0, false);
-<<<<<<< HEAD
-                std.debug.print("on {s}\n", .{handler.error_name orelse "_"});
-=======
                 const kind_text = switch (handler.kind) {
                     .send => "",
                     .solicit => "solicit ",
                 };
                 std.debug.print("on {s}{s}\n", .{ kind_text, handler.error_name orelse "_" });
->>>>>>> b9d8f8f (solicit implemented)
                 for (handler.body.items, 0..) |stmt, j| {
                     const is_last_stmt = is_last_handler and j == handler.body.items.len - 1;
                     printAST(stmt, indent + 2, is_last_stmt, false);
