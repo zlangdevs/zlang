@@ -936,8 +936,6 @@ export fn zig_create_send_stmt(error_name_ptr: [*c]const u8) ?*anyopaque {
     return @as(*anyopaque, @ptrCast(node));
 }
 
-<<<<<<< HEAD
-=======
 export fn zig_create_solicit_stmt(error_name_ptr: [*c]const u8) ?*anyopaque {
     const error_name = std.mem.span(error_name_ptr);
     const name_copy = utils.dupe(u8, global_allocator, error_name);
@@ -951,7 +949,6 @@ export fn zig_create_solicit_stmt(error_name_ptr: [*c]const u8) ?*anyopaque {
     return @as(*anyopaque, @ptrCast(node));
 }
 
->>>>>>> b9d8f8f (solicit implemented)
 export fn zig_create_error_handler_list() ?*anyopaque {
     const handler_list = utils.create(ErrorHandlerList, global_allocator);
     handler_list.* = ErrorHandlerList.init();
@@ -959,13 +956,10 @@ export fn zig_create_error_handler_list() ?*anyopaque {
 }
 
 export fn zig_add_error_handler(list_ptr: ?*anyopaque, error_name_ptr: [*c]const u8, body_ptr: ?*anyopaque) void {
-<<<<<<< HEAD
-=======
     zig_add_error_handler_kind(list_ptr, 0, error_name_ptr, body_ptr);
 }
 
 export fn zig_add_error_handler_kind(list_ptr: ?*anyopaque, kind: c_int, error_name_ptr: [*c]const u8, body_ptr: ?*anyopaque) void {
->>>>>>> b9d8f8f (solicit implemented)
     if (list_ptr == null or body_ptr == null) return;
     const handler_list = @as(*ErrorHandlerList, @ptrFromInt(@intFromPtr(list_ptr.?)));
     const body_list = @as(*NodeList, @ptrFromInt(@intFromPtr(body_ptr.?)));
@@ -976,10 +970,7 @@ export fn zig_add_error_handler_kind(list_ptr: ?*anyopaque, kind: c_int, error_n
     }
 
     handler_list.items.append(global_allocator, ast.ErrorHandler{
-<<<<<<< HEAD
-=======
         .kind = if (kind == 1) .solicit else .send,
->>>>>>> b9d8f8f (solicit implemented)
         .error_name = error_name,
         .body = body_list.items,
     }) catch return;

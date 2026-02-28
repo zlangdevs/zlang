@@ -32,23 +32,14 @@ pub const Analyzer = struct {
     enum_types: std.StringHashMap(void),
     enum_values: std.StringHashMap(void),
     error_codes: std.StringHashMap(i32),
-<<<<<<< HEAD
-    function_errors: std.StringHashMap(std.ArrayList([]const u8)),
-=======
     function_flows: std.StringHashMap(FunctionFlowInfo),
->>>>>>> b9d8f8f (solicit implemented)
+    function_defs: std.StringHashMap(ast.Function),
     globals: std.StringHashMap(VarInfo),
     scopes: std.ArrayList(std.StringHashMap(VarInfo)),
     loop_depth: usize,
     current_function_name: ?[]const u8,
-<<<<<<< HEAD
-<<<<<<< HEAD
-    handler_scope_floor: ?usize,
-=======
->>>>>>> 6d63e72 (smart byref values in send callbacks)
-=======
     allow_unknown_identifiers: bool,
->>>>>>> b9d8f8f (solicit implemented)
+    solicit_allowed_identifiers: ?*const std.StringHashMap(void),
 
     pub fn init(allocator: std.mem.Allocator, fallback_file_path: []const u8) Analyzer {
         return Analyzer{
@@ -59,23 +50,14 @@ pub const Analyzer = struct {
             .enum_types = std.StringHashMap(void).init(allocator),
             .enum_values = std.StringHashMap(void).init(allocator),
             .error_codes = std.StringHashMap(i32).init(allocator),
-<<<<<<< HEAD
-            .function_errors = std.StringHashMap(std.ArrayList([]const u8)).init(allocator),
-=======
             .function_flows = std.StringHashMap(FunctionFlowInfo).init(allocator),
->>>>>>> b9d8f8f (solicit implemented)
+            .function_defs = std.StringHashMap(ast.Function).init(allocator),
             .globals = std.StringHashMap(VarInfo).init(allocator),
             .scopes = std.ArrayList(std.StringHashMap(VarInfo)){},
             .loop_depth = 0,
             .current_function_name = null,
-<<<<<<< HEAD
-<<<<<<< HEAD
-            .handler_scope_floor = null,
-=======
->>>>>>> 6d63e72 (smart byref values in send callbacks)
-=======
             .allow_unknown_identifiers = false,
->>>>>>> b9d8f8f (solicit implemented)
+            .solicit_allowed_identifiers = null,
         };
     }
 
@@ -84,19 +66,12 @@ pub const Analyzer = struct {
         self.enum_types.deinit();
         self.enum_values.deinit();
         self.error_codes.deinit();
-<<<<<<< HEAD
-        var function_errors_it = self.function_errors.iterator();
-        while (function_errors_it.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
-        self.function_errors.deinit();
-=======
         var function_flows_it = self.function_flows.iterator();
         while (function_flows_it.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
         }
         self.function_flows.deinit();
->>>>>>> b9d8f8f (solicit implemented)
+        self.function_defs.deinit();
         self.globals.deinit();
         for (self.scopes.items) |*scope| {
             scope.deinit();
@@ -128,6 +103,9 @@ pub const Analyzer = struct {
             switch (node.data) {
                 .function => |func| {
                     try self.functions.put(func.name, {});
+                    if (!self.function_defs.contains(func.name)) {
+                        try self.function_defs.put(func.name, func);
+                    }
                 },
                 .c_function_decl => |decl| {
                     try self.functions.put(decl.name, {});
@@ -175,15 +153,9 @@ pub const Analyzer = struct {
     fn analyzeFunctions(self: *Analyzer, program: ast.Program) errors.SemanticError!void {
         for (program.functions.items) |node| {
             if (node.data != .function) continue;
-<<<<<<< HEAD
-            var list = std.ArrayList([]const u8){};
-            try self.collectFunctionSends(node.data.function.body.items, &list);
-            try self.function_errors.put(node.data.function.name, list);
-=======
             var flow_info = FunctionFlowInfo.init();
             try self.collectFunctionFlows(node.data.function.body.items, &flow_info.send_errors, &flow_info.solicit_errors);
             try self.function_flows.put(node.data.function.name, flow_info);
->>>>>>> b9d8f8f (solicit implemented)
         }
 
         for (program.functions.items) |node| {
@@ -265,37 +237,6 @@ pub const Analyzer = struct {
         try list.append(self.allocator, name);
     }
 
-<<<<<<< HEAD
-    fn collectFunctionSends(self: *Analyzer, statements: []const *ast.Node, list: *std.ArrayList([]const u8)) errors.SemanticError!void {
-        for (statements) |stmt| {
-            switch (stmt.data) {
-                .send_stmt => |send_stmt| {
-                    try self.appendUniqueErrorName(list, send_stmt.error_name);
-                },
-                .if_stmt => |if_stmt| {
-                    try self.collectFunctionSends(if_stmt.then_body.items, list);
-                    if (if_stmt.else_body) |else_body| {
-                        try self.collectFunctionSends(else_body.items, list);
-                    }
-                },
-                .for_stmt => |for_stmt| {
-                    try self.collectFunctionSends(for_stmt.body.items, list);
-                },
-                .c_for_stmt => |c_for| {
-                    try self.collectFunctionSends(c_for.body.items, list);
-                },
-                .match_stmt => |match_stmt| {
-                    for (match_stmt.cases.items) |case| {
-                        try self.collectFunctionSends(case.body.items, list);
-                    }
-                },
-                .expression_block => |block| {
-                    try self.collectFunctionSends(block.statements.items, list);
-                },
-                .handled_call_stmt => |handled| {
-                    for (handled.handlers.items) |handler| {
-                        try self.collectFunctionSends(handler.body.items, list);
-=======
     fn errorNameInList(list: []const []const u8, name: []const u8) bool {
         for (list) |entry| {
             if (std.mem.eql(u8, entry, name)) return true;
@@ -335,11 +276,62 @@ pub const Analyzer = struct {
                 .handled_call_stmt => |handled| {
                     for (handled.handlers.items) |handler| {
                         try self.collectFunctionFlows(handler.body.items, send_list, solicit_list);
->>>>>>> b9d8f8f (solicit implemented)
                     }
                 },
                 else => {},
             }
+        }
+    }
+
+    fn collectDeclaredNamesFromStatements(self: *Analyzer, statements: []const *ast.Node, names: *std.StringHashMap(void)) errors.SemanticError!void {
+        for (statements) |stmt| {
+            switch (stmt.data) {
+                .var_decl => |decl| {
+                    if (!names.contains(decl.name)) {
+                        try names.put(decl.name, {});
+                    }
+                },
+                .if_stmt => |if_stmt| {
+                    try self.collectDeclaredNamesFromStatements(if_stmt.then_body.items, names);
+                    if (if_stmt.else_body) |else_body| {
+                        try self.collectDeclaredNamesFromStatements(else_body.items, names);
+                    }
+                },
+                .for_stmt => |for_stmt| {
+                    try self.collectDeclaredNamesFromStatements(for_stmt.body.items, names);
+                },
+                .c_for_stmt => |c_for| {
+                    if (c_for.init) |init_stmt| {
+                        try self.collectDeclaredNamesFromStatements(&[_]*ast.Node{init_stmt}, names);
+                    }
+                    try self.collectDeclaredNamesFromStatements(c_for.body.items, names);
+                },
+                .match_stmt => |match_stmt| {
+                    for (match_stmt.cases.items) |case| {
+                        try self.collectDeclaredNamesFromStatements(case.body.items, names);
+                    }
+                },
+                .expression_block => |block| {
+                    try self.collectDeclaredNamesFromStatements(block.statements.items, names);
+                },
+                .handled_call_stmt => |handled| {
+                    for (handled.handlers.items) |handler| {
+                        try self.collectDeclaredNamesFromStatements(handler.body.items, names);
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn collectSolicitVisibleNames(self: *Analyzer, function_name: []const u8, names: *std.StringHashMap(void)) errors.SemanticError!void {
+        if (self.function_defs.get(function_name)) |func| {
+            for (func.parameters.items) |param| {
+                if (!names.contains(param.name)) {
+                    try names.put(param.name, {});
+                }
+            }
+            try self.collectDeclaredNamesFromStatements(func.body.items, names);
         }
     }
 
@@ -412,78 +404,7 @@ pub const Analyzer = struct {
                 try self.analyzeFunctionCall(stmt, call, false);
             },
             .handled_call_stmt => |handled| {
-<<<<<<< HEAD
-<<<<<<< HEAD
-                if (handled.call.data != .function_call) {
-                    self.reportNodeError(stmt, "Invalid handled call target", "Only function calls can use on-handlers");
-                } else {
-                    try self.analyzeFunctionCall(handled.call, handled.call.data.function_call, true);
-                }
-
-                const call_name = if (handled.call.data == .function_call)
-                    handled.call.data.function_call.name
-                else
-                    "";
-
-                var has_catch_all = false;
-                for (handled.handlers.items) |handler| {
-                    if (handler.error_name) |error_name| {
-                        if (!self.error_codes.contains(error_name)) {
-                            self.reportNodeErrorFmt(stmt, "Unknown error '{s}' in handler", .{error_name}, "Declare the error before using it in on-handler");
-                        }
-                    } else {
-                        has_catch_all = true;
-                    }
-
-                    try self.pushScope();
-                    const saved_floor = self.handler_scope_floor;
-                    self.handler_scope_floor = self.scopes.items.len - 1;
-                    defer {
-                        self.handler_scope_floor = saved_floor;
-                        self.popScope();
-                    }
-                    try self.analyzeStatementList(handler.body.items, labels);
-                }
-
-                if (self.function_errors.get(call_name)) |sent_errors| {
-                    for (handled.handlers.items) |handler| {
-                        if (handler.error_name) |error_name| {
-                            var matched = false;
-                            for (sent_errors.items) |sent_name| {
-                                if (std.mem.eql(u8, sent_name, error_name)) {
-                                    matched = true;
-                                    break;
-                                }
-                            }
-                            if (!matched) {
-                                self.reportNodeWarningFmt(stmt, "Handler for '{s}' is ignored", .{error_name}, "Called function never sends this error");
-                            }
-                        }
-                    }
-
-                    if (!has_catch_all) {
-                        for (sent_errors.items) |sent_name| {
-                            var handled_error = false;
-                            for (handled.handlers.items) |handler| {
-                                if (handler.error_name) |error_name| {
-                                    if (std.mem.eql(u8, error_name, sent_name)) {
-                                        handled_error = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (!handled_error) {
-                                self.reportNodeWarningFmt(stmt, "Unhandled error '{s}' from function call", .{sent_name}, "Add an on-handler or on _ block");
-                            }
-                        }
-                    }
-                }
-=======
                 try self.analyzeHandledCall(stmt, handled, labels);
->>>>>>> 6d63e72 (smart byref values in send callbacks)
-=======
-                try self.analyzeHandledCall(stmt, handled, labels);
->>>>>>> b9d8f8f (solicit implemented)
             },
             .method_call => |method| {
                 try self.analyzeExpression(method.object);
@@ -496,14 +417,11 @@ pub const Analyzer = struct {
                     self.reportNodeErrorFmt(stmt, "Unknown error '{s}'", .{send_stmt.error_name}, "Declare the error before sending it");
                 }
             },
-<<<<<<< HEAD
-=======
             .solicit_stmt => |solicit_stmt| {
                 if (!self.error_codes.contains(solicit_stmt.error_name)) {
                     self.reportNodeErrorFmt(stmt, "Unknown error '{s}'", .{solicit_stmt.error_name}, "Declare the error before soliciting it");
                 }
             },
->>>>>>> b9d8f8f (solicit implemented)
             .return_stmt => |ret| {
                 if (ret.expression) |expr| {
                     try self.analyzeExpression(expr);
@@ -617,7 +535,11 @@ pub const Analyzer = struct {
                         self.reportNodeErrorFmt(target, "Cannot reassign const variable '{s}'", .{ident.name}, "Variable is declared as const");
                     }
                 } else {
-                    if (self.allow_unknown_identifiers) return;
+                    if (self.allow_unknown_identifiers) {
+                        if (self.solicit_allowed_identifiers) |allowed| {
+                            if (allowed.contains(ident.name)) return;
+                        }
+                    }
                     self.reportNodeErrorFmt(target, "Undefined variable '{s}'", .{ident.name}, "Variable is not declared in this scope");
                 }
             },
@@ -648,11 +570,6 @@ pub const Analyzer = struct {
         }
     }
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> b9d8f8f (solicit implemented)
     fn analyzeHandledCall(self: *Analyzer, node: *ast.Node, handled: ast.HandledCallStmt, labels: *const std.StringHashMap(void)) errors.SemanticError!void {
         if (handled.call.data != .function_call) {
             self.reportNodeError(node, "Invalid handled call target", "Only function calls can use on-handlers");
@@ -665,40 +582,20 @@ pub const Analyzer = struct {
         else
             "";
 
-<<<<<<< HEAD
-        var has_catch_all = false;
-=======
+        var solicit_visible_names = std.StringHashMap(void).init(self.allocator);
+        defer solicit_visible_names.deinit();
+        if (call_name.len > 0) {
+            try self.collectSolicitVisibleNames(call_name, &solicit_visible_names);
+        }
+
         var has_send_catch_all = false;
         var has_solicit_catch_all = false;
->>>>>>> b9d8f8f (solicit implemented)
         for (handled.handlers.items) |handler| {
             if (handler.error_name) |error_name| {
                 if (!self.error_codes.contains(error_name)) {
                     self.reportNodeErrorFmt(node, "Unknown error '{s}' in handler", .{error_name}, "Declare the error before using it in on-handler");
                 }
             } else {
-<<<<<<< HEAD
-                has_catch_all = true;
-            }
-
-            try self.pushScope();
-            defer self.popScope();
-            try self.analyzeStatementList(handler.body.items, labels);
-        }
-
-        if (self.function_errors.get(call_name)) |sent_errors| {
-            for (handled.handlers.items) |handler| {
-                if (handler.error_name) |error_name| {
-                    var matched = false;
-                    for (sent_errors.items) |sent_name| {
-                        if (std.mem.eql(u8, sent_name, error_name)) {
-                            matched = true;
-                            break;
-                        }
-                    }
-                    if (!matched) {
-                        self.reportNodeWarningFmt(node, "Handler for '{s}' is ignored", .{error_name}, "Called function never sends this error");
-=======
                 switch (handler.kind) {
                     .send => has_send_catch_all = true,
                     .solicit => has_solicit_catch_all = true,
@@ -707,11 +604,14 @@ pub const Analyzer = struct {
 
             try self.pushScope();
             const saved_allow_unknown = self.allow_unknown_identifiers;
+            const saved_solicit_allowed = self.solicit_allowed_identifiers;
             if (handler.kind == .solicit) {
                 self.allow_unknown_identifiers = true;
+                self.solicit_allowed_identifiers = &solicit_visible_names;
             }
             defer {
                 self.allow_unknown_identifiers = saved_allow_unknown;
+                self.solicit_allowed_identifiers = saved_solicit_allowed;
                 self.popScope();
             }
             try self.analyzeStatementList(handler.body.items, labels);
@@ -731,23 +631,15 @@ pub const Analyzer = struct {
                             .solicit => "Called function never solicits this error",
                         };
                         self.reportNodeWarningFmt(node, "Handler for '{s}' is ignored", .{error_name}, hint);
->>>>>>> b9d8f8f (solicit implemented)
                     }
                 }
             }
 
-<<<<<<< HEAD
-            if (!has_catch_all) {
-                for (sent_errors.items) |sent_name| {
-                    var handled_error = false;
-                    for (handled.handlers.items) |handler| {
-=======
             if (!has_send_catch_all) {
                 for (flow.send_errors.items) |sent_name| {
                     var handled_error = false;
                     for (handled.handlers.items) |handler| {
                         if (handler.kind != .send) continue;
->>>>>>> b9d8f8f (solicit implemented)
                         if (handler.error_name) |error_name| {
                             if (std.mem.eql(u8, error_name, sent_name)) {
                                 handled_error = true;
@@ -760,12 +652,6 @@ pub const Analyzer = struct {
                     }
                 }
             }
-<<<<<<< HEAD
-        }
-    }
-
->>>>>>> 6d63e72 (smart byref values in send callbacks)
-=======
 
             if (!has_solicit_catch_all) {
                 for (flow.solicit_errors.items) |solicit_name| {
@@ -787,19 +673,12 @@ pub const Analyzer = struct {
         }
     }
 
->>>>>>> b9d8f8f (solicit implemented)
     fn analyzeFunctionCall(self: *Analyzer, node: *ast.Node, call: ast.FunctionCall, suppress_unhandled_warning: bool) errors.SemanticError!void {
         if (!call.is_libc and !self.functions.contains(call.name) and self.lookupVariable(call.name) == null) {
             self.reportNodeErrorFmt(node, "Undefined function '{s}'", .{call.name}, "Declare it or import its module with use (maybe you forgot to import it?)");
         }
 
         if (!suppress_unhandled_warning) {
-<<<<<<< HEAD
-            if (self.function_errors.get(call.name)) |sent_errors| {
-                if (sent_errors.items.len > 0) {
-                    self.reportNodeWarningFmt(node, "Unhandled errors from function '{s}'", .{call.name}, "Use on-handlers to handle possible errors");
-                }
-=======
             if (self.function_flows.get(call.name)) |flow| {
                 if (flow.send_errors.items.len > 0) {
                     self.reportNodeWarningFmt(node, "Unhandled errors from function '{s}'", .{call.name}, "Use on-handlers to handle possible errors");
@@ -807,7 +686,6 @@ pub const Analyzer = struct {
                 if (flow.solicit_errors.items.len > 0) {
                     self.reportNodeWarningFmt(node, "Unhandled solicit-errors from function '{s}'", .{call.name}, "Use on solicit-handlers to handle solicit paths");
                 }
->>>>>>> b9d8f8f (solicit implemented)
             }
         }
 
@@ -824,7 +702,11 @@ pub const Analyzer = struct {
                 if (self.error_codes.contains(ident.name)) return;
                 if (self.lookupVariable(ident.name) != null) return;
                 if (self.functions.contains(ident.name)) return;
-                if (self.allow_unknown_identifiers) return;
+                if (self.allow_unknown_identifiers) {
+                    if (self.solicit_allowed_identifiers) |allowed| {
+                        if (allowed.contains(ident.name)) return;
+                    }
+                }
 
                 self.reportNodeErrorFmt(expr, "Undefined variable '{s}'", .{ident.name}, "Variable is not declared in this scope");
             },
@@ -836,20 +718,11 @@ pub const Analyzer = struct {
             },
             .function_call => |call| {
                 try self.analyzeFunctionCall(expr, call, false);
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> b9d8f8f (solicit implemented)
             },
             .handled_call_stmt => |handled| {
                 var empty_labels = std.StringHashMap(void).init(self.allocator);
                 defer empty_labels.deinit();
                 try self.analyzeHandledCall(expr, handled, &empty_labels);
-<<<<<<< HEAD
->>>>>>> 6d63e72 (smart byref values in send callbacks)
-=======
->>>>>>> b9d8f8f (solicit implemented)
             },
             .method_call => |method| {
                 try self.analyzeExpression(method.object);
@@ -942,14 +815,7 @@ pub const Analyzer = struct {
             .simd_method_call,
             .error_decl,
             .send_stmt,
-<<<<<<< HEAD
-<<<<<<< HEAD
-            .handled_call_stmt,
-=======
->>>>>>> 6d63e72 (smart byref values in send callbacks)
-=======
             .solicit_stmt,
->>>>>>> b9d8f8f (solicit implemented)
             => {},
         }
     }
@@ -1034,10 +900,7 @@ fn tokenTextForNode(node: *ast.Node) ?[]const u8 {
         .expression_block => |block| tokenTextForNode(block.result),
         .error_decl => |err| err.name,
         .send_stmt => |send_stmt| send_stmt.error_name,
-<<<<<<< HEAD
-=======
         .solicit_stmt => |solicit_stmt| solicit_stmt.error_name,
->>>>>>> b9d8f8f (solicit implemented)
         .handled_call_stmt => |handled| tokenTextForNode(handled.call),
         else => null,
     };
