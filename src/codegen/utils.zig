@@ -416,6 +416,8 @@ fn getLLVMTypeInternal(self: *codegen.CodeGenerator, type_name: []const u8, verb
         return c.LLVMVoidTypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "bool")) {
         return c.LLVMInt1TypeInContext(@ptrCast(self.context));
+    } else if (std.mem.eql(u8, type_name, "error")) {
+        return c.LLVMInt32TypeInContext(@ptrCast(self.context));
     } else {
         if (self.struct_types.get(type_name)) |struct_type| {
             return @ptrCast(struct_type);

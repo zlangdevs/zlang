@@ -11,7 +11,7 @@ extern void* zig_create_program(void);
 extern void* zig_create_parameter(const char* name, const char* type_name);
 extern void* zig_create_param_list(void);
 extern void zig_add_to_param_list(void* list, void* param);
-extern void* zig_create_function(const char* name, const char* return_type, void* params, void* body);
+extern void* zig_create_function(const char* name, const char* return_type, void* params, void* guard, void* body);
 extern void* zig_create_var_decl(const char* type_name, const char* name, void* initializer, int is_const);
 extern void* zig_create_function_call(const char* name, int is_libc, void* args);
 extern void* zig_create_method_call(void* object, const char* method_name, void* args);
@@ -68,6 +68,16 @@ extern void zig_add_to_stmt_list(void* list, void* stmt);
 extern void zig_add_to_arg_list(void* list, void* arg);
 extern void* zig_create_cast(void* expr, const char* type_name, int auto_flag);
 extern void* zig_create_expression_block(const char* type_name, void* statements, void* result);
+extern void* zig_create_error_decl_number(const char* name, const char* value);
+extern void* zig_create_error_decl_alias(const char* name, const char* alias_name);
+extern void* zig_create_error_decl_auto(const char* name);
+extern void* zig_create_send_stmt(const char* error_name);
+extern void* zig_create_solicit_stmt(const char* error_name);
+extern void* zig_create_error_handler_list(void);
+extern void zig_add_error_handler(void* list, const char* error_name, void* body);
+extern void zig_add_error_handler_kind(void* list, int kind, const char* error_name, void* body);
+extern void zig_add_error_handler_number_kind(void* list, int kind, const char* error_code, void* body);
+extern void* zig_create_handled_call_stmt(void* call, void* handlers);
 extern void zlang_set_location(int line, int col);
 extern void zig_record_parse_error(int line, int col, const char* msg);
 
@@ -104,7 +114,7 @@ void* ast_root = NULL;
 %token <number> TOKEN_CHAR
 %token <number> TOKEN_REASSIGN
 
-%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_GOTO TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_UNION TOKEN_DOT TOKEN_NULL TOKEN_CONST
+%token TOKEN_FUN TOKEN_IF TOKEN_ELSE TOKEN_FOR TOKEN_RETURN TOKEN_VOID TOKEN_BREAK TOKEN_CONTINUE TOKEN_GOTO TOKEN_USE TOKEN_WRAP TOKEN_ENUM TOKEN_STRUCT TOKEN_UNION TOKEN_DOT TOKEN_NULL TOKEN_CONST TOKEN_WHEN TOKEN_ERROR TOKEN_SEND TOKEN_SOLICIT TOKEN_ON
 %token TOKEN_AS TOKEN_UNDERSCORE TOKEN_MATCH
 %token TOKEN_ASSIGN TOKEN_EQUAL TOKEN_NON_EQUAL TOKEN_LESS TOKEN_GREATER TOKEN_EQ_LESS TOKEN_EQ_GREATER
 %token TOKEN_LBRACE TOKEN_RBRACE TOKEN_LPAREN TOKEN_RPAREN
@@ -143,6 +153,7 @@ void* ast_root = NULL;
 %type <node> cast_expression expression_block
 %type <node> c_for_statement for_increment
 %type <node> array_initializer c_function_decl c_function_decl_statement use_statement enum_declaration struct_declaration union_declaration wrap_statement
+%type <node> error_declaration send_statement solicit_statement handled_call_statement on_handler_list
 %type <node> enum_values enum_value_list struct_fields struct_field_list
 %type <node> struct_initializer struct_field_values struct_field_value_list initializer_expression ref_expression ref_base
 %type <string> type_name function_name string_literal complex_type_name module_path function_type_core function_type_param_list type_list template_params
@@ -234,6 +245,15 @@ function_list:
         zig_add_to_program(ast_root, $1);
    }
    | function_list wrap_statement {
+         zig_add_to_program(ast_root, $2);
+    }
+   | error_declaration {
+        if (ast_root == NULL) {
+            ast_root = zig_create_program();
+        }
+        zig_add_to_program(ast_root, $1);
+   }
+   | function_list error_declaration {
         zig_add_to_program(ast_root, $2);
    }
 ;
@@ -260,6 +280,23 @@ wrap_statement:
     }
 ;
 
+error_declaration:
+    TOKEN_ERROR TOKEN_IDENTIFIER TOKEN_ASSIGN TOKEN_NUMBER TOKEN_SEMICOLON {
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_error_decl_number($2, $4);
+        free($2);
+        free($4);
+    }
+  | TOKEN_ERROR TOKEN_IDENTIFIER TOKEN_ASSIGN TOKEN_IDENTIFIER TOKEN_SEMICOLON {
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_error_decl_alias($2, $4);
+        free($2);
+        free($4);
+    }
+  | TOKEN_ERROR TOKEN_IDENTIFIER TOKEN_ASSIGN TOKEN_UNDERSCORE TOKEN_SEMICOLON {
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_error_decl_auto($2);
+        free($2);
+    }
+;
+
 template_params:
     /* empty */ { $$ = NULL; }
   | TOKEN_LBRACKET type_list TOKEN_RBRACKET {
@@ -280,9 +317,23 @@ function:
         } else {
             return_type_str = strdup($8);
         }
-        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_function($2, return_type_str, $5, $10);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_function($2, return_type_str, $5, NULL, $10);
         free($2);
         free($8);
+        free(return_type_str);
+    }
+  | TOKEN_FUN function_name template_params TOKEN_LPAREN parameter_list TOKEN_RPAREN TOKEN_WHEN TOKEN_LPAREN expression TOKEN_RPAREN TOKEN_RSHIFT type_name TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        char* return_type_str;
+        if ($3) {
+            return_type_str = malloc(strlen($3) + strlen($12) + 3);
+            sprintf(return_type_str, "%s>>%s", $3, $12);
+            free($3);
+        } else {
+            return_type_str = strdup($12);
+        }
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_function($2, return_type_str, $5, $9, $14);
+        free($2);
+        free($12);
         free(return_type_str);
     }
 ;
@@ -453,6 +504,8 @@ statement:
     var_declaration TOKEN_SEMICOLON { $$ = $1; }
    | assignment TOKEN_SEMICOLON { $$ = $1; }
    | return_statement TOKEN_SEMICOLON { $$ = $1; }
+   | send_statement TOKEN_SEMICOLON { $$ = $1; }
+   | solicit_statement TOKEN_SEMICOLON { $$ = $1; }
    | brainfuck_statement TOKEN_SEMICOLON { $$ = $1; }
    | if_statement { $$ = $1; }
    | for_statement { $$ = $1; }
@@ -465,6 +518,91 @@ statement:
    | c_function_decl TOKEN_SEMICOLON { $$ = $1; }
    | use_statement { $$ = $1; }
    | expression TOKEN_SEMICOLON { $$ = $1; }
+;
+
+send_statement:
+    TOKEN_SEND TOKEN_IDENTIFIER {
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_send_stmt($2);
+        free($2);
+    }
+;
+
+solicit_statement:
+    TOKEN_SOLICIT TOKEN_IDENTIFIER {
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_solicit_stmt($2);
+        free($2);
+    }
+;
+
+handled_call_statement:
+    function_call on_handler_list {
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_handled_call_stmt($1, $2);
+    }
+;
+
+on_handler_list:
+    TOKEN_ON TOKEN_IDENTIFIER TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        void* list = zig_create_error_handler_list();
+        zig_add_error_handler_kind(list, 0, $2, $4);
+        $$ = list;
+        free($2);
+    }
+  | TOKEN_ON TOKEN_NUMBER TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        void* list = zig_create_error_handler_list();
+        zig_add_error_handler_number_kind(list, 0, $2, $4);
+        $$ = list;
+        free($2);
+    }
+  | TOKEN_ON TOKEN_UNDERSCORE TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        void* list = zig_create_error_handler_list();
+        zig_add_error_handler_kind(list, 0, NULL, $4);
+        $$ = list;
+    }
+  | TOKEN_ON TOKEN_SOLICIT TOKEN_IDENTIFIER TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        void* list = zig_create_error_handler_list();
+        zig_add_error_handler_kind(list, 1, $3, $5);
+        $$ = list;
+        free($3);
+    }
+  | TOKEN_ON TOKEN_SOLICIT TOKEN_NUMBER TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        void* list = zig_create_error_handler_list();
+        zig_add_error_handler_number_kind(list, 1, $3, $5);
+        $$ = list;
+        free($3);
+    }
+  | TOKEN_ON TOKEN_SOLICIT TOKEN_UNDERSCORE TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        void* list = zig_create_error_handler_list();
+        zig_add_error_handler_kind(list, 1, NULL, $5);
+        $$ = list;
+    }
+  | on_handler_list TOKEN_ON TOKEN_IDENTIFIER TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        zig_add_error_handler_kind($1, 0, $3, $5);
+        $$ = $1;
+        free($3);
+    }
+  | on_handler_list TOKEN_ON TOKEN_NUMBER TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        zig_add_error_handler_number_kind($1, 0, $3, $5);
+        $$ = $1;
+        free($3);
+    }
+  | on_handler_list TOKEN_ON TOKEN_UNDERSCORE TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        zig_add_error_handler_kind($1, 0, NULL, $5);
+        $$ = $1;
+    }
+  | on_handler_list TOKEN_ON TOKEN_SOLICIT TOKEN_IDENTIFIER TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        zig_add_error_handler_kind($1, 1, $4, $6);
+        $$ = $1;
+        free($4);
+    }
+  | on_handler_list TOKEN_ON TOKEN_SOLICIT TOKEN_NUMBER TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        zig_add_error_handler_number_kind($1, 1, $4, $6);
+        $$ = $1;
+        free($4);
+    }
+  | on_handler_list TOKEN_ON TOKEN_SOLICIT TOKEN_UNDERSCORE TOKEN_LBRACE statement_list TOKEN_RBRACE {
+        zig_add_error_handler_kind($1, 1, NULL, $6);
+        $$ = $1;
+    }
 ;
 
 if_statement:
@@ -794,6 +932,7 @@ primary_expression:
     | TOKEN_NUMBER { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_number_literal($1); }
     | TOKEN_CHAR { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_char_literal($1); }
     | string_literal { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_string_literal($1); free($1); }
+    | handled_call_statement { $$ = $1; }
     | function_call { $$ = $1; }
     | TOKEN_LPAREN expression TOKEN_RPAREN { $$ = $2; }
     | expression_block { $$ = $1; }
