@@ -1,0 +1,3 @@
+# Expected warning fragments
+Handler for 'E' is ignored
+Unhandled solicit-error 'E' from function call

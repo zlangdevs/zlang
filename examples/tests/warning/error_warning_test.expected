@@ -1,0 +1,3 @@
+# Expected warning fragments
+Handler for 'E2' is ignored
+Unhandled error 'E1' from function call
