@@ -783,6 +783,63 @@ Use warning tests under `examples/tests/warning` to lock expected diagnostics.
 
 ---
 
+## Error Flow
+
+ZLang supports two related error signals:
+- `send <ErrorName>;`
+- `solicit <ErrorName>;`
+
+Errors are declared explicitly:
+
+```zl
+error FileNotFound = 1;
+error PermissionDenied = FileNotFound;
+error FileLocked = _;
+```
+
+`_` means "assign an automatic unique code".
+
+### Handlers at call site
+
+Attach handlers directly to a call expression:
+
+```zl
+i32 res = open_file("data", false)
+    on FileNotFound { ... }
+    on 1 { ... }
+    on _ { ... }
+    on solicit PermissionDenied { ... }
+    on solicit 1 { ... }
+    on solicit _ { ... };
+```
+
+Handler forms:
+- `on <ErrorName> { ... }`
+- `on <number> { ... }`
+- `on _ { ... }`
+- `on solicit <ErrorName> { ... }`
+- `on solicit <number> { ... }`
+- `on solicit _ { ... }`
+
+Numeric handlers are useful when multiple error names share the same code.
+
+### Behavior model
+
+- `send` and `solicit` are matched by separate handler channels (`on ...` vs `on solicit ...`).
+- `on` handlers can be used in statement position and expression position.
+- For `solicit`, handler bodies can access caller and callee variables under compiler checks.
+- Handler capture uses a hybrid strategy: mutated values by reference, read-only values by value.
+
+### Warnings
+
+The semantic pass emits warnings for:
+- unhandled possible errors from a call,
+- handlers that never match what the callee can emit.
+
+Use warning tests under `examples/tests/warning` to lock expected diagnostics.
+
+---
+
 ## Memory Management
 
 ### Stack Allocation
