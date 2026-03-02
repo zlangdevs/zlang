@@ -2,7 +2,7 @@
 
 **A fast, clean systems programming language that compiles to LLVM IR**
 
-ZLang combines the simplicity of C with modern features like SIMD vectors, optional types, and even embedded Brainfuck support. Write efficient, low-level code without the ceremony.
+ZLang combines the simplicity of C with modern features like SIMD, function templates, and embedded Brainfuck support. Write efficient, low-level code without the ceremony.
 
 ```zl
 fun main() >> i32 {
@@ -18,9 +18,13 @@ fun main() >> i32 {
 - **🎯 Simple & Clean Syntax** - Familiar C-like syntax with modern improvements
 - **⚡ SIMD Built-in** - First-class SIMD vector support for high-performance computing
 - **🔧 Direct C Interop** - Call C functions with `@` prefix, seamless libc integration
-- **🏗️ Modern Type System** - Structs with default values, enums, generics, and more
+- **🏗️ Modern Type System** - Structs with default values, enums, function templates, and overloads
 - **🔒 Const Pointers** - Compile-time safety with read-only pointer guarantees
-- **🔄 Smart Loops** - Flexible `for` loops that work with any expression
+- **🔄 Smart Loops** - Infinite, conditional, and C-style `for` loops
+- **🛡️ Guard Clauses** - Function-level preconditions with `when (...)`
+- **🧩 Expression Blocks** - `<type> { ... }` blocks that return values
+- **🚨 Error Flow v2** - `error`, `send`, `solicit`, and call-site `on` handlers
+- **🔢 Numeric Error Matching** - Handle by code with `on 1 { ... }` / `on solicit 1 { ... }`
 - **🧠 Brainfuck Integration** - Embed Brainfuck code directly or compile pure .bf files!
 - **🎨 Type Inference** - Auto-cast with `as _` for cleaner code 
 - **📦 Zero Runtime** - Compiles directly to LLVM IR, no runtime overhead
@@ -33,6 +37,12 @@ fun main() >> i32 {
 # Build the compiler
 zig build
 
+# Install compiler + stdlib to system paths
+zig build install
+
+# Remove system install
+zig build uninstall
+
 # Compile a ZLang program
 ./zig-out/bin/zlang examples/hello_world.zl
 
@@ -42,6 +52,10 @@ zig build
 # Compile pure Brainfuck programs
 ./zig-out/bin/zlang -b mandelbrot.bf -o mandelbrot
 ./zig-out/bin/zlang -b32 program.bf -o output  # 32-bit cells
+
+# Generate wrappers from C headers
+./zig-out/bin/zlang wrap mylib.h -o mylib.zl
+./zig-out/bin/zlang wrap-clang mylib.h -o mylib_abi.zl
 ```
 
 ### Hello World
@@ -126,6 +140,66 @@ for i32 i = 0; i < 10; i++ {
     @printf("i = %d\n", i);
 }
 ```
+
+### Guard Clauses
+
+```zl
+fun divide(a: i32, b: i32) when (b != 0) >> i32 {
+    return a / b;
+}
+```
+
+### Expression Blocks
+
+```zl
+i32 score = <i32> {
+    i32 base = 40;
+    i32 bonus = 2;
+    base + bonus
+};
+```
+
+### Error Flow (`send`, `solicit`, `on`)
+
+```zl
+error FileNotFound = 1;
+error PermissionDenied = 1;
+error FileLocked = _;
+
+fun open_file(path: ptr<u8>, ro: bool) >> i32 {
+    if path == "missing" {
+        send FileNotFound;
+        return -1;
+    }
+    if path == "protected" && !ro {
+        solicit PermissionDenied;
+    }
+    if path == "locked" {
+        send FileLocked;
+        return 0;
+    }
+    return 1;
+}
+
+fun main() >> i32 {
+    i32 res = open_file("protected", false)
+        on 1 { @printf("shared code=1 handler\n"); }
+        on solicit PermissionDenied { ro = true; }
+        on _ {}
+        on solicit _ {};
+
+    @printf("Result: %d\n", res);
+    return 0;
+}
+```
+
+Handler forms:
+- `on ErrorName { ... }`
+- `on 1 { ... }`
+- `on _ { ... }`
+- `on solicit ErrorName { ... }`
+- `on solicit 1 { ... }`
+- `on solicit _ { ... }`
 
 ### Structs
 
@@ -486,7 +560,8 @@ Check out the `examples/` directory for more:
 - **math_demo.zl** - Mathematical functions with std.math
 - **assert_demo.zl** - Testing and assertions with std.assert
 - **brainfuck.zl** - Full Brainfuck interpreter in ZLang
-- **const_pointer_demo.zl** - Const pointer safety demonstration
+- **const_pointer.zl** - Const pointer safety demonstration
+- **const_pointer_syntax.zl** - Const pointer syntax examples
 - **arguments.zl** - Arguments reading
 - **tests/simd_test.zl** - Comprehensive SIMD examples
 - **tests/struct_test.zl** - Struct features
@@ -535,9 +610,11 @@ zig build -Doptimize=ReleaseFast
 
 ## 📝 Syntax Highlighting
 
-Syntax highlighting for popular editors coming soon!
+Zed syntax extension is available:
 
-For now, treat `.zl` files as C-like for basic highlighting.
+- https://github.com/zlangdevs/zed-zlang
+
+You can install it as a dev extension in Zed.
 
 ## 🤝 Contributing
 

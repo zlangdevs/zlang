@@ -40,6 +40,25 @@ fn set_node_location(node: *ast.Node) void {
     node.line = @intCast(parse_line);
     node.column = @intCast(parse_column);
 }
+
+fn parseErrorCodeLiteral(raw: []const u8) i32 {
+    var cleaned = std.ArrayList(u8){};
+    defer cleaned.deinit(global_allocator);
+    for (raw) |ch| {
+        if (ch != '\'') cleaned.append(global_allocator, ch) catch return 0;
+    }
+    const lit = cleaned.items;
+    if (std.mem.startsWith(u8, lit, "0x") or std.mem.startsWith(u8, lit, "0X")) {
+        return std.fmt.parseInt(i32, lit[2..], 16) catch 0;
+    }
+    if (std.mem.startsWith(u8, lit, "0b") or std.mem.startsWith(u8, lit, "0B")) {
+        return std.fmt.parseInt(i32, lit[2..], 2) catch 0;
+    }
+    if (lit.len > 1 and lit[0] == '0') {
+        return std.fmt.parseInt(i32, lit[1..], 8) catch 0;
+    }
+    return std.fmt.parseInt(i32, lit, 10) catch 0;
+}
 const ParameterList = struct {
     items: std.ArrayList(ast.Parameter),
 
@@ -66,6 +85,16 @@ const MatchCaseList = struct {
     fn init() MatchCaseList {
         return MatchCaseList{
             .items = std.ArrayList(ast.MatchCase){},
+        };
+    }
+};
+
+const ErrorHandlerList = struct {
+    items: std.ArrayList(ast.ErrorHandler),
+
+    fn init() ErrorHandlerList {
+        return ErrorHandlerList{
+            .items = std.ArrayList(ast.ErrorHandler){},
         };
     }
 };
@@ -116,7 +145,7 @@ export fn zig_add_to_param_list(list_ptr: ?*anyopaque, param_ptr: ?*anyopaque) v
     param_list.items.append(global_allocator, param.*) catch return;
 }
 
-export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const u8, params_ptr: ?*anyopaque, body_ptr: ?*anyopaque) ?*anyopaque {
+export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const u8, params_ptr: ?*anyopaque, guard_ptr: ?*anyopaque, body_ptr: ?*anyopaque) ?*anyopaque {
     const name = std.mem.span(name_ptr);
     const return_type = std.mem.span(return_type_ptr);
 
@@ -135,11 +164,17 @@ export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const
         body = node_list.items;
     }
 
+    const guard_expr: ?*ast.Node = if (guard_ptr) |ptr|
+        @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)))
+    else
+        null;
+
     const function_data = ast.NodeData{
         .function = ast.Function{
             .name = name_copy,
             .return_type = return_type_copy,
             .parameters = parameters,
+            .guard = guard_expr,
             .body = body,
         },
     };
@@ -833,6 +868,144 @@ export fn zig_create_match_stmt(condition_ptr: ?*anyopaque, cases_ptr: ?*anyopaq
     };
 
     const node = ast.Node.create(global_allocator, match_data);
+    set_node_location(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_error_decl_number(name_ptr: [*c]const u8, value_ptr: [*c]const u8) ?*anyopaque {
+    const name = std.mem.span(name_ptr);
+    const value = std.mem.span(value_ptr);
+    const name_copy = utils.dupe(u8, global_allocator, name);
+    const error_data = ast.NodeData{
+        .error_decl = ast.ErrorDecl{
+            .name = name_copy,
+            .code_kind = .explicit,
+            .explicit_code = parseErrorCodeLiteral(value),
+            .alias_name = null,
+        },
+    };
+    const node = ast.Node.create(global_allocator, error_data);
+    set_node_location(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_error_decl_alias(name_ptr: [*c]const u8, alias_ptr: [*c]const u8) ?*anyopaque {
+    const name = std.mem.span(name_ptr);
+    const alias_name = std.mem.span(alias_ptr);
+    const name_copy = utils.dupe(u8, global_allocator, name);
+    const alias_copy = utils.dupe(u8, global_allocator, alias_name);
+    const error_data = ast.NodeData{
+        .error_decl = ast.ErrorDecl{
+            .name = name_copy,
+            .code_kind = .alias,
+            .explicit_code = 0,
+            .alias_name = alias_copy,
+        },
+    };
+    const node = ast.Node.create(global_allocator, error_data);
+    set_node_location(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_error_decl_auto(name_ptr: [*c]const u8) ?*anyopaque {
+    const name = std.mem.span(name_ptr);
+    const name_copy = utils.dupe(u8, global_allocator, name);
+    const error_data = ast.NodeData{
+        .error_decl = ast.ErrorDecl{
+            .name = name_copy,
+            .code_kind = .auto,
+            .explicit_code = 0,
+            .alias_name = null,
+        },
+    };
+    const node = ast.Node.create(global_allocator, error_data);
+    set_node_location(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_send_stmt(error_name_ptr: [*c]const u8) ?*anyopaque {
+    const error_name = std.mem.span(error_name_ptr);
+    const name_copy = utils.dupe(u8, global_allocator, error_name);
+    const send_data = ast.NodeData{
+        .send_stmt = ast.SendStmt{
+            .error_name = name_copy,
+        },
+    };
+    const node = ast.Node.create(global_allocator, send_data);
+    set_node_location(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_solicit_stmt(error_name_ptr: [*c]const u8) ?*anyopaque {
+    const error_name = std.mem.span(error_name_ptr);
+    const name_copy = utils.dupe(u8, global_allocator, error_name);
+    const solicit_data = ast.NodeData{
+        .solicit_stmt = ast.SolicitStmt{
+            .error_name = name_copy,
+        },
+    };
+    const node = ast.Node.create(global_allocator, solicit_data);
+    set_node_location(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_error_handler_list() ?*anyopaque {
+    const handler_list = utils.create(ErrorHandlerList, global_allocator);
+    handler_list.* = ErrorHandlerList.init();
+    return @as(*anyopaque, @ptrCast(handler_list));
+}
+
+export fn zig_add_error_handler(list_ptr: ?*anyopaque, error_name_ptr: [*c]const u8, body_ptr: ?*anyopaque) void {
+    zig_add_error_handler_kind(list_ptr, 0, error_name_ptr, body_ptr);
+}
+
+export fn zig_add_error_handler_kind(list_ptr: ?*anyopaque, kind: c_int, error_name_ptr: [*c]const u8, body_ptr: ?*anyopaque) void {
+    if (list_ptr == null or body_ptr == null) return;
+    const handler_list = @as(*ErrorHandlerList, @ptrFromInt(@intFromPtr(list_ptr.?)));
+    const body_list = @as(*NodeList, @ptrFromInt(@intFromPtr(body_ptr.?)));
+
+    var error_name: ?[]const u8 = null;
+    if (error_name_ptr != null) {
+        error_name = utils.dupe(u8, global_allocator, std.mem.span(error_name_ptr));
+    }
+
+    handler_list.items.append(global_allocator, ast.ErrorHandler{
+        .kind = if (kind == 1) .solicit else .send,
+        .error_name = error_name,
+        .error_code = null,
+        .body = body_list.items,
+    }) catch return;
+}
+
+export fn zig_add_error_handler_number_kind(list_ptr: ?*anyopaque, kind: c_int, error_code_ptr: [*c]const u8, body_ptr: ?*anyopaque) void {
+    if (list_ptr == null or body_ptr == null or error_code_ptr == null) return;
+    const handler_list = @as(*ErrorHandlerList, @ptrFromInt(@intFromPtr(list_ptr.?)));
+    const body_list = @as(*NodeList, @ptrFromInt(@intFromPtr(body_ptr.?)));
+    const code_text = std.mem.span(error_code_ptr);
+
+    handler_list.items.append(global_allocator, ast.ErrorHandler{
+        .kind = if (kind == 1) .solicit else .send,
+        .error_name = null,
+        .error_code = parseErrorCodeLiteral(code_text),
+        .body = body_list.items,
+    }) catch return;
+}
+
+export fn zig_create_handled_call_stmt(call_ptr: ?*anyopaque, handlers_ptr: ?*anyopaque) ?*anyopaque {
+    if (call_ptr == null) return null;
+    const call = @as(*ast.Node, @ptrFromInt(@intFromPtr(call_ptr.?)));
+    var handlers = std.ArrayList(ast.ErrorHandler){};
+    if (handlers_ptr) |ptr| {
+        const handler_list = @as(*ErrorHandlerList, @ptrFromInt(@intFromPtr(ptr)));
+        handlers = handler_list.items;
+    }
+    const handled_data = ast.NodeData{
+        .handled_call_stmt = ast.HandledCallStmt{
+            .call = call,
+            .handlers = handlers,
+        },
+    };
+    const node = ast.Node.create(global_allocator, handled_data);
     set_node_location(node);
     return @as(*anyopaque, @ptrCast(node));
 }

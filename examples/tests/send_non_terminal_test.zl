@@ -1,0 +1,19 @@
+error E = _;
+
+fun produce() >> i32 {
+    i32 x = 1;
+    send E;
+    x = 5;
+    return x;
+}
+
+fun main() >> i32 {
+    i32 handled = 0;
+    i32 value = produce() on E {
+        handled = 1;
+    };
+
+    @printf("(expected 1):%d\n", handled);
+    @printf("(expected 5):%d\n", value);
+    return 0;
+}
