@@ -24,6 +24,7 @@ extern fn zlang_set_in(file: ?*anyopaque, scanner: ?*anyopaque) void;
 extern fn fmemopen(buffer: [*c]const u8, size: usize, mode: [*c]const u8) ?*anyopaque;
 extern fn fclose(file: ?*anyopaque) c_int;
 extern fn zlang_get_lineno(scanner: ?*anyopaque) c_int;
+extern fn zlang_get_column(scanner: ?*anyopaque) c_int;
 extern fn zlang_reset_lexer_state() void;
 
 export var current_scanner: ?*anyopaque = null;
@@ -39,6 +40,25 @@ export fn zlang_set_location(line: c_int, col: c_int) void {
 fn set_node_location(node: *ast.Node) void {
     node.line = @intCast(parse_line);
     node.column = @intCast(parse_column);
+}
+
+fn parseErrorCodeLiteral(raw: []const u8) i32 {
+    var cleaned = std.ArrayList(u8){};
+    defer cleaned.deinit(global_allocator);
+    for (raw) |ch| {
+        if (ch != '\'') cleaned.append(global_allocator, ch) catch return 0;
+    }
+    const lit = cleaned.items;
+    if (std.mem.startsWith(u8, lit, "0x") or std.mem.startsWith(u8, lit, "0X")) {
+        return std.fmt.parseInt(i32, lit[2..], 16) catch 0;
+    }
+    if (std.mem.startsWith(u8, lit, "0b") or std.mem.startsWith(u8, lit, "0B")) {
+        return std.fmt.parseInt(i32, lit[2..], 2) catch 0;
+    }
+    if (lit.len > 1 and lit[0] == '0') {
+        return std.fmt.parseInt(i32, lit[1..], 8) catch 0;
+    }
+    return std.fmt.parseInt(i32, lit, 10) catch 0;
 }
 const ParameterList = struct {
     items: std.ArrayList(ast.Parameter),
@@ -66,6 +86,16 @@ const MatchCaseList = struct {
     fn init() MatchCaseList {
         return MatchCaseList{
             .items = std.ArrayList(ast.MatchCase){},
+        };
+    }
+};
+
+const ErrorHandlerList = struct {
+    items: std.ArrayList(ast.ErrorHandler),
+
+    fn init() ErrorHandlerList {
+        return ErrorHandlerList{
+            .items = std.ArrayList(ast.ErrorHandler){},
         };
     }
 };
@@ -116,7 +146,7 @@ export fn zig_add_to_param_list(list_ptr: ?*anyopaque, param_ptr: ?*anyopaque) v
     param_list.items.append(global_allocator, param.*) catch return;
 }
 
-export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const u8, params_ptr: ?*anyopaque, body_ptr: ?*anyopaque) ?*anyopaque {
+export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const u8, params_ptr: ?*anyopaque, guard_ptr: ?*anyopaque, body_ptr: ?*anyopaque) ?*anyopaque {
     const name = std.mem.span(name_ptr);
     const return_type = std.mem.span(return_type_ptr);
 
@@ -135,11 +165,17 @@ export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const
         body = node_list.items;
     }
 
+    const guard_expr: ?*ast.Node = if (guard_ptr) |ptr|
+        @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)))
+    else
+        null;
+
     const function_data = ast.NodeData{
         .function = ast.Function{
             .name = name_copy,
             .return_type = return_type_copy,
             .parameters = parameters,
+            .guard = guard_expr,
             .body = body,
         },
     };
@@ -837,6 +873,144 @@ export fn zig_create_match_stmt(condition_ptr: ?*anyopaque, cases_ptr: ?*anyopaq
     return @as(*anyopaque, @ptrCast(node));
 }
 
+export fn zig_create_error_decl_number(name_ptr: [*c]const u8, value_ptr: [*c]const u8) ?*anyopaque {
+    const name = std.mem.span(name_ptr);
+    const value = std.mem.span(value_ptr);
+    const name_copy = utils.dupe(u8, global_allocator, name);
+    const error_data = ast.NodeData{
+        .error_decl = ast.ErrorDecl{
+            .name = name_copy,
+            .code_kind = .explicit,
+            .explicit_code = parseErrorCodeLiteral(value),
+            .alias_name = null,
+        },
+    };
+    const node = ast.Node.create(global_allocator, error_data);
+    set_node_location(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_error_decl_alias(name_ptr: [*c]const u8, alias_ptr: [*c]const u8) ?*anyopaque {
+    const name = std.mem.span(name_ptr);
+    const alias_name = std.mem.span(alias_ptr);
+    const name_copy = utils.dupe(u8, global_allocator, name);
+    const alias_copy = utils.dupe(u8, global_allocator, alias_name);
+    const error_data = ast.NodeData{
+        .error_decl = ast.ErrorDecl{
+            .name = name_copy,
+            .code_kind = .alias,
+            .explicit_code = 0,
+            .alias_name = alias_copy,
+        },
+    };
+    const node = ast.Node.create(global_allocator, error_data);
+    set_node_location(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_error_decl_auto(name_ptr: [*c]const u8) ?*anyopaque {
+    const name = std.mem.span(name_ptr);
+    const name_copy = utils.dupe(u8, global_allocator, name);
+    const error_data = ast.NodeData{
+        .error_decl = ast.ErrorDecl{
+            .name = name_copy,
+            .code_kind = .auto,
+            .explicit_code = 0,
+            .alias_name = null,
+        },
+    };
+    const node = ast.Node.create(global_allocator, error_data);
+    set_node_location(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_send_stmt(error_name_ptr: [*c]const u8) ?*anyopaque {
+    const error_name = std.mem.span(error_name_ptr);
+    const name_copy = utils.dupe(u8, global_allocator, error_name);
+    const send_data = ast.NodeData{
+        .send_stmt = ast.SendStmt{
+            .error_name = name_copy,
+        },
+    };
+    const node = ast.Node.create(global_allocator, send_data);
+    set_node_location(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_solicit_stmt(error_name_ptr: [*c]const u8) ?*anyopaque {
+    const error_name = std.mem.span(error_name_ptr);
+    const name_copy = utils.dupe(u8, global_allocator, error_name);
+    const solicit_data = ast.NodeData{
+        .solicit_stmt = ast.SolicitStmt{
+            .error_name = name_copy,
+        },
+    };
+    const node = ast.Node.create(global_allocator, solicit_data);
+    set_node_location(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
+export fn zig_create_error_handler_list() ?*anyopaque {
+    const handler_list = utils.create(ErrorHandlerList, global_allocator);
+    handler_list.* = ErrorHandlerList.init();
+    return @as(*anyopaque, @ptrCast(handler_list));
+}
+
+export fn zig_add_error_handler(list_ptr: ?*anyopaque, error_name_ptr: [*c]const u8, body_ptr: ?*anyopaque) void {
+    zig_add_error_handler_kind(list_ptr, 0, error_name_ptr, body_ptr);
+}
+
+export fn zig_add_error_handler_kind(list_ptr: ?*anyopaque, kind: c_int, error_name_ptr: [*c]const u8, body_ptr: ?*anyopaque) void {
+    if (list_ptr == null or body_ptr == null) return;
+    const handler_list = @as(*ErrorHandlerList, @ptrFromInt(@intFromPtr(list_ptr.?)));
+    const body_list = @as(*NodeList, @ptrFromInt(@intFromPtr(body_ptr.?)));
+
+    var error_name: ?[]const u8 = null;
+    if (error_name_ptr != null) {
+        error_name = utils.dupe(u8, global_allocator, std.mem.span(error_name_ptr));
+    }
+
+    handler_list.items.append(global_allocator, ast.ErrorHandler{
+        .kind = if (kind == 1) .solicit else .send,
+        .error_name = error_name,
+        .error_code = null,
+        .body = body_list.items,
+    }) catch return;
+}
+
+export fn zig_add_error_handler_number_kind(list_ptr: ?*anyopaque, kind: c_int, error_code_ptr: [*c]const u8, body_ptr: ?*anyopaque) void {
+    if (list_ptr == null or body_ptr == null or error_code_ptr == null) return;
+    const handler_list = @as(*ErrorHandlerList, @ptrFromInt(@intFromPtr(list_ptr.?)));
+    const body_list = @as(*NodeList, @ptrFromInt(@intFromPtr(body_ptr.?)));
+    const code_text = std.mem.span(error_code_ptr);
+
+    handler_list.items.append(global_allocator, ast.ErrorHandler{
+        .kind = if (kind == 1) .solicit else .send,
+        .error_name = null,
+        .error_code = parseErrorCodeLiteral(code_text),
+        .body = body_list.items,
+    }) catch return;
+}
+
+export fn zig_create_handled_call_stmt(call_ptr: ?*anyopaque, handlers_ptr: ?*anyopaque) ?*anyopaque {
+    if (call_ptr == null) return null;
+    const call = @as(*ast.Node, @ptrFromInt(@intFromPtr(call_ptr.?)));
+    var handlers = std.ArrayList(ast.ErrorHandler){};
+    if (handlers_ptr) |ptr| {
+        const handler_list = @as(*ErrorHandlerList, @ptrFromInt(@intFromPtr(ptr)));
+        handlers = handler_list.items;
+    }
+    const handled_data = ast.NodeData{
+        .handled_call_stmt = ast.HandledCallStmt{
+            .call = call,
+            .handlers = handlers,
+        },
+    };
+    const node = ast.Node.create(global_allocator, handled_data);
+    set_node_location(node);
+    return @as(*anyopaque, @ptrCast(node));
+}
+
 export fn zig_create_break_stmt() ?*anyopaque {
     const break_data = ast.NodeData{
         .break_stmt = ast.BreakStmt{},
@@ -1191,13 +1365,137 @@ export fn zig_create_expression_block(type_name_ptr: [*c]const u8, statements_pt
 export fn zig_record_parse_error(line: c_int, col: c_int, msg_ptr: [*c]const u8) void {
     if (!error_list_initialized) return;
     const msg = std.mem.span(msg_ptr);
-    const msg_copy = utils.dupe(u8, global_allocator, msg);
+    const msg_copy = formatParseMessage(global_allocator, msg) catch utils.dupe(u8, global_allocator, msg);
     const error_info = ParseErrorInfo{
         .line = @intCast(line),
         .column = @intCast(col),
         .message = msg_copy,
     };
     error_list.append(global_allocator, error_info) catch return;
+}
+
+fn isTokenNameChar(ch: u8) bool {
+    return (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_';
+}
+
+fn tokenDisplayName(token_name: []const u8) []const u8 {
+    if (std.mem.eql(u8, token_name, "TOKEN_IDENTIFIER")) return "identifier";
+    if (std.mem.eql(u8, token_name, "TOKEN_NUMBER")) return "number";
+    if (std.mem.eql(u8, token_name, "TOKEN_FLOAT")) return "float";
+    if (std.mem.eql(u8, token_name, "TOKEN_STRING")) return "string";
+    if (std.mem.eql(u8, token_name, "TOKEN_CHAR")) return "char";
+    if (std.mem.eql(u8, token_name, "TOKEN_LPAREN")) return "'('";
+    if (std.mem.eql(u8, token_name, "TOKEN_RPAREN")) return "')'";
+    if (std.mem.eql(u8, token_name, "TOKEN_LBRACE")) return "'{'";
+    if (std.mem.eql(u8, token_name, "TOKEN_RBRACE")) return "'}'";
+    if (std.mem.eql(u8, token_name, "TOKEN_LBRACKET")) return "'['";
+    if (std.mem.eql(u8, token_name, "TOKEN_RBRACKET")) return "']'";
+    if (std.mem.eql(u8, token_name, "TOKEN_SEMICOLON")) return "';'";
+    if (std.mem.eql(u8, token_name, "TOKEN_COLON")) return "':'";
+    if (std.mem.eql(u8, token_name, "TOKEN_COMMA")) return "','";
+    if (std.mem.eql(u8, token_name, "TOKEN_DOT")) return "'.'";
+    if (std.mem.eql(u8, token_name, "TOKEN_ASSIGN")) return "'='";
+    if (std.mem.eql(u8, token_name, "TOKEN_REASSIGN")) return "compound assignment";
+    if (std.mem.eql(u8, token_name, "TOKEN_EQUAL")) return "'=='";
+    if (std.mem.eql(u8, token_name, "TOKEN_NON_EQUAL")) return "'!='";
+    if (std.mem.eql(u8, token_name, "TOKEN_LESS")) return "'<'";
+    if (std.mem.eql(u8, token_name, "TOKEN_GREATER")) return "'>'";
+    if (std.mem.eql(u8, token_name, "TOKEN_EQ_LESS")) return "'<='";
+    if (std.mem.eql(u8, token_name, "TOKEN_EQ_GREATER")) return "'>='";
+    if (std.mem.eql(u8, token_name, "TOKEN_PLUS")) return "'+'";
+    if (std.mem.eql(u8, token_name, "TOKEN_MINUS")) return "'-'";
+    if (std.mem.eql(u8, token_name, "TOKEN_MULTIPLY")) return "'*'";
+    if (std.mem.eql(u8, token_name, "TOKEN_DIVIDE")) return "'/'";
+    if (std.mem.eql(u8, token_name, "TOKEN_MODULUS")) return "'%'";
+    if (std.mem.eql(u8, token_name, "TOKEN_AND")) return "'&&'";
+    if (std.mem.eql(u8, token_name, "TOKEN_OR")) return "'||'";
+    if (std.mem.eql(u8, token_name, "TOKEN_NOT")) return "'!'";
+    if (std.mem.eql(u8, token_name, "TOKEN_BIT_OR")) return "'|'";
+    if (std.mem.eql(u8, token_name, "TOKEN_XOR")) return "'^'";
+    if (std.mem.eql(u8, token_name, "TOKEN_BIT_NOT")) return "'~'";
+    if (std.mem.eql(u8, token_name, "TOKEN_AMPERSAND")) return "'&'";
+    if (std.mem.eql(u8, token_name, "TOKEN_LSHIFT")) return "'<<'";
+    if (std.mem.eql(u8, token_name, "TOKEN_RSHIFT")) return "'>>'";
+    if (std.mem.eql(u8, token_name, "TOKEN_INCREMENT")) return "'++'";
+    if (std.mem.eql(u8, token_name, "TOKEN_DECREMENT")) return "'--'";
+    if (std.mem.eql(u8, token_name, "TOKEN_FUN")) return "'fun'";
+    if (std.mem.eql(u8, token_name, "TOKEN_IF")) return "'if'";
+    if (std.mem.eql(u8, token_name, "TOKEN_ELSE")) return "'else'";
+    if (std.mem.eql(u8, token_name, "TOKEN_FOR")) return "'for'";
+    if (std.mem.eql(u8, token_name, "TOKEN_RETURN")) return "'return'";
+    if (std.mem.eql(u8, token_name, "TOKEN_BREAK")) return "'break'";
+    if (std.mem.eql(u8, token_name, "TOKEN_CONTINUE")) return "'continue'";
+    if (std.mem.eql(u8, token_name, "TOKEN_GOTO")) return "'goto'";
+    if (std.mem.eql(u8, token_name, "TOKEN_USE")) return "'use'";
+    if (std.mem.eql(u8, token_name, "TOKEN_WRAP")) return "'wrap'";
+    if (std.mem.eql(u8, token_name, "TOKEN_ENUM")) return "'enum'";
+    if (std.mem.eql(u8, token_name, "TOKEN_STRUCT")) return "'struct'";
+    if (std.mem.eql(u8, token_name, "TOKEN_UNION")) return "'union'";
+    if (std.mem.eql(u8, token_name, "TOKEN_CONST")) return "'const'";
+    if (std.mem.eql(u8, token_name, "TOKEN_WHEN")) return "'when'";
+    if (std.mem.eql(u8, token_name, "TOKEN_AS")) return "'as'";
+    if (std.mem.eql(u8, token_name, "TOKEN_MATCH")) return "'match'";
+    if (std.mem.eql(u8, token_name, "TOKEN_NULL")) return "'null'";
+    if (std.mem.eql(u8, token_name, "TOKEN_ERROR")) return "'error'";
+    if (std.mem.eql(u8, token_name, "TOKEN_SEND")) return "'send'";
+    if (std.mem.eql(u8, token_name, "TOKEN_SOLICIT")) return "'solicit'";
+    if (std.mem.eql(u8, token_name, "TOKEN_ON")) return "'on'";
+    if (std.mem.eql(u8, token_name, "TOKEN_UNDERSCORE")) return "'_'";
+    if (std.mem.eql(u8, token_name, "TOKEN_AT")) return "'@'";
+    if (std.mem.eql(u8, token_name, "TOKEN_BRAINFUCK")) return "brainfuck block";
+    return token_name;
+}
+
+fn formatParseMessage(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    var base = raw;
+    if (std.mem.startsWith(u8, base, "syntax error, ")) {
+        base = base[14..];
+    } else if (std.mem.eql(u8, base, "syntax error")) {
+        base = "invalid syntax";
+    }
+
+    var humanized = std.ArrayList(u8){};
+    defer humanized.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < base.len) {
+        const rel = std.mem.indexOf(u8, base[i..], "TOKEN_");
+        if (rel == null) {
+            try humanized.appendSlice(allocator, base[i..]);
+            break;
+        }
+
+        const start = i + rel.?;
+        try humanized.appendSlice(allocator, base[i..start]);
+
+        var end = start;
+        while (end < base.len and isTokenNameChar(base[end])) : (end += 1) {}
+
+        const token_name = base[start..end];
+        try humanized.appendSlice(allocator, tokenDisplayName(token_name));
+        i = end;
+    }
+
+    const interim = try humanized.toOwnedSlice(allocator);
+    defer allocator.free(interim);
+
+    var final = std.ArrayList(u8){};
+    defer final.deinit(allocator);
+
+    const marker = ", expecting ";
+    const replacement = "; expected ";
+    var j: usize = 0;
+    while (j < interim.len) {
+        if (j + marker.len <= interim.len and std.mem.eql(u8, interim[j .. j + marker.len], marker)) {
+            try final.appendSlice(allocator, replacement);
+            j += marker.len;
+            continue;
+        }
+        try final.append(allocator, interim[j]);
+        j += 1;
+    }
+
+    return final.toOwnedSlice(allocator);
 }
 
 pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!?*ast.Node {
@@ -1237,7 +1535,7 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!
     if (result != 0) {
         if (error_list.items.len == 0) {
             last_error_line = @intCast(@as(usize, @intCast(zlang_get_lineno(current_scanner))));
-            last_error_col = 0;
+            last_error_col = @intCast(@as(usize, @intCast(zlang_get_column(current_scanner))));
         }
         return errors.ParseError.ParseFailed;
     }

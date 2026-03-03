@@ -1,0 +1,71 @@
+error ErrorA = 7;
+error ErrorB = 7;
+error ErrorC = 9;
+
+fun send_by(mode: i32) >> i32 {
+    if mode == 0 {
+        send ErrorA;
+    }
+    if mode == 1 {
+        send ErrorB;
+    }
+    if mode == 2 {
+        send ErrorC;
+    }
+    return 100;
+}
+
+fun solicit_by(mode: i32) >> i32 {
+    i32 v = 0;
+    if mode == 0 {
+        solicit ErrorA;
+    }
+    if mode == 1 {
+        solicit ErrorC;
+    }
+    return v;
+}
+
+fun main() >> i32 {
+    i32 send_hits = 0;
+    i32 solicit_hits = 0;
+
+    i32 r0 = send_by(0) on 7 {
+        send_hits += 1;
+    };
+
+    i32 r1 = send_by(1) on 7 {
+        send_hits += 1;
+    };
+
+    i32 r2 = send_by(2)
+        on 7 {
+            send_hits += 10;
+        }
+        on 9 {
+            send_hits += 1;
+        };
+
+    i32 s0 = solicit_by(0) on solicit 7 {
+        solicit_hits += 1;
+        v = 11;
+    };
+
+    i32 s1 = solicit_by(1)
+        on solicit 7 {
+            solicit_hits += 10;
+        }
+        on solicit 9 {
+            solicit_hits += 1;
+            v = 22;
+        };
+
+    @printf("(expected 3):%d\n", send_hits);
+    @printf("(expected 2):%d\n", solicit_hits);
+    @printf("(expected 100):%d\n", r0);
+    @printf("(expected 100):%d\n", r1);
+    @printf("(expected 100):%d\n", r2);
+    @printf("(expected 11):%d\n", s0);
+    @printf("(expected 22):%d\n", s1);
+    return 0;
+}
