@@ -1,0 +1,31 @@
+error FileNotFoundError = 10;
+error FileLockedError = FileNotFoundError;
+error CustomError = _;
+
+fun open_file(mode: i32) >> i32 {
+    if mode == 0 {
+        send FileNotFoundError;
+    }
+    if mode == 1 {
+        send FileLockedError;
+    }
+    return 42;
+}
+
+fun main() >> i32 {
+    open_file(0)
+        on FileNotFoundError {
+            @printf("(expected 111):%d\n", 111);
+        }
+        on _ {
+            @printf("(expected 222):%d\n", 222);
+        };
+
+    open_file(1)
+        on FileLockedError {
+            @printf("(expected 333):%d\n", 333);
+        };
+
+    @printf("(expected 10):%d\n", FileNotFoundError as i32);
+    return 0;
+}
