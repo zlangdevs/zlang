@@ -1,0 +1,19 @@
+error CaptureError = _;
+
+fun may_fail() >> i32 {
+    send CaptureError;
+    return 0;
+}
+
+fun main() >> i32 {
+    i32 x = 7;
+
+    may_fail() on CaptureError {
+        @printf("(expected 7):%d\n", x);
+        x = 99;
+        @printf("(expected 99):%d\n", x);
+    };
+
+    @printf("(expected 99):%d\n", x);
+    return 0;
+}

@@ -1,0 +1,13 @@
+error E = _;
+
+fun only_solicit() >> i32 {
+    solicit E;
+    return 0;
+}
+
+fun main() >> i32 {
+    only_solicit() on E {
+        @printf("(expected 1):%d\n", 1);
+    };
+    return 0;
+}

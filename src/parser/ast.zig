@@ -46,6 +46,10 @@ pub const NodeType = enum {
     cast,
     expression_block,
     match_stmt,
+    error_decl,
+    send_stmt,
+    solicit_stmt,
+    handled_call_stmt,
 };
 
 pub const BinaryOp = struct {
@@ -138,6 +142,7 @@ pub const Function = struct {
     name: []const u8,
     return_type: []const u8,
     parameters: std.ArrayList(Parameter),
+    guard: ?*Node,
     body: std.ArrayList(*Node),
 };
 
@@ -300,6 +305,44 @@ pub const MatchStmt = struct {
     cases: std.ArrayList(MatchCase),
 };
 
+pub const ErrorDeclCodeKind = enum {
+    explicit,
+    alias,
+    auto,
+};
+
+pub const ErrorDecl = struct {
+    name: []const u8,
+    code_kind: ErrorDeclCodeKind,
+    explicit_code: i32,
+    alias_name: ?[]const u8,
+};
+
+pub const SendStmt = struct {
+    error_name: []const u8,
+};
+
+pub const SolicitStmt = struct {
+    error_name: []const u8,
+};
+
+pub const ErrorHandlerKind = enum {
+    send,
+    solicit,
+};
+
+pub const ErrorHandler = struct {
+    kind: ErrorHandlerKind,
+    error_name: ?[]const u8,
+    error_code: ?i32,
+    body: std.ArrayList(*Node),
+};
+
+pub const HandledCallStmt = struct {
+    call: *Node,
+    handlers: std.ArrayList(ErrorHandler),
+};
+
 pub const NodeData = union(NodeType) {
     program: Program,
     function: Function,
@@ -345,6 +388,10 @@ pub const NodeData = union(NodeType) {
     cast: Cast,
     expression_block: ExpressionBlock,
     match_stmt: MatchStmt,
+    error_decl: ErrorDecl,
+    send_stmt: SendStmt,
+    solicit_stmt: SolicitStmt,
+    handled_call_stmt: HandledCallStmt,
 };
 
 pub const ArenaAST = struct {
@@ -405,6 +452,9 @@ pub const Node = struct {
                 prog.globals.deinit(self.allocator);
             },
             .function => |*func| {
+                if (func.guard) |guard| {
+                    guard.destroy();
+                }
                 for (func.body.items) |stmt| {
                     stmt.destroy();
                 }
@@ -605,6 +655,31 @@ pub const Node = struct {
                 }
                 match_stmt.cases.deinit(self.allocator);
             },
+            .error_decl => |error_decl| {
+                self.allocator.free(error_decl.name);
+                if (error_decl.alias_name) |alias_name| {
+                    self.allocator.free(alias_name);
+                }
+            },
+            .send_stmt => |send_stmt| {
+                self.allocator.free(send_stmt.error_name);
+            },
+            .solicit_stmt => |solicit_stmt| {
+                self.allocator.free(solicit_stmt.error_name);
+            },
+            .handled_call_stmt => |*handled_call| {
+                handled_call.call.destroy();
+                for (handled_call.handlers.items) |*handler| {
+                    if (handler.error_name) |error_name| {
+                        self.allocator.free(error_name);
+                    }
+                    for (handler.body.items) |stmt| {
+                        stmt.destroy();
+                    }
+                    handler.body.deinit(self.allocator);
+                }
+                handled_call.handlers.deinit(self.allocator);
+            },
             else => {},
         }
         _ = self.allocator;
@@ -656,6 +731,9 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             for (func.body.items, 0..) |stmt, i| {
                 const is_stmt_last = i == func.body.items.len - 1;
                 printAST(stmt, indent + 1, is_stmt_last, false);
+            }
+            if (func.guard) |guard| {
+                printAST(guard, indent + 1, true, false);
             }
         },
         .assignment => |as| {
@@ -1015,6 +1093,43 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
                 printAST(stmt, indent + 1, false, false);
             }
             printAST(block.result, indent + 1, true, false);
+        },
+        .error_decl => |error_decl| {
+            switch (error_decl.code_kind) {
+                .explicit => std.debug.print("🚨 Error Decl: \x1b[36m{s}\x1b[0m = {d}\n", .{ error_decl.name, error_decl.explicit_code }),
+                .alias => std.debug.print("🚨 Error Decl: \x1b[36m{s}\x1b[0m = {s}\n", .{ error_decl.name, error_decl.alias_name orelse "_" }),
+                .auto => std.debug.print("🚨 Error Decl: \x1b[36m{s}\x1b[0m = _\n", .{error_decl.name}),
+            }
+        },
+        .send_stmt => |send_stmt| {
+            std.debug.print("📤 Send: \x1b[36m{s}\x1b[0m\n", .{send_stmt.error_name});
+        },
+        .solicit_stmt => |solicit_stmt| {
+            std.debug.print("🗣️ Solicit: \x1b[36m{s}\x1b[0m\n", .{solicit_stmt.error_name});
+        },
+        .handled_call_stmt => |handled_call| {
+            std.debug.print("🛟 Handled Call\n", .{});
+            const no_handlers = handled_call.handlers.items.len == 0;
+            printAST(handled_call.call, indent + 1, no_handlers, false);
+            for (handled_call.handlers.items, 0..) |handler, i| {
+                const is_last_handler = i == handled_call.handlers.items.len - 1;
+                printIndent(indent + 1, is_last_handler and handler.body.items.len == 0, false);
+                const kind_text = switch (handler.kind) {
+                    .send => "",
+                    .solicit => "solicit ",
+                };
+                if (handler.error_name) |name| {
+                    std.debug.print("on {s}{s}\n", .{ kind_text, name });
+                } else if (handler.error_code) |code| {
+                    std.debug.print("on {s}{d}\n", .{ kind_text, code });
+                } else {
+                    std.debug.print("on {s}_\n", .{kind_text});
+                }
+                for (handler.body.items, 0..) |stmt, j| {
+                    const is_last_stmt = is_last_handler and j == handler.body.items.len - 1;
+                    printAST(stmt, indent + 2, is_last_stmt, false);
+                }
+            }
         },
     }
 }
