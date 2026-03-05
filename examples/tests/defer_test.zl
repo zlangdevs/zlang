@@ -1,0 +1,20 @@
+fun log_cleanup(tag: i32) >> void {
+    @printf("cleanup:%d\n", tag);
+}
+
+fun choose(v: i32) >> i32 {
+    if v > 0 {
+        defer log_cleanup(1);
+        return v;
+    }
+    defer log_cleanup(2);
+    return v - 1;
+}
+
+fun main() >> i32 {
+    i32 a = choose(5);
+    @printf("(expected 5):%d\n", a);
+    i32 b = choose(0);
+    @printf("(expected -1):%d\n", b);
+    return 0;
+}

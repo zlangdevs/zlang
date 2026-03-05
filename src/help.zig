@@ -129,6 +129,7 @@ pub fn printHelpSyntax() void {
         \\
         \\{s}Functions:{s}
         \\  fun name(arg: type) >> return_type {{ ... }}
+        \\  fun name(arg: type) when (condition) >> return_type {{ ... }}
         \\
         \\{s}Variables:{s}
         \\  i32 x = 10;
@@ -139,10 +140,11 @@ pub fn printHelpSyntax() void {
         \\  for i32 i = 0; i < 10; i++ {{ ... }}
         \\  for (x > 0) {{ ... }}
         \\  for {{ ... }}
+        \\  defer cleanup();
         \\
         \\{s}Pointers:{s}
         \\  ptr<i32> p = &x;
-        \\  p.* = 20;
+        \\  *p = 20;
         \\
         \\{s}Arrays:{s}
         \\  arr<i32, 10> a;
