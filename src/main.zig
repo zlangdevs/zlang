@@ -144,6 +144,9 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
             }
         },
         .function => |func| {
+            if (func.guard) |guard| {
+                collectUseStatements(guard, dependencies);
+            }
             for (func.body.items) |stmt| {
                 collectUseStatements(stmt, dependencies);
             }
@@ -196,6 +199,12 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
                 .expression_block => |block| {
                     for (block.statements.items) |stmt| collectUseStatements(stmt, dependencies);
                     collectUseStatements(block.result, dependencies);
+                },
+                .handled_call_stmt => |handled| {
+                    collectUseStatements(handled.call, dependencies);
+                    for (handled.handlers.items) |handler| {
+                        for (handler.body.items) |stmt| collectUseStatements(stmt, dependencies);
+                    }
                 },
                 else => {},
             }
@@ -339,6 +348,17 @@ fn tryFindMoreErrors(alloc: std.mem.Allocator, file_path: []const u8, input: []c
     }
 }
 
+fn parseErrorHint(message: []const u8) ?[]const u8 {
+    if (std.mem.indexOf(u8, message, "expected ';'") != null) return "add ';' before this token";
+    if (std.mem.indexOf(u8, message, "expected ')'") != null) return "close the expression with ')'";
+    if (std.mem.indexOf(u8, message, "expected '}'") != null) return "close the current block with '}'";
+    if (std.mem.indexOf(u8, message, "expected ']'") != null) return "close the index or type list with ']'";
+    if (std.mem.indexOf(u8, message, "expected '>'") != null) return "close the generic type with '>'";
+    if (std.mem.indexOf(u8, message, "unexpected 'else'") != null) return "check braces before else and the matching if block";
+    if (std.mem.indexOf(u8, message, "unexpected end of") != null) return "file ended early; check missing braces or parentheses";
+    return null;
+}
+
 fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_alloc: std.mem.Allocator) !ModuleInfo {
     const input = read_file(file_path) catch |err| {
         std.debug.print("Error reading file {s}: {}\n", .{ file_path, err });
@@ -391,9 +411,10 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
                 diagnostics.printDiagnostic(backing_alloc, .{
                     .file_path = file_path,
                     .line = parse_err.line,
-                    .column = parse_err.column,
+                    .column = if (parse_err.column == 0) 1 else parse_err.column,
                     .message = parse_err.message,
                     .severity = .Error,
+                    .hint = parseErrorHint(parse_err.message),
                 });
             }
         } else {

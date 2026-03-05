@@ -8,6 +8,7 @@ Complete language reference and advanced usage guide.
 - [Language Specification](#language-specification)
 - [Type System](#type-system)
 - [Functions](#functions)
+- [Error Flow](#error-flow)
 - [Memory Management](#memory-management)
 - [Advanced Features](#advanced-features)
 - [C Interoperability](#c-interoperability)
@@ -207,8 +208,9 @@ three dots
 
 **Keywords**
 ```
-fun     if      else    for     return  break   continue
-const   struct  enum    wrap    use     null    as      goto
+fun     if      else    for     return  break   continue  goto
+const   struct  enum    union   wrap    use     null      as
+when    match   error   send    solicit on
 ```
 
 **Note on `const`**
@@ -416,6 +418,23 @@ for flag {           ?? Direct boolean
 }
 ```
 
+### Expression Blocks
+
+Expression blocks let you execute statements and still return a value in expression position.
+
+```zl
+i32 result = <i32> {
+    i32 a = 10;
+    i32 b = 32;
+    a + b
+};
+```
+
+Rules:
+- Syntax is `<type> { ... result_expr }`
+- The final expression is the value of the block
+- Useful in assignments, return expressions, and function arguments
+
 ---
 
 ## Functions
@@ -452,6 +471,21 @@ fun print_point(p: Point) >> void {
     @printf("(%d, %d)\n", p.x, p.y);
 }
 ```
+
+### Guard Clauses
+
+Guards are attached to function signatures and are checked before executing the function body.
+
+```zl
+fun divide(a: i32, b: i32) when (b != 0) >> i32 {
+    return a / b;
+}
+```
+
+Notes:
+- Syntax: `fun ... when (condition) >> ... { ... }`
+- Guard condition is an expression
+- Current behavior is fail-fast when the guard check fails
 
 ### C Function Declarations
 
@@ -653,6 +687,99 @@ fun fibonacci(n: i32) >> i32 {
     return fibonacci(n - 1) + fibonacci(n - 2);
 }
 ```
+
+### Function Templates
+
+ZLang supports function templates with bracketed type parameters:
+
+```zl
+fun identity[T](value: T) >> T {
+    return value;
+}
+
+fun pair_first[A, B](a: A, b: B) >> A {
+    return a;
+}
+
+fun main() >> i32 {
+    i32 x = identity(42);
+    f32 y = identity(3.14);
+    i32 z = pair_first(10, 2.5);
+    @printf("%d %f %d\n", x, y, z);
+    return 0;
+}
+```
+
+### Function Overloading
+
+Functions can be overloaded by parameter types:
+
+```zl
+fun add(a: i32, b: i32) >> i32 {
+    return a + b;
+}
+
+fun add(a: f32, b: f32) >> f32 {
+    return a + b;
+}
+```
+
+---
+
+## Error Flow
+
+ZLang supports two related error signals:
+- `send <ErrorName>;`
+- `solicit <ErrorName>;`
+
+Errors are declared explicitly:
+
+```zl
+error FileNotFound = 1;
+error PermissionDenied = FileNotFound;
+error FileLocked = _;
+```
+
+`_` means "assign an automatic unique code".
+
+### Handlers at call site
+
+Attach handlers directly to a call expression:
+
+```zl
+i32 res = open_file("data", false)
+    on FileNotFound { ... }
+    on 1 { ... }
+    on _ { ... }
+    on solicit PermissionDenied { ... }
+    on solicit 1 { ... }
+    on solicit _ { ... };
+```
+
+Handler forms:
+- `on <ErrorName> { ... }`
+- `on <number> { ... }`
+- `on _ { ... }`
+- `on solicit <ErrorName> { ... }`
+- `on solicit <number> { ... }`
+- `on solicit _ { ... }`
+
+Numeric handlers are useful when multiple error names share the same code.
+
+### Behavior model
+
+- `send` and `solicit` are matched by separate handler channels (`on ...` vs `on solicit ...`).
+- `on` handlers can be used in statement position and expression position.
+- For `solicit`, handler bodies can access caller and callee variables under compiler checks.
+- Handler capture uses a hybrid strategy: mutated values by reference, read-only values by value.
+
+### Warnings
+
+The semantic pass emits warnings for:
+- unhandled possible errors from a call,
+- handlers that never match what the callee can emit.
+
+Use warning tests under `examples/tests/warning` to lock expected diagnostics.
 
 ---
 
@@ -970,6 +1097,10 @@ for i32 i = 0; i < 10; i++ {
     }
 }
 ```
+
+Notes:
+- ZLang loop keyword is `for`.
+- `until` is not part of the language syntax.
 
 ### Goto Statements
 
@@ -1407,18 +1538,11 @@ fun next(it: ptr<Iterator>) >> bool {
 }
 ```
 
-### Generic-like Functions (via macros or templates)
+### Generic Data Types (Current Status)
 
-ZLang doesn't have generics yet, but you can use C preprocessor:
+Function templates are supported. Generic user-defined type declarations are not yet first-class.
 
-```c
-// In a .h file
-#define DEFINE_ARRAY(T, N) \
-struct Array_##T { \
-    arr<T, N> data; \
-    i32 length; \
-}
-```
+For reusable data containers today, use concrete structs or code generation.
 
 ---
 
@@ -1459,7 +1583,7 @@ gdb ./program
 ## Future Roadmap
 
 Planned features:
-- True generics/templates
+- Generic type declarations with constraints
 - Standard library documentation
 - Package manager
 - Better error messages

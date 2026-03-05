@@ -1,0 +1,17 @@
+error TestError = _;
+
+fun fail_now() >> i32 {
+    send TestError;
+    return 0;
+}
+
+fun main() >> i32 {
+    bool success = true;
+
+    fail_now() on _ {
+        success = false;
+    };
+
+    @printf("(expected 0):%d\n", success as i32);
+    return 0;
+}
