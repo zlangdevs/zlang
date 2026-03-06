@@ -59,17 +59,17 @@ pub fn build(b: *std.Build) void {
     exe.step.dependOn(&flex_cmd.step);
     exe.step.dependOn(&bison_cmd.step);
 
-    const install_exe = b.addInstallArtifact(exe, .{});
-
     const install_system_cmd = b.addSystemCommand(&[_][]const u8{
         "sh",
         "-c",
         b.fmt(
-            "set -e; install -d \"{0s}\"; rm -f \"{0s}/zlang\"; rm -rf \"{0s}/stdlib\"; install -m 755 \"zig-out/bin/zlang\" \"{0s}/zlang\"; cp -a \"stdlib\" \"{0s}/stdlib\"; ln -sfn \"{0s}/zlang\" \"{1s}\"",
+            "set -e; if [ \"$(id -u)\" -ne 0 ]; then echo \"Error: zig build install requires root (use sudo).\"; exit 1; fi; install -d \"{0s}\"; rm -f \"{0s}/zlang\"; rm -rf \"{0s}/stdlib\"; install -m 755 \"$1\" \"{0s}/zlang\"; cp -a \"stdlib\" \"{0s}/stdlib\"; ln -sfn \"{0s}/zlang\" \"{1s}\"",
             .{ system_prefix, system_symlink },
         ),
+        "zlang-install",
     });
-    install_system_cmd.step.dependOn(&install_exe.step);
+    install_system_cmd.addFileArg(exe.getEmittedBin());
+    install_system_cmd.step.dependOn(&exe.step);
 
     b.getInstallStep().dependOn(&install_system_cmd.step);
 
@@ -77,7 +77,7 @@ pub fn build(b: *std.Build) void {
         "sh",
         "-c",
         b.fmt(
-            "set -e; if [ -e \"{1s}\" ] && [ ! -L \"{1s}\" ]; then echo \"Refusing to remove non-symlink: {1s}\"; exit 1; fi; rm -f \"{1s}\"; rm -rf \"{0s}\"",
+            "set -e; if [ \"$(id -u)\" -ne 0 ]; then echo \"Error: zig build uninstall requires root (use sudo).\"; exit 1; fi; if [ -e \"{1s}\" ] && [ ! -L \"{1s}\" ]; then echo \"Refusing to remove non-symlink: {1s}\"; exit 1; fi; rm -f \"{1s}\"; rm -rf \"{0s}\"",
             .{ system_prefix, system_symlink },
         ),
     });

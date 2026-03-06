@@ -30,6 +30,7 @@ pub const TemplateInstantiation = struct {
 pub const LoopContext = struct {
     break_block: c.LLVMBasicBlockRef,
     continue_block: c.LLVMBasicBlockRef,
+    defer_marker: usize,
 };
 
 pub const PendingGoto = struct {
