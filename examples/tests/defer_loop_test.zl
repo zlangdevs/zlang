@@ -1,0 +1,37 @@
+fun mark(v: i32) >> void {
+    @printf("mark:%d\n", v);
+}
+
+fun loop_with_continue() >> i32 {
+    i32 i = 0;
+    i32 sum = 0;
+    for i32 k = 0; k < 4; k++ {
+        defer mark(k + 10);
+        if k == 1 {
+            continue;
+        }
+        sum = sum + k;
+        i = i + 1;
+    }
+    return sum + i;
+}
+
+fun loop_with_break() >> i32 {
+    i32 acc = 0;
+    for i32 k = 0; k < 6; k++ {
+        defer mark(k + 20);
+        if k == 3 {
+            break;
+        }
+        acc = acc + k;
+    }
+    return acc;
+}
+
+fun main() >> i32 {
+    i32 a = loop_with_continue();
+    @printf("(expected 8):%d\n", a);
+    i32 b = loop_with_break();
+    @printf("(expected 3):%d\n", b);
+    return 0;
+}
