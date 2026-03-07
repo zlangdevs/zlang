@@ -19,12 +19,18 @@ declare -a FAILED_WARNING_FILES
 declare -a PASSED_FILES
 TABLE_NAME_WIDTH=28
 CLEAR_EACH_TEST="${CLEAR_EACH_TEST:-1}"
+USE_APPIMAGE="${USE_APPIMAGE:-0}"
+APPIMAGE_PATH="${ZLANG_APPIMAGE_PATH:-./zig-out/zlang-$(uname -m).AppImage}"
+APPIMAGE_FORCE_EXTRACT_AND_RUN="${APPIMAGE_FORCE_EXTRACT_AND_RUN:-1}"
+TEST_SELECTOR=""
 
 # Set ZSTDPATH to the stdlib directory relative to the project root
 export ZSTDPATH="$(pwd)/stdlib"
 
 compiler_label() {
-    if [ "${USE_LOCAL_APP:-1}" = "1" ] && [ -x "$APP" ]; then
+    if [ "$USE_APPIMAGE" = "1" ]; then
+        printf "%s" "$APPIMAGE_PATH"
+    elif [ "${USE_LOCAL_APP:-1}" = "1" ] && [ -x "$APP" ]; then
         printf "%s" "$APP"
     else
         printf "%s" "zig build run --"
@@ -35,10 +41,35 @@ run_compiler() {
     local test_file="$1"
     shift
     local forced_output="$(pwd)/output"
-    if [ "${USE_LOCAL_APP:-1}" = "1" ] && [ -x "$APP" ]; then
+    if [ "$USE_APPIMAGE" = "1" ]; then
+        if [ "$APPIMAGE_FORCE_EXTRACT_AND_RUN" = "1" ]; then
+            APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE_PATH" "$test_file" -o "$forced_output" "$@"
+        else
+            "$APPIMAGE_PATH" "$test_file" -o "$forced_output" "$@"
+        fi
+    elif [ "${USE_LOCAL_APP:-1}" = "1" ] && [ -x "$APP" ]; then
         "$APP" "$test_file" -o "$forced_output" "$@"
     else
         zig build run -- "$test_file" -o "$forced_output" "$@"
+    fi
+}
+
+ensure_appimage_ready() {
+    if [ -x "$APPIMAGE_PATH" ]; then
+        return 0
+    fi
+
+    echo "AppImage not found at $APPIMAGE_PATH"
+    echo "Building AppImage compiler..."
+    zig build appimage
+    if [ $? -ne 0 ]; then
+        echo "Error: zig build appimage failed"
+        exit 1
+    fi
+
+    if [ ! -x "$APPIMAGE_PATH" ]; then
+        echo "Error: expected AppImage at $APPIMAGE_PATH"
+        exit 1
     fi
 }
 
@@ -313,25 +344,84 @@ test_warning_file() {
     return 1
 }
 
-if [ $# -gt 0 ]; then
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --appimage)
+            USE_APPIMAGE=1
+            ;;
+        --appimage-path)
+            shift
+            if [ $# -eq 0 ]; then
+                echo "Error: --appimage-path requires a value"
+                exit 1
+            fi
+            USE_APPIMAGE=1
+            APPIMAGE_PATH="$1"
+            ;;
+        --help|-h)
+            echo "Usage: $0 [options] [test-file-or-pattern]"
+            echo ""
+            echo "Options:"
+            echo "  --appimage                Run tests with AppImage compiler"
+            echo "  --appimage-path <path>    Override AppImage path"
+            echo ""
+            echo "Environment variables:"
+            echo "  USE_APPIMAGE=1                    Same as --appimage"
+            echo "  ZLANG_APPIMAGE_PATH=<path>        Same as --appimage-path"
+            echo "  APPIMAGE_FORCE_EXTRACT_AND_RUN=1  Force no-FUSE mode (default: 1)"
+            exit 0
+            ;;
+        --)
+            shift
+            while [ $# -gt 0 ]; do
+                if [ -n "$TEST_SELECTOR" ]; then
+                    echo "Error: Only one test selector is supported"
+                    exit 1
+                fi
+                TEST_SELECTOR="$1"
+                shift
+            done
+            break
+            ;;
+        -*)
+            echo "Error: Unknown option '$1'"
+            echo "Use --help to see available options."
+            exit 1
+            ;;
+        *)
+            if [ -n "$TEST_SELECTOR" ]; then
+                echo "Error: Only one test selector is supported"
+                exit 1
+            fi
+            TEST_SELECTOR="$1"
+            ;;
+    esac
+    shift
+done
+
+if [ -n "$TEST_SELECTOR" ]; then
     maybe_clear_screen
-    if [[ "$1" == *.zl ]]; then
-        if [ -f "$1" ]; then
-            test_file="$1"
-        elif [ -f "$TEST_DIR/$1" ]; then
-            test_file="$TEST_DIR/$1"
+    if [ "$USE_APPIMAGE" = "1" ]; then
+        ensure_appimage_ready
+    fi
+
+    if [[ "$TEST_SELECTOR" == *.zl ]]; then
+        if [ -f "$TEST_SELECTOR" ]; then
+            test_file="$TEST_SELECTOR"
+        elif [ -f "$TEST_DIR/$TEST_SELECTOR" ]; then
+            test_file="$TEST_DIR/$TEST_SELECTOR"
         else
-            echo "Error: File $1 not found"
+            echo "Error: File $TEST_SELECTOR not found"
             exit 1
         fi
     else
-        test_file=$(find_file_by_pattern "$1")
+        test_file=$(find_file_by_pattern "$TEST_SELECTOR")
         if [ $? -eq 0 ]; then
             echo "Found file: $(basename "$test_file")"
         elif [ $? -eq 2 ]; then
             exit 1
         else
-            echo "Error: No files found matching pattern '$1'"
+            echo "Error: No files found matching pattern '$TEST_SELECTOR'"
             exit 1
         fi
     fi
@@ -352,11 +442,15 @@ if [ $# -gt 0 ]; then
     esac
 fi
 
-echo "Building compiler..."
-zig build
-if [ $? -ne 0 ]; then
-    echo "Error: zig build failed"
-    exit 1
+if [ "$USE_APPIMAGE" = "1" ]; then
+    ensure_appimage_ready
+else
+    echo "Building compiler..."
+    zig build
+    if [ $? -ne 0 ]; then
+        echo "Error: zig build failed"
+        exit 1
+    fi
 fi
 
 echo ""
