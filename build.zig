@@ -23,6 +23,139 @@ pub fn build(b: *std.Build) void {
     b.default_step = build_step;
     build_step.dependOn(&exe.step);
 
+    const appimage_cmd = b.addSystemCommand(&[_][]const u8{
+        "sh",
+        "-c",
+        \\set -eu
+        \\BIN="$1"
+        \\ARCH="$(uname -m)"
+        \\case "$ARCH" in
+        \\  x86_64|amd64) TOOL_ARCH="x86_64" ;;
+        \\  aarch64|arm64) TOOL_ARCH="aarch64" ;;
+        \\  *)
+        \\    echo "Unsupported architecture for appimagetool: $ARCH" >&2
+        \\    exit 1
+        \\    ;;
+        \\esac
+        \\WORK_DIR="$(mktemp -d)"
+        \\cleanup() {
+        \\  rm -rf "$WORK_DIR"
+        \\}
+        \\trap cleanup EXIT INT TERM
+        \\APPDIR="$WORK_DIR/AppDir"
+        \\TOOLS_DIR="$WORK_DIR/tools"
+        \\APPIMAGE_OUT="zig-out/zlang-$ARCH.AppImage"
+        \\APPIMAGETOOL="$TOOLS_DIR/appimagetool.AppImage"
+        \\mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/zlang" "$APPDIR/usr/lib" "$TOOLS_DIR" "zig-out"
+        \\install -m 755 "$BIN" "$APPDIR/usr/bin/zlang"
+        \\cp -a "stdlib" "$APPDIR/usr/share/zlang/stdlib"
+        \\find_tool() {
+        \\  for name in "$@"; do
+        \\    if command -v "$name" >/dev/null 2>&1; then
+        \\      command -v "$name"
+        \\      return 0
+        \\    fi
+        \\  done
+        \\  return 1
+        \\}
+        \\copy_tool() {
+        \\  tool_target="$1"
+        \\  shift
+        \\  tool_path="$(find_tool "$@" || true)"
+        \\  if [ -n "$tool_path" ]; then
+        \\    cp -L "$tool_path" "$APPDIR/usr/bin/$tool_target"
+        \\    chmod 755 "$APPDIR/usr/bin/$tool_target"
+        \\  fi
+        \\}
+        \\copy_tool "llc" llc-20 llc-19 llc-18 llc
+        \\copy_tool "opt" opt-20 opt-19 opt-18 opt
+        \\copy_tool "clang" clang-20 clang-19 clang-18 clang
+        \\copy_tool "lli" lli-20 lli-19 lli-18 lli
+        \\copy_tool "ld.lld" ld.lld-20 ld.lld-19 ld.lld-18 ld.lld
+        \\collect_libs() {
+        \\  bin_path="$1"
+        \\  [ -x "$bin_path" ] || return 0
+        \\  ldd "$bin_path" 2>/dev/null | while IFS= read -r line; do
+        \\    lib_path=""
+        \\    case "$line" in
+        \\      *" => "*)
+        \\        lib_path="$(printf "%s\n" "$line" | cut -d' ' -f3)"
+        \\        ;;
+        \\      /*)
+        \\        lib_path="$(printf "%s\n" "$line" | cut -d' ' -f1)"
+        \\        ;;
+        \\    esac
+        \\    if [ -n "$lib_path" ] && [ -f "$lib_path" ]; then
+        \\      cp -nL "$lib_path" "$APPDIR/usr/lib/" 2>/dev/null || true
+        \\    fi
+        \\  done
+        \\}
+        \\collect_libs "$APPDIR/usr/bin/zlang"
+        \\for bundled in "$APPDIR/usr/bin/"*; do
+        \\  collect_libs "$bundled"
+        \\done
+        \\cat > "$APPDIR/AppRun" <<'EOF'
+        \\#!/bin/sh
+        \\HERE="$(dirname "$(readlink -f "$0")")"
+        \\export ZSTDPATH="$HERE/usr/share/zlang/stdlib"
+        \\export PATH="$HERE/usr/bin:$PATH"
+        \\export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        \\exec "$HERE/usr/bin/zlang" "$@"
+        \\EOF
+        \\chmod 755 "$APPDIR/AppRun"
+        \\cat > "$APPDIR/zlang.desktop" <<'EOF'
+        \\[Desktop Entry]
+        \\Type=Application
+        \\Name=ZLang
+        \\Exec=zlang
+        \\Icon=zlang
+        \\Terminal=true
+        \\Categories=Development;
+        \\EOF
+        \\cat > "$APPDIR/zlang.xpm" <<'EOF'
+        \\/* XPM */
+        \\static char * zlang_xpm[] = {
+        \\"16 16 2 1",
+        \\"  c None",
+        \\". c #2D7A3E",
+        \\"................",
+        \\"................",
+        \\"................",
+        \\"................",
+        \\"................",
+        \\"................",
+        \\"................",
+        \\"................",
+        \\"................",
+        \\"................",
+        \\"................",
+        \\"................",
+        \\"................",
+        \\"................",
+        \\"................"};
+        \\EOF
+        \\if command -v curl >/dev/null 2>&1; then
+        \\  curl -fsSL "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-$TOOL_ARCH.AppImage" -o "$APPIMAGETOOL"
+        \\elif command -v wget >/dev/null 2>&1; then
+        \\  wget -qO "$APPIMAGETOOL" "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-$TOOL_ARCH.AppImage"
+        \\else
+        \\  echo "Need curl or wget to download appimagetool" >&2
+        \\  exit 1
+        \\fi
+        \\chmod 755 "$APPIMAGETOOL"
+        \\rm -f "$APPIMAGE_OUT"
+        \\ARCH="$TOOL_ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" "$APPDIR" "$APPIMAGE_OUT"
+        \\chmod 755 "$APPIMAGE_OUT"
+        \\printf 'AppImage created: %s\n' "$APPIMAGE_OUT"
+        ,
+        "zlang-appimage",
+    });
+    appimage_cmd.addFileArg(exe.getEmittedBin());
+    appimage_cmd.step.dependOn(&exe.step);
+
+    const appimage_step = b.step("appimage", "Build portable AppImage bundle");
+    appimage_step.dependOn(&appimage_cmd.step);
+
     // generating and linking parser (must be first to generate parser.h)
     const bison_cmd = b.addSystemCommand(&[_][]const u8{ "bison", "-d", "-o", "src/parser/parser.c", "src/parser/parser.y" });
 
