@@ -5,6 +5,7 @@ fn makeNoOp(_: *std.Build.Step, _: std.Build.Step.MakeOptions) anyerror!void {}
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const appimage_optimize: std.builtin.OptimizeMode = .ReleaseFast;
     const system_prefix = b.option([]const u8, "system-prefix", "Install root for zlang binary and stdlib") orelse "/usr/local/lib/zlang";
     const system_symlink = b.option([]const u8, "system-symlink", "Symlink path for zlang executable") orelse "/usr/bin/zlang";
 
@@ -19,9 +20,22 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
 
+    const appimage_exe_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = appimage_optimize,
+    });
+
+    const appimage_exe = b.addExecutable(.{
+        .name = "zlang-appimage",
+        .root_module = appimage_exe_mod,
+    });
+
+    const install_exe = b.addInstallArtifact(exe, .{});
+
     const build_step = b.step("build", "Build zlang compiler");
     b.default_step = build_step;
-    build_step.dependOn(&exe.step);
+    build_step.dependOn(&install_exe.step);
 
     const appimage_cmd = b.addSystemCommand(&[_][]const u8{
         "sh",
@@ -150,8 +164,8 @@ pub fn build(b: *std.Build) void {
         ,
         "zlang-appimage",
     });
-    appimage_cmd.addFileArg(exe.getEmittedBin());
-    appimage_cmd.step.dependOn(&exe.step);
+    appimage_cmd.addFileArg(appimage_exe.getEmittedBin());
+    appimage_cmd.step.dependOn(&appimage_exe.step);
 
     const appimage_step = b.step("appimage", "Build portable AppImage bundle");
     appimage_step.dependOn(&appimage_cmd.step);
@@ -192,11 +206,40 @@ pub fn build(b: *std.Build) void {
     exe.step.dependOn(&flex_cmd.step);
     exe.step.dependOn(&bison_cmd.step);
 
+    appimage_exe.addCSourceFile(.{
+        .file = b.path("src/lexer/lexer.c"),
+        .flags = &[_][]const u8{
+            "-std=gnu99",
+            "-I./src/lexer",
+            "-I./src/parser",
+            "-D_GNU_SOURCE",
+            "-Wall",
+            "-Wno-unused-function",
+        },
+    });
+    appimage_exe.addCSourceFile(.{
+        .file = b.path("src/parser/parser.c"),
+        .flags = &[_][]const u8{
+            "-std=gnu99",
+            "-I./src/parser",
+            "-I./src/lexer",
+            "-D_GNU_SOURCE",
+            "-Wall",
+            "-Wno-unused-function",
+            "-Wno-unused-variable",
+        },
+    });
+
+    appimage_exe.linkLibC();
+    appimage_exe.linkSystemLibrary("LLVM-20");
+    appimage_exe.step.dependOn(&flex_cmd.step);
+    appimage_exe.step.dependOn(&bison_cmd.step);
+
     const install_system_cmd = b.addSystemCommand(&[_][]const u8{
         "sh",
         "-c",
         b.fmt(
-            "set -e; if [ \"$(id -u)\" -ne 0 ]; then echo \"Error: zig build install requires root (use sudo).\"; exit 1; fi; install -d \"{0s}\"; rm -f \"{0s}/zlang\"; rm -rf \"{0s}/stdlib\"; install -m 755 \"$1\" \"{0s}/zlang\"; cp -a \"stdlib\" \"{0s}/stdlib\"; ln -sfn \"{0s}/zlang\" \"{1s}\"",
+            "set -e; install -d \"{0s}\"; rm -f \"{0s}/zlang\"; rm -rf \"{0s}/stdlib\"; install -m 755 \"$1\" \"{0s}/zlang\"; cp -a \"stdlib\" \"{0s}/stdlib\"; ln -sfn \"{0s}/zlang\" \"{1s}\"",
             .{ system_prefix, system_symlink },
         ),
         "zlang-install",
@@ -210,7 +253,7 @@ pub fn build(b: *std.Build) void {
         "sh",
         "-c",
         b.fmt(
-            "set -e; if [ \"$(id -u)\" -ne 0 ]; then echo \"Error: zig build uninstall requires root (use sudo).\"; exit 1; fi; if [ -e \"{1s}\" ] && [ ! -L \"{1s}\" ]; then echo \"Refusing to remove non-symlink: {1s}\"; exit 1; fi; rm -f \"{1s}\"; rm -rf \"{0s}\"",
+            "set -e; if [ -e \"{1s}\" ] && [ ! -L \"{1s}\" ]; then echo \"Refusing to remove non-symlink: {1s}\"; exit 1; fi; rm -f \"{1s}\"; rm -rf \"{0s}\"",
             .{ system_prefix, system_symlink },
         ),
     });
