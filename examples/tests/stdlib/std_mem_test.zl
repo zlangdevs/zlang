@@ -1,0 +1,27 @@
+use std
+
+fun main() >> i32 {
+    ptr<u8> a = allocZeroedBytes(16);
+    if (a == null) {
+        return 1;
+    }
+
+    ptr<u8> b = allocBytes(16);
+    if (b == null) {
+        freeMem(a as ptr<void>);
+        return 2;
+    }
+
+    a[0] = 72;
+    a[1] = 105;
+    a[2] = 0;
+
+    copy(b as ptr<void>, a as ptr<void>, 16);
+
+    printf("%s\n", b);
+    printf("%d\n", compare(a as ptr<void>, b as ptr<void>, 16));
+
+    freeMem(a as ptr<void>);
+    freeMem(b as ptr<void>);
+    return 0;
+}
