@@ -1,0 +1,35 @@
+use std.path
+use std.string
+
+fun boolToInt(v: bool) >> i32 {
+    if v {
+        return 1;
+    }
+    return 0;
+}
+
+fun main() >> i32 {
+    arr<u8, 128> joined;
+    join(&joined[0], "/tmp", "folder");
+    @printf("(expected 1):%d\n", boolToInt(strEq(&joined[0], "/tmp/folder")));
+
+    ptr<u8> base = basename("/tmp/folder/file.txt");
+    @printf("(expected 1):%d\n", boolToInt(strEq(base, "file.txt")));
+
+    arr<u8, 128> dir;
+    dirname(&dir[0], "/tmp/folder/file.txt");
+    @printf("(expected 1):%d\n", boolToInt(strEq(&dir[0], "/tmp/folder")));
+
+    ptr<u8> extension = ext("/tmp/folder/file.txt");
+    @printf("(expected 1):%d\n", boolToInt(strEq(extension, "txt")));
+
+    arr<u8, 128> stem_buf;
+    stem(&stem_buf[0], "/tmp/folder/file.txt");
+    @printf("(expected 1):%d\n", boolToInt(strEq(&stem_buf[0], "file")));
+
+    arr<u8, 16> root_dir;
+    dirname(&root_dir[0], "/file");
+    @printf("(expected 1):%d\n", boolToInt(strEq(&root_dir[0], "/")));
+
+    return 0;
+}

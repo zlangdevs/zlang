@@ -1,0 +1,36 @@
+use std.env
+use std.string
+
+fun main() >> i32 {
+    ptr<u8> key = "ZLANG_STDLIB_ENV_TEST";
+
+    unset(key);
+    bool missing_before = has(key);
+    @printf("(expected 0):%d\n", missing_before);
+
+    bool set_ok = set(key, "zlang");
+    @printf("(expected 1):%d\n", set_ok);
+
+    ptr<u8> value = get(key);
+    bool value_ok = value != null && strEq(value, "zlang");
+    @printf("(expected 1):%d\n", value_ok);
+
+    bool set_if_missing_ok = setIfMissing(key, "override");
+    @printf("(expected 1):%d\n", set_if_missing_ok);
+
+    ptr<u8> value_after = get(key);
+    bool unchanged = value_after != null && strEq(value_after, "zlang");
+    @printf("(expected 1):%d\n", unchanged);
+
+    ptr<u8> fallback = getOr("ZLANG_STDLIB_ENV_TEST_MISSING", "fallback");
+    bool fallback_ok = strEq(fallback, "fallback");
+    @printf("(expected 1):%d\n", fallback_ok);
+
+    bool unset_ok = unset(key);
+    @printf("(expected 1):%d\n", unset_ok);
+
+    bool missing_after = has(key);
+    @printf("(expected 0):%d\n", missing_after);
+
+    return 0;
+}

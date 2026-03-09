@@ -1,0 +1,191 @@
+use std.assert
+use std.math
+
+fun main() >> i32 {
+    ?? Trigger automatic -lm linking with float modulo
+    f64 dummy = 1.0 % 0.5;
+    
+    @printf("=== ZLang std.math Comprehensive Test Suite ===\n\n");
+    
+    testStart();
+    
+    ?? ========================================================================
+    ?? Test Constants
+    ?? ========================================================================
+    
+    @printf("Testing mathematical constants...\n");
+    assertEqualFloat(PI, 3.141592653589793, 0.000001, "PI constant");
+    testPass("PI constant");
+    
+    assertEqualFloat(E, 2.718281828459045, 0.000001, "E constant");
+    testPass("E constant");
+    
+    assertEqualFloat(TAU, 6.283185307179586, 0.000001, "TAU constant");
+    testPass("TAU constant");
+    
+    ?? ========================================================================
+    ?? Test Basic Mathematical Functions
+    ?? ========================================================================
+    
+    @printf("\nTesting basic mathematical functions...\n");
+    
+    assertEqualFloat(sqrt(16.0), 4.0, 0.000001, "sqrt(16) = 4");
+    testPass("sqrt function");
+    
+    assertEqualFloat(cbrt(27.0), 3.0, 0.000001, "cbrt(27) = 3");
+    testPass("cbrt function");
+    
+    assertEqualFloat(pow(2.0, 8.0), 256.0, 0.000001, "2^8 = 256");
+    testPass("pow function");
+    
+    assertEqualFloat(exp(1.0), E, 0.000001, "exp(1) = e");
+    testPass("exp function");
+    
+    assertEqualFloat(log(E), 1.0, 0.000001, "log(e) = 1");
+    testPass("log function");
+    
+    assertEqualFloat(log10(100.0), 2.0, 0.000001, "log10(100) = 2");
+    testPass("log10 function");
+    
+    ?? ========================================================================
+    ?? Test Trigonometric Functions
+    ?? ========================================================================
+    
+    @printf("\nTesting trigonometric functions...\n");
+    
+    f64 angle_30 = toRadians(30.0);
+    assertEqualFloat(sin(angle_30), 0.5, 0.000001, "sin(30°) = 0.5");
+    testPass("sin(30°)");
+    
+    f64 angle_60 = toRadians(60.0);
+    assertEqualFloat(cos(angle_60), 0.5, 0.000001, "cos(60°) = 0.5");
+    testPass("cos(60°)");
+    
+    f64 angle_45 = toRadians(45.0);
+    assertEqualFloat(tan(angle_45), 1.0, 0.000001, "tan(45°) = 1.0");
+    testPass("tan(45°)");
+    
+    ?? ========================================================================
+    ?? Test Rounding Functions
+    ?? ========================================================================
+    
+    @printf("\nTesting rounding functions...\n");
+    
+    assertEqualFloat(ceil(3.2), 4.0, 0.000001, "ceil(3.2) = 4");
+    testPass("ceil function");
+    
+    assertEqualFloat(floor(3.8), 3.0, 0.000001, "floor(3.8) = 3");
+    testPass("floor function");
+    
+    assertEqualFloat(round(3.5), 4.0, 0.000001, "round(3.5) = 4");
+    testPass("round function");
+    
+    assertEqualFloat(fabs(-42.5), 42.5, 0.000001, "fabs(-42.5) = 42.5");
+    testPass("fabs function");
+    
+    ?? ========================================================================
+    ?? Test Comparison Functions
+    ?? ========================================================================
+    
+    @printf("\nTesting comparison functions...\n");
+    
+    assertEqualFloat(fmax(3.0, 5.0), 5.0, 0.000001, "fmax(3, 5) = 5");
+    testPass("fmax function");
+    
+    assertEqualFloat(fmin(3.0, 5.0), 3.0, 0.000001, "fmin(3, 5) = 3");
+    testPass("fmin function");
+    
+    assertEqualFloat(hypot(3.0, 4.0), 5.0, 0.000001, "hypot(3, 4) = 5");
+    testPass("hypot function");
+    
+    ?? ========================================================================
+    ?? Test Helper Functions
+    ?? ========================================================================
+    
+    @printf("\nTesting helper functions...\n");
+    
+    assertEqualFloat(square(7.0), 49.0, 0.000001, "square(7) = 49");
+    testPass("square function");
+    
+    assertEqualFloat(cube(4.0), 64.0, 0.000001, "cube(4) = 64");
+    testPass("cube function");
+    
+    assertEqualFloat(toDegrees(PI), 180.0, 0.000001, "toDegrees(PI) = 180");
+    testPass("toDegrees function");
+    
+    assertEqualFloat(distance(0.0, 0.0, 3.0, 4.0), 5.0, 0.000001, "distance(0,0 to 3,4) = 5");
+    testPass("distance function");
+    
+    assertEqualFloat(distance3D(0.0, 0.0, 0.0, 2.0, 3.0, 6.0), 7.0, 0.000001, "distance3D(0,0,0 to 2,3,6) = 7");
+    testPass("distance3D function");
+    
+    assertEqualFloat(lerp(0.0, 10.0, 0.5), 5.0, 0.000001, "lerp(0, 10, 0.5) = 5");
+    testPass("lerp function");
+    
+    assertEqualFloat(clamp(15.0, 0.0, 10.0), 10.0, 0.000001, "clamp(15, 0, 10) = 10");
+    testPass("clamp function");
+    
+    assertEqualFloat(average(10.0, 20.0), 15.0, 0.000001, "average(10, 20) = 15");
+    testPass("average function");
+    
+    assertEqualFloat(geometricMean(4.0, 9.0), 6.0, 0.000001, "geometricMean(4, 9) = 6");
+    testPass("geometricMean function");
+    
+    ?? ========================================================================
+    ?? Test Integer Math Functions
+    ?? ========================================================================
+    
+    @printf("\nTesting integer math functions...\n");
+    
+    i64 fact5 = factorial(5);
+    assertEqual(fact5 as i32, 120, "factorial(5) = 120");
+    testPass("factorial function");
+    
+    assertTrue(isPowerOfTwo(16), "16 is a power of two");
+    testPass("isPowerOfTwo (true case)");
+    
+    assertFalse(isPowerOfTwo(15), "15 is not a power of two");
+    testPass("isPowerOfTwo (false case)");
+    
+    assertEqual(gcd(48, 18), 6, "gcd(48, 18) = 6");
+    testPass("gcd function");
+    
+    assertEqual(lcm(12, 18), 36, "lcm(12, 18) = 36");
+    testPass("lcm function");
+    
+    i64 fib10 = fibonacci(10);
+    assertEqual(fib10 as i32, 55, "fibonacci(10) = 55");
+    testPass("fibonacci function");
+    
+    ?? ========================================================================
+    ?? Test Mathematical Properties
+    ?? ========================================================================
+    
+    @printf("\nTesting mathematical properties...\n");
+    
+    ?? Test Pythagorean theorem with distance function
+    f64 dist = distance(0.0, 0.0, 6.0, 8.0);
+    assertEqualFloat(dist, 10.0, 0.000001, "Pythagorean theorem: distance(0,0 to 6,8) = 10");
+    testPass("Pythagorean theorem verification");
+    
+    ?? Test exponential and logarithm are inverses
+    f64 test_val = 5.5;
+    assertEqualFloat(exp(log(test_val)), test_val, 0.000001, "exp(log(x)) = x");
+    testPass("exp and log are inverses");
+    
+    ?? ========================================================================
+    ?? Summary
+    ?? ========================================================================
+    
+    @printf("\n");
+    i32 result = testSummary();
+    
+    if result == 0 {
+        @printf("\n🎉 All math module tests passed!\n");
+        @printf("The improved std.math module is working perfectly!\n");
+    } else {
+        @printf("\n❌ Some math module tests failed!\n");
+    }
+    
+    return result;
+}

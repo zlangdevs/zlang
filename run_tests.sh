@@ -3,6 +3,7 @@
 TEST_DIR="./examples/tests"
 COMPILE_FAIL_DIR="./examples/tests/compile_fail"
 WARNING_DIR="./examples/tests/warning"
+STDLIB_TEST_DIR="./examples/tests/stdlib"
 APP="./zig-out/bin/zlang"
 OUTPUT_BIN="./output"
 FAILED_COMPILE=0
@@ -16,6 +17,7 @@ declare -a FAILED_COMPILE_FILES
 declare -a FAILED_EXPECTED_FILES
 declare -a FAILED_COMPILE_FAIL_FILES
 declare -a FAILED_WARNING_FILES
+declare -a FAILED_STDLIB_FILES
 declare -a PASSED_FILES
 TABLE_NAME_WIDTH=28
 CLEAR_EACH_TEST="${CLEAR_EACH_TEST:-1}"
@@ -23,6 +25,9 @@ USE_APPIMAGE="${USE_APPIMAGE:-0}"
 APPIMAGE_PATH="${ZLANG_APPIMAGE_PATH:-./zig-out/zlang-$(uname -m).AppImage}"
 APPIMAGE_FORCE_EXTRACT_AND_RUN="${APPIMAGE_FORCE_EXTRACT_AND_RUN:-1}"
 TEST_SELECTOR=""
+STDLIB_TOTAL_TESTS=0
+STDLIB_PASSED_TESTS=0
+FAILED_STDLIB=0
 
 # Set ZSTDPATH to the stdlib directory relative to the project root
 export ZSTDPATH="$(pwd)/stdlib"
@@ -91,7 +96,7 @@ format_table_name() {
 find_file_by_pattern() {
     local pattern="$1"
     local found_files=()
-    local search_dirs=("$TEST_DIR" "$COMPILE_FAIL_DIR" "$WARNING_DIR")
+    local search_dirs=("$TEST_DIR" "$STDLIB_TEST_DIR" "$COMPILE_FAIL_DIR" "$WARNING_DIR")
     
     for dir in "${search_dirs[@]}"; do
         for file in "$dir"/"$pattern"*.zl; do
@@ -410,6 +415,8 @@ if [ -n "$TEST_SELECTOR" ]; then
             test_file="$TEST_SELECTOR"
         elif [ -f "$TEST_DIR/$TEST_SELECTOR" ]; then
             test_file="$TEST_DIR/$TEST_SELECTOR"
+        elif [ -f "$STDLIB_TEST_DIR/$TEST_SELECTOR" ]; then
+            test_file="$STDLIB_TEST_DIR/$TEST_SELECTOR"
         else
             echo "Error: File $TEST_SELECTOR not found"
             exit 1
@@ -548,6 +555,95 @@ for test_file in "$TEST_DIR"/*.zl; do
     fi
 done
 
+if [ -d "$STDLIB_TEST_DIR" ]; then
+    echo ""
+    echo "Running stdlib tests"
+    echo "====================================================="
+
+    for test_file in "$STDLIB_TEST_DIR"/*.zl; do
+        if [ ! -f "$test_file" ]; then
+            continue
+        fi
+
+        TOTAL_TESTS=$((TOTAL_TESTS + 1))
+        STDLIB_TOTAL_TESTS=$((STDLIB_TOTAL_TESTS + 1))
+        filename=$(basename "$test_file")
+
+        math_link=""
+        if [[ "$filename" == *"math"* ]] || grep -q "use std\.math" "$test_file" 2>/dev/null; then
+            math_link="-lm"
+        fi
+
+        maybe_clear_screen
+        echo "Testing stdlib/$filename..."
+        echo "====================================================="
+
+        if run_compiler "$test_file" $math_link 2>/dev/null; then
+            if [ -f "a.out" ]; then
+                BINARY="a.out"
+            elif [ -f "output" ]; then
+                BINARY="output"
+            else
+                echo "❌ stdlib/$filename - FAILED (Binary not found)"
+                FAILED_COMPILE=$((FAILED_COMPILE + 1))
+                FAILED_STDLIB=$((FAILED_STDLIB + 1))
+                FAILED_STDLIB_FILES+=("$filename (COMPILE)")
+                continue
+            fi
+
+            if [[ $COMPILE_ONLY_FILES == *"$filename"* ]]; then
+                echo "✅ stdlib/$filename - PASSED (compile only)"
+                PASSED_TESTS=$((PASSED_TESTS + 1))
+                STDLIB_PASSED_TESTS=$((STDLIB_PASSED_TESTS + 1))
+                rm -f "$BINARY"
+            else
+                chmod +x "$BINARY"
+                OUTPUT=$("./$BINARY" 2>&1)
+                EXIT_CODE=$?
+                EXPECTED_ERRORS=0
+
+                while IFS= read -r line; do
+                    if [[ "$line" =~ expected\ (.+)\):([-+]?[0-9]*\.?[0-9]+) ]]; then
+                        expected_value=${BASH_REMATCH[1]}
+                        actual_value=${BASH_REMATCH[2]}
+
+                        if [ "$expected_value" = "$actual_value" ]; then
+                            echo "✓ Expected $expected_value, got $actual_value"
+                        else
+                            echo "✗ Expected $expected_value, but got $actual_value"
+                            EXPECTED_ERRORS=$((EXPECTED_ERRORS + 1))
+                        fi
+                    fi
+                done <<< "$OUTPUT"
+
+                echo "------------------------------------------------"
+                echo "Program output:"
+                echo "$OUTPUT"
+                echo "------------------------------------------------"
+
+                if [ $EXIT_CODE -eq 0 ] && [ $EXPECTED_ERRORS -eq 0 ]; then
+                    echo "✅ stdlib/$filename - PASSED"
+                    PASSED_TESTS=$((PASSED_TESTS + 1))
+                    STDLIB_PASSED_TESTS=$((STDLIB_PASSED_TESTS + 1))
+                else
+                    echo "❌ stdlib/$filename - FAILED (Exit code: $EXIT_CODE, Expected errors: $EXPECTED_ERRORS)"
+                    FAILED_EXPECTED=$((FAILED_EXPECTED + 1))
+                    FAILED_STDLIB=$((FAILED_STDLIB + 1))
+                    FAILED_STDLIB_FILES+=("$filename (EXPECTED)")
+                fi
+
+                rm -f "$BINARY"
+            fi
+
+        else
+            echo "❌ stdlib/$filename - FAILED (Compilation error)"
+            FAILED_COMPILE=$((FAILED_COMPILE + 1))
+            FAILED_STDLIB=$((FAILED_STDLIB + 1))
+            FAILED_STDLIB_FILES+=("$filename (COMPILE)")
+        fi
+    done
+fi
+
 if [ -d "$COMPILE_FAIL_DIR" ]; then
     for test_file in "$COMPILE_FAIL_DIR"/*.zl; do
         if [ ! -f "$test_file" ]; then
@@ -600,10 +696,19 @@ echo "Failed compilation: $FAILED_COMPILE"
 echo "Failed expected values: $FAILED_EXPECTED"
 echo "Failed compile-fail checks: $FAILED_COMPILE_FAIL"
 echo "Failed warning checks: $FAILED_WARNING"
+echo "Failed stdlib tests: $FAILED_STDLIB"
 echo ""
 echo "┌──────────────────────────────┬──────────────┐"
 echo "│           FILENAME           │   STATUS     │"
 echo "├──────────────────────────────┼──────────────┤"
+
+if [ $STDLIB_TOTAL_TESTS -gt 0 ]; then
+    if [ $FAILED_STDLIB -eq 0 ]; then
+        printf "│ %-28s │ \033[32mPASSED\033[0m       │\n" "stdlib_tests"
+    else
+        printf "│ %-28s │ \033[31mSTDLIB\033[0m       │\n" "stdlib_tests"
+    fi
+fi
 
 for file in "${PASSED_FILES[@]}"; do
     printf "│ %-28s │ \033[32mPASSED\033[0m       │\n" "$(format_table_name "$file")"
@@ -658,6 +763,14 @@ fi
 if [ ${#FAILED_WARNING_FILES[@]} -gt 0 ]; then
     echo "Failed warning checks:"
     for file in "${FAILED_WARNING_FILES[@]}"; do
+        echo "  - $file"
+    done
+    echo ""
+fi
+
+if [ ${#FAILED_STDLIB_FILES[@]} -gt 0 ]; then
+    echo "Failed stdlib tests:"
+    for file in "${FAILED_STDLIB_FILES[@]}"; do
         echo "  - $file"
     done
     echo ""
