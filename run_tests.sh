@@ -21,6 +21,7 @@ declare -a FAILED_STDLIB_FILES
 declare -a PASSED_FILES
 TABLE_NAME_WIDTH=28
 CLEAR_EACH_TEST="${CLEAR_EACH_TEST:-1}"
+CLEAR_BEFORE_SUMMARY="${CLEAR_BEFORE_SUMMARY:-1}"
 USE_APPIMAGE="${USE_APPIMAGE:-0}"
 APPIMAGE_PATH="${ZLANG_APPIMAGE_PATH:-./zig-out/zlang-$(uname -m).AppImage}"
 APPIMAGE_FORCE_EXTRACT_AND_RUN="${APPIMAGE_FORCE_EXTRACT_AND_RUN:-1}"
@@ -686,7 +687,9 @@ if [ -d "$WARNING_DIR" ]; then
     done
 fi
 
-maybe_clear_screen
+if [ "$CLEAR_BEFORE_SUMMARY" = "1" ] && [ -t 1 ]; then
+    clear
+fi
 echo "====================================================="
 echo "TEST SUMMARY"
 echo "====================================================="
