@@ -710,6 +710,665 @@ fn printIndent(indent: u32, is_last: bool, is_root: bool) void {
     }
 }
 
+fn unaryOpText(op: u8) []const u8 {
+    return switch (op) {
+        'I' => "++",
+        'D' => "--",
+        '!' => "!",
+        '~' => "~",
+        '-' => "-",
+        '+' => "+",
+        '&' => "&",
+        '*' => "*",
+        else => "?",
+    };
+}
+
+fn comparisonOpText(op: u8) []const u8 {
+    return switch (op) {
+        '=' => "==",
+        '!' => "!=",
+        '<' => "<",
+        '>' => ">",
+        'L' => "<=",
+        'G' => ">=",
+        else => "?",
+    };
+}
+
+fn binaryOpText(op: u8) []const u8 {
+    return switch (op) {
+        '|' => "||",
+        '&' => "&&",
+        '$' => "|",
+        '^' => "^",
+        'A' => "&",
+        '<' => "<<",
+        '>' => ">>",
+        '+' => "+",
+        '-' => "-",
+        '*' => "*",
+        '/' => "/",
+        '%' => "%",
+        else => "?",
+    };
+}
+
+fn assignmentOpText(op: u8) []const u8 {
+    return switch (op) {
+        '$' => "|",
+        'A' => "&",
+        '<' => "<<",
+        '>' => ">>",
+        '+' => "+",
+        '-' => "-",
+        '*' => "*",
+        '/' => "/",
+        '%' => "%",
+        '^' => "^",
+        '|' => "|",
+        '&' => "&",
+        else => "?",
+    };
+}
+
+fn writeJsonIndent(writer: anytype, level: usize) !void {
+    var i: usize = 0;
+    while (i < level) : (i += 1) {
+        try writer.writeAll("  ");
+    }
+}
+
+fn writeJsonFieldPrefix(writer: anytype, level: usize, first: *bool) !void {
+    if (!first.*) {
+        try writer.writeAll(",\n");
+    }
+    try writeJsonIndent(writer, level);
+    first.* = false;
+}
+
+fn writeJsonStringField(writer: anytype, level: usize, first: *bool, key: []const u8, value: []const u8) !void {
+    try writeJsonFieldPrefix(writer, level, first);
+    try writer.print("\"{s}\": ", .{key});
+    try std.json.Stringify.value(value, .{}, writer);
+}
+
+fn writeJsonBoolField(writer: anytype, level: usize, first: *bool, key: []const u8, value: bool) !void {
+    try writeJsonFieldPrefix(writer, level, first);
+    try writer.print("\"{s}\": {s}", .{ key, if (value) "true" else "false" });
+}
+
+fn writeJsonIntField(writer: anytype, level: usize, first: *bool, key: []const u8, value: i64) !void {
+    try writeJsonFieldPrefix(writer, level, first);
+    try writer.print("\"{s}\": {d}", .{ key, value });
+}
+
+fn writeJsonUsizeField(writer: anytype, level: usize, first: *bool, key: []const u8, value: usize) !void {
+    try writeJsonFieldPrefix(writer, level, first);
+    try writer.print("\"{s}\": {}", .{ key, value });
+}
+
+fn writeJsonOptionalStringField(writer: anytype, level: usize, first: *bool, key: []const u8, value: ?[]const u8) !void {
+    try writeJsonFieldPrefix(writer, level, first);
+    try writer.print("\"{s}\": ", .{key});
+    if (value) |v| {
+        try std.json.Stringify.value(v, .{}, writer);
+    } else {
+        try writer.writeAll("null");
+    }
+}
+
+fn writeJsonParametersField(writer: anytype, level: usize, first: *bool, parameters: std.ArrayList(Parameter)) !void {
+    try writeJsonFieldPrefix(writer, level, first);
+    try writer.writeAll("\"parameters\": [");
+    if (parameters.items.len > 0) {
+        for (parameters.items, 0..) |param, i| {
+            if (i == 0) {
+                try writer.writeAll("\n");
+            } else {
+                try writer.writeAll(",\n");
+            }
+            try writeJsonIndent(writer, level + 1);
+            try writer.writeAll("{");
+            try writer.writeAll("\"name\": ");
+            try std.json.Stringify.value(param.name, .{}, writer);
+            try writer.writeAll(", \"type\": ");
+            try std.json.Stringify.value(param.type_name, .{}, writer);
+            try writer.writeAll("}");
+        }
+        try writer.writeAll("\n");
+        try writeJsonIndent(writer, level);
+    }
+    try writer.writeAll("]");
+}
+
+fn writeJsonEnumValuesField(writer: anytype, level: usize, first: *bool, values: std.ArrayList(EnumValue)) !void {
+    try writeJsonFieldPrefix(writer, level, first);
+    try writer.writeAll("\"enum_values\": [");
+    if (values.items.len > 0) {
+        for (values.items, 0..) |value, i| {
+            if (i == 0) {
+                try writer.writeAll("\n");
+            } else {
+                try writer.writeAll(",\n");
+            }
+            try writeJsonIndent(writer, level + 1);
+            try writer.writeAll("{");
+            try writer.writeAll("\"name\": ");
+            try std.json.Stringify.value(value.name, .{}, writer);
+            try writer.writeAll(", \"has_value\": ");
+            try writer.writeAll(if (value.value != null) "true" else "false");
+            try writer.writeAll("}");
+        }
+        try writer.writeAll("\n");
+        try writeJsonIndent(writer, level);
+    }
+    try writer.writeAll("]");
+}
+
+fn writeJsonStructFieldsField(writer: anytype, level: usize, first: *bool, fields: std.ArrayList(StructField)) !void {
+    try writeJsonFieldPrefix(writer, level, first);
+    try writer.writeAll("\"fields\": [");
+    if (fields.items.len > 0) {
+        for (fields.items, 0..) |field, i| {
+            if (i == 0) {
+                try writer.writeAll("\n");
+            } else {
+                try writer.writeAll(",\n");
+            }
+            try writeJsonIndent(writer, level + 1);
+            try writer.writeAll("{");
+            try writer.writeAll("\"name\": ");
+            try std.json.Stringify.value(field.name, .{}, writer);
+            try writer.writeAll(", \"type\": ");
+            try std.json.Stringify.value(field.type_name, .{}, writer);
+            try writer.writeAll(", \"has_default\": ");
+            try writer.writeAll(if (field.default_value != null) "true" else "false");
+            try writer.writeAll("}");
+        }
+        try writer.writeAll("\n");
+        try writeJsonIndent(writer, level);
+    }
+    try writer.writeAll("]");
+}
+
+fn writeJsonStructFieldValuesField(writer: anytype, level: usize, first: *bool, field_values: std.ArrayList(StructFieldValue)) !void {
+    try writeJsonFieldPrefix(writer, level, first);
+    try writer.writeAll("\"field_values\": [");
+    if (field_values.items.len > 0) {
+        for (field_values.items, 0..) |field_val, i| {
+            if (i == 0) {
+                try writer.writeAll("\n");
+            } else {
+                try writer.writeAll(",\n");
+            }
+            try writeJsonIndent(writer, level + 1);
+            try writer.writeAll("{");
+            try writer.writeAll("\"field\": ");
+            if (field_val.field_name) |name| {
+                try std.json.Stringify.value(name, .{}, writer);
+            } else {
+                try writer.writeAll("null");
+            }
+            try writer.writeAll("}");
+        }
+        try writer.writeAll("\n");
+        try writeJsonIndent(writer, level);
+    }
+    try writer.writeAll("]");
+}
+
+fn writeJsonHandlersField(writer: anytype, level: usize, first: *bool, handlers: std.ArrayList(ErrorHandler)) !void {
+    try writeJsonFieldPrefix(writer, level, first);
+    try writer.writeAll("\"handlers\": [");
+    if (handlers.items.len > 0) {
+        for (handlers.items, 0..) |handler, i| {
+            if (i == 0) {
+                try writer.writeAll("\n");
+            } else {
+                try writer.writeAll(",\n");
+            }
+            try writeJsonIndent(writer, level + 1);
+            try writer.writeAll("{");
+            try writer.writeAll("\"kind\": ");
+            try std.json.Stringify.value(switch (handler.kind) {
+                .send => "send",
+                .solicit => "solicit",
+            }, .{}, writer);
+            try writer.writeAll(", \"error_name\": ");
+            if (handler.error_name) |name| {
+                try std.json.Stringify.value(name, .{}, writer);
+            } else {
+                try writer.writeAll("null");
+            }
+            try writer.writeAll(", \"error_code\": ");
+            if (handler.error_code) |code| {
+                try writer.print("{d}", .{code});
+            } else {
+                try writer.writeAll("null");
+            }
+            try writer.writeAll(", \"body_count\": ");
+            try writer.print("{}", .{handler.body.items.len});
+            try writer.writeAll("}");
+        }
+        try writer.writeAll("\n");
+        try writeJsonIndent(writer, level);
+    }
+    try writer.writeAll("]");
+}
+
+fn writeJsonMatchCasesField(writer: anytype, level: usize, first: *bool, cases: std.ArrayList(MatchCase)) !void {
+    try writeJsonFieldPrefix(writer, level, first);
+    try writer.writeAll("\"cases\": [");
+    if (cases.items.len > 0) {
+        for (cases.items, 0..) |case, i| {
+            if (i == 0) {
+                try writer.writeAll("\n");
+            } else {
+                try writer.writeAll(",\n");
+            }
+            try writeJsonIndent(writer, level + 1);
+            try writer.writeAll("{");
+            try writer.writeAll("\"value_count\": ");
+            try writer.print("{}", .{case.values.items.len});
+            try writer.writeAll(", \"body_count\": ");
+            try writer.print("{}", .{case.body.items.len});
+            try writer.writeAll("}");
+        }
+        try writer.writeAll("\n");
+        try writeJsonIndent(writer, level);
+    }
+    try writer.writeAll("]");
+}
+
+fn appendJsonChild(writer: anytype, child: *Node, level: usize, first: *bool) anyerror!void {
+    if (first.*) {
+        first.* = false;
+        try writer.writeAll("\n");
+    } else {
+        try writer.writeAll(",\n");
+    }
+    try writeJsonIndent(writer, level);
+    try writeASTNodeJson(writer, child, level);
+}
+
+fn writeASTNodeJson(writer: anytype, node: *Node, level: usize) anyerror!void {
+    try writer.writeAll("{");
+
+    var first_field = true;
+    try writeJsonStringField(writer, level + 1, &first_field, "type", @tagName(node.data));
+    try writeJsonUsizeField(writer, level + 1, &first_field, "line", node.line);
+    try writeJsonUsizeField(writer, level + 1, &first_field, "column", node.column);
+
+    switch (node.data) {
+        .function => |func| {
+            try writeJsonStringField(writer, level + 1, &first_field, "name", func.name);
+            try writeJsonStringField(writer, level + 1, &first_field, "return_type", func.return_type);
+            try writeJsonParametersField(writer, level + 1, &first_field, func.parameters);
+        },
+        .assignment => {},
+        .compound_assignment => |cas| {
+            try writeJsonStringField(writer, level + 1, &first_field, "op", assignmentOpText(cas.op));
+        },
+        .var_decl => |decl| {
+            try writeJsonStringField(writer, level + 1, &first_field, "name", decl.name);
+            try writeJsonStringField(writer, level + 1, &first_field, "type_name", decl.type_name);
+            try writeJsonBoolField(writer, level + 1, &first_field, "is_const", decl.is_const);
+        },
+        .function_call => |call| {
+            try writeJsonStringField(writer, level + 1, &first_field, "name", call.name);
+            try writeJsonBoolField(writer, level + 1, &first_field, "is_libc", call.is_libc);
+        },
+        .method_call => |method| {
+            try writeJsonStringField(writer, level + 1, &first_field, "method_name", method.method_name);
+        },
+        .return_stmt => {},
+        .defer_stmt => {},
+        .identifier => |ident| {
+            try writeJsonStringField(writer, level + 1, &first_field, "name", ident.name);
+        },
+        .unary_op => |unary_op| {
+            try writeJsonStringField(writer, level + 1, &first_field, "op", unaryOpText(unary_op.op));
+        },
+        .float_literal => |float_lit| {
+            try writeJsonStringField(writer, level + 1, &first_field, "value", float_lit.value);
+        },
+        .number_literal => |num_lit| {
+            try writeJsonStringField(writer, level + 1, &first_field, "value", num_lit.value);
+        },
+        .char_literal => |char_lit| {
+            try writeJsonIntField(writer, level + 1, &first_field, "value", char_lit.value);
+        },
+        .string_literal => |str_lit| {
+            try writeJsonStringField(writer, level + 1, &first_field, "value", str_lit.value);
+        },
+        .bool_literal => |bool_lit| {
+            try writeJsonBoolField(writer, level + 1, &first_field, "value", bool_lit.value);
+        },
+        .null_literal => {},
+        .binary_op => |binary_op| {
+            try writeJsonStringField(writer, level + 1, &first_field, "op", binaryOpText(binary_op.op));
+        },
+        .brainfuck => |bf| {
+            try writeJsonStringField(writer, level + 1, &first_field, "code", bf.code);
+        },
+        .comparison => |comp| {
+            try writeJsonStringField(writer, level + 1, &first_field, "op", comparisonOpText(comp.op));
+        },
+        .if_stmt => {},
+        .for_stmt => |for_stmt| {
+            try writeJsonBoolField(writer, level + 1, &first_field, "has_condition", for_stmt.condition != null);
+        },
+        .break_stmt => {},
+        .continue_stmt => {},
+        .goto_stmt => |goto_stmt| {
+            try writeJsonStringField(writer, level + 1, &first_field, "label", goto_stmt.label);
+        },
+        .label_stmt => |label_stmt| {
+            try writeJsonStringField(writer, level + 1, &first_field, "label", label_stmt.label);
+        },
+        .c_for_stmt => |c_for| {
+            try writeJsonBoolField(writer, level + 1, &first_field, "has_init", c_for.init != null);
+            try writeJsonBoolField(writer, level + 1, &first_field, "has_condition", c_for.condition != null);
+            try writeJsonBoolField(writer, level + 1, &first_field, "has_increment", c_for.increment != null);
+        },
+        .array_initializer => |arr_init| {
+            try writeJsonUsizeField(writer, level + 1, &first_field, "elements", arr_init.elements.items.len);
+        },
+        .array_index => {},
+        .array_assignment => {},
+        .array_compound_assignment => |arr_cass| {
+            try writeJsonStringField(writer, level + 1, &first_field, "op", assignmentOpText(arr_cass.op));
+        },
+        .simd_initializer => |simd_init| {
+            try writeJsonUsizeField(writer, level + 1, &first_field, "elements", simd_init.elements.items.len);
+        },
+        .simd_index => {},
+        .simd_assignment => {},
+        .simd_compound_assignment => |simd_cass| {
+            try writeJsonStringField(writer, level + 1, &first_field, "op", assignmentOpText(simd_cass.op));
+        },
+        .simd_method_call => |simd_method| {
+            try writeJsonStringField(writer, level + 1, &first_field, "method_name", simd_method.method_name);
+        },
+        .c_function_decl => |c_func| {
+            try writeJsonStringField(writer, level + 1, &first_field, "name", c_func.name);
+            try writeJsonStringField(writer, level + 1, &first_field, "return_type", c_func.return_type);
+            try writeJsonBoolField(writer, level + 1, &first_field, "is_wrapped", c_func.is_wrapped);
+            try writeJsonParametersField(writer, level + 1, &first_field, c_func.parameters);
+        },
+        .use_stmt => |use_stmt| {
+            try writeJsonStringField(writer, level + 1, &first_field, "module_path", use_stmt.module_path);
+        },
+        .enum_decl => |enum_decl| {
+            try writeJsonStringField(writer, level + 1, &first_field, "name", enum_decl.name);
+            try writeJsonEnumValuesField(writer, level + 1, &first_field, enum_decl.values);
+        },
+        .struct_decl => |struct_decl| {
+            try writeJsonStringField(writer, level + 1, &first_field, "name", struct_decl.name);
+            try writeJsonBoolField(writer, level + 1, &first_field, "is_union", struct_decl.is_union);
+            try writeJsonStructFieldsField(writer, level + 1, &first_field, struct_decl.fields);
+        },
+        .struct_initializer => |struct_init| {
+            try writeJsonStringField(writer, level + 1, &first_field, "struct_name", struct_init.struct_name);
+            try writeJsonStructFieldValuesField(writer, level + 1, &first_field, struct_init.field_values);
+        },
+        .qualified_identifier => |qual_id| {
+            try writeJsonStringField(writer, level + 1, &first_field, "field", qual_id.field);
+        },
+        .cast => |cast_node| {
+            try writeJsonBoolField(writer, level + 1, &first_field, "auto", cast_node.auto);
+            try writeJsonOptionalStringField(writer, level + 1, &first_field, "type_name", cast_node.type_name);
+        },
+        .expression_block => |block| {
+            try writeJsonStringField(writer, level + 1, &first_field, "type_name", block.type_name);
+        },
+        .match_stmt => |match_stmt| {
+            try writeJsonMatchCasesField(writer, level + 1, &first_field, match_stmt.cases);
+        },
+        .error_decl => |error_decl| {
+            try writeJsonStringField(writer, level + 1, &first_field, "name", error_decl.name);
+            try writeJsonStringField(writer, level + 1, &first_field, "code_kind", switch (error_decl.code_kind) {
+                .explicit => "explicit",
+                .alias => "alias",
+                .auto => "auto",
+            });
+            if (error_decl.code_kind == .explicit) {
+                try writeJsonIntField(writer, level + 1, &first_field, "explicit_code", error_decl.explicit_code);
+            }
+            try writeJsonOptionalStringField(writer, level + 1, &first_field, "alias_name", error_decl.alias_name);
+        },
+        .send_stmt => |send_stmt| {
+            try writeJsonStringField(writer, level + 1, &first_field, "error_name", send_stmt.error_name);
+        },
+        .solicit_stmt => |solicit_stmt| {
+            try writeJsonStringField(writer, level + 1, &first_field, "error_name", solicit_stmt.error_name);
+        },
+        .handled_call_stmt => |handled_call| {
+            try writeJsonHandlersField(writer, level + 1, &first_field, handled_call.handlers);
+        },
+        .program => {},
+    }
+
+    try writeJsonFieldPrefix(writer, level + 1, &first_field);
+    try writer.writeAll("\"children\": [");
+
+    var first_child = true;
+    switch (node.data) {
+        .program => |prog| {
+            for (prog.globals.items) |glob| {
+                try appendJsonChild(writer, glob, level + 2, &first_child);
+            }
+            for (prog.functions.items) |func| {
+                try appendJsonChild(writer, func, level + 2, &first_child);
+            }
+        },
+        .function => |func| {
+            for (func.body.items) |stmt| {
+                try appendJsonChild(writer, stmt, level + 2, &first_child);
+            }
+            if (func.guard) |guard| {
+                try appendJsonChild(writer, guard, level + 2, &first_child);
+            }
+        },
+        .assignment => |as| {
+            try appendJsonChild(writer, as.target, level + 2, &first_child);
+            try appendJsonChild(writer, as.value, level + 2, &first_child);
+        },
+        .compound_assignment => |cas| {
+            try appendJsonChild(writer, cas.target, level + 2, &first_child);
+            try appendJsonChild(writer, cas.value, level + 2, &first_child);
+        },
+        .var_decl => |decl| {
+            if (decl.initializer) |init| {
+                try appendJsonChild(writer, init, level + 2, &first_child);
+            }
+        },
+        .function_call => |call| {
+            for (call.args.items) |arg| {
+                try appendJsonChild(writer, arg, level + 2, &first_child);
+            }
+        },
+        .method_call => |method| {
+            try appendJsonChild(writer, method.object, level + 2, &first_child);
+            for (method.args.items) |arg| {
+                try appendJsonChild(writer, arg, level + 2, &first_child);
+            }
+        },
+        .return_stmt => |ret| {
+            if (ret.expression) |expr| {
+                try appendJsonChild(writer, expr, level + 2, &first_child);
+            }
+        },
+        .defer_stmt => |defer_stmt| {
+            try appendJsonChild(writer, defer_stmt.expression, level + 2, &first_child);
+        },
+        .identifier => {},
+        .unary_op => |unary_op| {
+            try appendJsonChild(writer, unary_op.operand, level + 2, &first_child);
+        },
+        .float_literal => {},
+        .number_literal => {},
+        .char_literal => {},
+        .string_literal => {},
+        .bool_literal => {},
+        .null_literal => {},
+        .binary_op => |binary_op| {
+            try appendJsonChild(writer, binary_op.lhs, level + 2, &first_child);
+            try appendJsonChild(writer, binary_op.rhs, level + 2, &first_child);
+        },
+        .brainfuck => {},
+        .comparison => |comp| {
+            try appendJsonChild(writer, comp.lhs, level + 2, &first_child);
+            try appendJsonChild(writer, comp.rhs, level + 2, &first_child);
+        },
+        .if_stmt => |if_stmt| {
+            try appendJsonChild(writer, if_stmt.condition, level + 2, &first_child);
+            for (if_stmt.then_body.items) |stmt| {
+                try appendJsonChild(writer, stmt, level + 2, &first_child);
+            }
+            if (if_stmt.else_body) |else_body| {
+                for (else_body.items) |stmt| {
+                    try appendJsonChild(writer, stmt, level + 2, &first_child);
+                }
+            }
+        },
+        .for_stmt => |for_stmt| {
+            if (for_stmt.condition) |cond| {
+                try appendJsonChild(writer, cond, level + 2, &first_child);
+            }
+            for (for_stmt.body.items) |stmt| {
+                try appendJsonChild(writer, stmt, level + 2, &first_child);
+            }
+        },
+        .break_stmt => {},
+        .continue_stmt => {},
+        .goto_stmt => {},
+        .label_stmt => {},
+        .c_for_stmt => |c_for| {
+            if (c_for.init) |init| {
+                try appendJsonChild(writer, init, level + 2, &first_child);
+            }
+            if (c_for.condition) |cond| {
+                try appendJsonChild(writer, cond, level + 2, &first_child);
+            }
+            if (c_for.increment) |inc| {
+                try appendJsonChild(writer, inc, level + 2, &first_child);
+            }
+            for (c_for.body.items) |stmt| {
+                try appendJsonChild(writer, stmt, level + 2, &first_child);
+            }
+        },
+        .array_initializer => |arr_init| {
+            for (arr_init.elements.items) |element| {
+                try appendJsonChild(writer, element, level + 2, &first_child);
+            }
+        },
+        .array_index => |arr_idx| {
+            try appendJsonChild(writer, arr_idx.array, level + 2, &first_child);
+            try appendJsonChild(writer, arr_idx.index, level + 2, &first_child);
+        },
+        .array_assignment => |arr_ass| {
+            try appendJsonChild(writer, arr_ass.array, level + 2, &first_child);
+            try appendJsonChild(writer, arr_ass.index, level + 2, &first_child);
+            try appendJsonChild(writer, arr_ass.value, level + 2, &first_child);
+        },
+        .array_compound_assignment => |arr_cass| {
+            try appendJsonChild(writer, arr_cass.array, level + 2, &first_child);
+            try appendJsonChild(writer, arr_cass.index, level + 2, &first_child);
+            try appendJsonChild(writer, arr_cass.value, level + 2, &first_child);
+        },
+        .simd_initializer => |simd_init| {
+            for (simd_init.elements.items) |element| {
+                try appendJsonChild(writer, element, level + 2, &first_child);
+            }
+        },
+        .simd_index => |simd_idx| {
+            try appendJsonChild(writer, simd_idx.simd, level + 2, &first_child);
+            try appendJsonChild(writer, simd_idx.index, level + 2, &first_child);
+        },
+        .simd_assignment => |simd_ass| {
+            try appendJsonChild(writer, simd_ass.simd, level + 2, &first_child);
+            try appendJsonChild(writer, simd_ass.index, level + 2, &first_child);
+            try appendJsonChild(writer, simd_ass.value, level + 2, &first_child);
+        },
+        .simd_compound_assignment => |simd_cass| {
+            try appendJsonChild(writer, simd_cass.simd, level + 2, &first_child);
+            try appendJsonChild(writer, simd_cass.index, level + 2, &first_child);
+            try appendJsonChild(writer, simd_cass.value, level + 2, &first_child);
+        },
+        .simd_method_call => |simd_method| {
+            try appendJsonChild(writer, simd_method.simd, level + 2, &first_child);
+            for (simd_method.args.items) |arg| {
+                try appendJsonChild(writer, arg, level + 2, &first_child);
+            }
+        },
+        .c_function_decl => {},
+        .use_stmt => {},
+        .enum_decl => |enum_decl| {
+            for (enum_decl.values.items) |value| {
+                if (value.value) |val| {
+                    try appendJsonChild(writer, val, level + 2, &first_child);
+                }
+            }
+        },
+        .struct_decl => |struct_decl| {
+            for (struct_decl.fields.items) |field| {
+                if (field.default_value) |default_val| {
+                    try appendJsonChild(writer, default_val, level + 2, &first_child);
+                }
+            }
+        },
+        .struct_initializer => |struct_init| {
+            for (struct_init.field_values.items) |field_val| {
+                try appendJsonChild(writer, field_val.value, level + 2, &first_child);
+            }
+        },
+        .qualified_identifier => |qual_id| {
+            try appendJsonChild(writer, qual_id.base, level + 2, &first_child);
+        },
+        .cast => |cast_node| {
+            try appendJsonChild(writer, cast_node.expr, level + 2, &first_child);
+        },
+        .expression_block => |block| {
+            for (block.statements.items) |stmt| {
+                try appendJsonChild(writer, stmt, level + 2, &first_child);
+            }
+            try appendJsonChild(writer, block.result, level + 2, &first_child);
+        },
+        .match_stmt => |match_stmt| {
+            try appendJsonChild(writer, match_stmt.condition, level + 2, &first_child);
+            for (match_stmt.cases.items) |case| {
+                for (case.values.items) |val| {
+                    try appendJsonChild(writer, val, level + 2, &first_child);
+                }
+                for (case.body.items) |stmt| {
+                    try appendJsonChild(writer, stmt, level + 2, &first_child);
+                }
+            }
+        },
+        .error_decl => {},
+        .send_stmt => {},
+        .solicit_stmt => {},
+        .handled_call_stmt => |handled_call| {
+            try appendJsonChild(writer, handled_call.call, level + 2, &first_child);
+            for (handled_call.handlers.items) |handler| {
+                for (handler.body.items) |stmt| {
+                    try appendJsonChild(writer, stmt, level + 2, &first_child);
+                }
+            }
+        },
+    }
+
+    if (!first_child) {
+        try writer.writeAll("\n");
+        try writeJsonIndent(writer, level + 1);
+    }
+    try writer.writeAll("]\n");
+    try writeJsonIndent(writer, level);
+    try writer.writeAll("}");
+}
+
 pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
     printIndent(indent, is_last, is_root);
 
@@ -798,16 +1457,16 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             printAST(defer_stmt.expression, indent + 1, true, false);
         },
         .comparison => |comp| {
-            std.debug.print("⚖️ Comparison: \x1b[35m{c}\x1b[0m\n", .{comp.op});
+            std.debug.print("⚖️ Comparison: \x1b[35m{s}\x1b[0m\n", .{comparisonOpText(comp.op)});
             printAST(comp.lhs, indent + 1, false, false);
             printAST(comp.rhs, indent + 1, true, false);
         },
         .unary_op => |unary_op| {
-            std.debug.print("📐 UnaryOp: \x1b[35m{c}\x1b[0m\n", .{unary_op.op});
+            std.debug.print("📐 UnaryOp: \x1b[35m{s}\x1b[0m\n", .{unaryOpText(unary_op.op)});
             printAST(unary_op.operand, indent + 1, true, false);
         },
         .binary_op => |binary_op| {
-            std.debug.print("🧮 BinaryOp: \x1b[35m{c}\x1b[0m\n", .{binary_op.op});
+            std.debug.print("🧮 BinaryOp: \x1b[35m{s}\x1b[0m\n", .{binaryOpText(binary_op.op)});
             printAST(binary_op.lhs, indent + 1, false, false);
             printAST(binary_op.rhs, indent + 1, true, false);
         },
@@ -961,30 +1620,35 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         },
         .array_index => |arr_idx| {
             std.debug.print("🔍 Array Index:\n", .{});
-            printAST(arr_idx.array, indent + 1, false, false);
+            printIndent(indent + 1, false, false);
+            std.debug.print("Array:\n", .{});
+            printAST(arr_idx.array, indent + 2, false, false);
             printIndent(indent + 1, true, false);
-            std.debug.print("[\n", .{});
+            std.debug.print("Index:\n", .{});
             printAST(arr_idx.index, indent + 2, true, false);
-            std.debug.print("    ]\n", .{});
         },
         .array_assignment => |arr_ass| {
             std.debug.print("🔄 Array Assignment:\n", .{});
-            printAST(arr_ass.array, indent + 1, false, false);
             printIndent(indent + 1, false, false);
-            std.debug.print("[\n", .{});
+            std.debug.print("Array:\n", .{});
+            printAST(arr_ass.array, indent + 2, false, false);
+            printIndent(indent + 1, false, false);
+            std.debug.print("Index:\n", .{});
             printAST(arr_ass.index, indent + 2, false, false);
             printIndent(indent + 1, true, false);
-            std.debug.print("] = \n", .{});
+            std.debug.print("Value:\n", .{});
             printAST(arr_ass.value, indent + 2, true, false);
         },
         .array_compound_assignment => |arr_cass| {
             std.debug.print("🔄 Array Compound Assignment: \x1b[35m{c}= \x1b[0m\n", .{arr_cass.op});
-            printAST(arr_cass.array, indent + 1, false, false);
             printIndent(indent + 1, false, false);
-            std.debug.print("[\n", .{});
+            std.debug.print("Array:\n", .{});
+            printAST(arr_cass.array, indent + 2, false, false);
+            printIndent(indent + 1, false, false);
+            std.debug.print("Index:\n", .{});
             printAST(arr_cass.index, indent + 2, false, false);
             printIndent(indent + 1, true, false);
-            std.debug.print("] and \n", .{});
+            std.debug.print("Value:\n", .{});
             printAST(arr_cass.value, indent + 2, true, false);
         },
         .simd_initializer => |simd_init| {
@@ -996,30 +1660,35 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         },
         .simd_index => |simd_idx| {
             std.debug.print("⚡ SIMD Index:\n", .{});
-            printAST(simd_idx.simd, indent + 1, false, false);
+            printIndent(indent + 1, false, false);
+            std.debug.print("SIMD:\n", .{});
+            printAST(simd_idx.simd, indent + 2, false, false);
             printIndent(indent + 1, true, false);
-            std.debug.print("[\n", .{});
+            std.debug.print("Index:\n", .{});
             printAST(simd_idx.index, indent + 2, true, false);
-            std.debug.print("    ]\n", .{});
         },
         .simd_assignment => |simd_ass| {
             std.debug.print("⚡ SIMD Assignment:\n", .{});
-            printAST(simd_ass.simd, indent + 1, false, false);
             printIndent(indent + 1, false, false);
-            std.debug.print("[\n", .{});
+            std.debug.print("SIMD:\n", .{});
+            printAST(simd_ass.simd, indent + 2, false, false);
+            printIndent(indent + 1, false, false);
+            std.debug.print("Index:\n", .{});
             printAST(simd_ass.index, indent + 2, false, false);
             printIndent(indent + 1, true, false);
-            std.debug.print("] = \n", .{});
+            std.debug.print("Value:\n", .{});
             printAST(simd_ass.value, indent + 2, true, false);
         },
         .simd_compound_assignment => |simd_cass| {
             std.debug.print("⚡ SIMD Compound Assignment: \x1b[35m{c}= \x1b[0m\n", .{simd_cass.op});
-            printAST(simd_cass.simd, indent + 1, false, false);
             printIndent(indent + 1, false, false);
-            std.debug.print("[\n", .{});
+            std.debug.print("SIMD:\n", .{});
+            printAST(simd_cass.simd, indent + 2, false, false);
+            printIndent(indent + 1, false, false);
+            std.debug.print("Index:\n", .{});
             printAST(simd_cass.index, indent + 2, false, false);
             printIndent(indent + 1, true, false);
-            std.debug.print("] and \n", .{});
+            std.debug.print("Value:\n", .{});
             printAST(simd_cass.value, indent + 2, true, false);
         },
         .simd_method_call => |simd_method| {
@@ -1148,8 +1817,12 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
 }
 
 pub fn printASTTree(root: *Node) void {
-    std.debug.print("\n\x1b[1m🌳 Abstract Syntax Tree\x1b[0m\n", .{});
-    std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
-    printAST(root, 0, true, true);
-    std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n", .{});
+    var buffer: [8192]u8 = undefined;
+    var stdout_file_writer = std.fs.File.stdout().writer(&buffer);
+    writeASTNodeJson(&stdout_file_writer.interface, root, 0) catch |err| {
+        std.debug.print("Failed to write AST JSON: {any}\n", .{err});
+        return;
+    };
+    stdout_file_writer.interface.writeAll("\n") catch {};
+    stdout_file_writer.interface.flush() catch {};
 }
