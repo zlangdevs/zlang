@@ -44,5 +44,11 @@ fun main() >> i32 {
         @printf("strstr result: %s\n", found_str);
     }
 
+    i32 n1 = atoi("-12345");
+    @printf("atoi('-12345') expected -12345):%d\n", n1);
+
+    ptr<u8> s_num = itoa(67890);
+    @printf("itoa(67890) expected 67890):%s\n", s_num);
+
     return 0;
 }
