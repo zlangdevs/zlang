@@ -640,6 +640,387 @@ fn hasModuleByName(modules: []const ModuleInfo, module_name: []const u8) bool {
     return false;
 }
 
+const UseSpec = struct {
+    module_path: []const u8,
+    alias_name: ?[]const u8,
+    alias_is_underscore: bool,
+};
+
+fn moduleHasFunctionByName(module: *const ModuleInfo, function_name: []const u8) bool {
+    if (module.ast.data != .program) return false;
+    const prog = module.ast.data.program;
+    for (prog.functions.items) |node| {
+        switch (node.data) {
+            .function => |func| {
+                if (std.mem.eql(u8, func.name, function_name)) return true;
+            },
+            .c_function_decl => |decl| {
+                if (std.mem.eql(u8, decl.name, function_name)) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn collectUseSpecs(module: *const ModuleInfo, use_specs: *std.ArrayList(UseSpec), alloc: std.mem.Allocator) !void {
+    if (module.ast.data != .program) return;
+    const prog = module.ast.data.program;
+    for (prog.functions.items) |node| {
+        if (node.data != .use_stmt) continue;
+        const use_stmt = node.data.use_stmt;
+        try use_specs.append(alloc, .{
+            .module_path = use_stmt.module_path,
+            .alias_name = use_stmt.alias_name,
+            .alias_is_underscore = use_stmt.alias_is_underscore,
+        });
+    }
+}
+
+fn isModuleHiddenByAlias(module_name: []const u8, use_specs: []const UseSpec) bool {
+    for (use_specs) |spec| {
+        if (spec.alias_name == null and !spec.alias_is_underscore) continue;
+        if (moduleMatchesImport(spec.module_path, module_name)) return true;
+    }
+    return false;
+}
+
+fn isModuleVisibleUnprefixed(module_name: []const u8, use_specs: []const UseSpec) bool {
+    var visible_plain = false;
+    for (use_specs) |spec| {
+        if (spec.alias_name != null or spec.alias_is_underscore) continue;
+        if (moduleMatchesImport(spec.module_path, module_name)) {
+            visible_plain = true;
+            break;
+        }
+    }
+    if (!visible_plain) return false;
+    return !isModuleHiddenByAlias(module_name, use_specs);
+}
+
+fn hasFunctionInReachableImport(modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), import_path: []const u8, function_name: []const u8) bool {
+    for (modules) |module| {
+        if (!reachable_modules.contains(module.name)) continue;
+        if (!moduleMatchesImport(import_path, module.name)) continue;
+        if (moduleHasFunctionByName(&module, function_name)) return true;
+    }
+    return false;
+}
+
+fn isFunctionVisibleUnprefixed(current_module: *const ModuleInfo, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), function_name: []const u8) bool {
+    if (moduleHasFunctionByName(current_module, function_name)) return true;
+
+    for (modules) |module| {
+        if (!reachable_modules.contains(module.name)) continue;
+        if (!isModuleVisibleUnprefixed(module.name, use_specs)) continue;
+        if (moduleHasFunctionByName(&module, function_name)) return true;
+    }
+
+    return false;
+}
+
+fn isFunctionHiddenByImportOverrides(current_module: *const ModuleInfo, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), function_name: []const u8) bool {
+    if (moduleHasFunctionByName(current_module, function_name)) return false;
+
+    var visible_any = false;
+    var hidden_any = false;
+
+    for (modules) |module| {
+        if (!reachable_modules.contains(module.name)) continue;
+        if (!moduleHasFunctionByName(&module, function_name)) continue;
+
+        if (isModuleVisibleUnprefixed(module.name, use_specs)) {
+            visible_any = true;
+            continue;
+        }
+        if (isModuleHiddenByAlias(module.name, use_specs)) {
+            hidden_any = true;
+        }
+    }
+
+    return hidden_any and !visible_any;
+}
+
+fn pathPrefixSuffix(path: []const u8, prefix: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, path, prefix)) return "";
+    if (path.len <= prefix.len) return null;
+    if (!std.mem.startsWith(u8, path, prefix)) return null;
+    if (path[prefix.len] != '.') return null;
+    return path[prefix.len + 1 ..];
+}
+
+fn appendRefPath(buf: *std.ArrayList(u8), node: *const ast.Node, alloc: std.mem.Allocator) !bool {
+    switch (node.data) {
+        .identifier => |ident| {
+            try buf.appendSlice(alloc, ident.name);
+            return true;
+        },
+        .qualified_identifier => |qual| {
+            const ok = try appendRefPath(buf, qual.base, alloc);
+            if (!ok) return false;
+            try buf.append(alloc, '.');
+            try buf.appendSlice(alloc, qual.field);
+            return true;
+        },
+        else => return false,
+    }
+}
+
+fn extractRefPath(node: *const ast.Node, alloc: std.mem.Allocator) ?[]const u8 {
+    var buf = std.ArrayList(u8){};
+    errdefer buf.deinit(alloc);
+    const ok = appendRefPath(&buf, node, alloc) catch return null;
+    if (!ok) {
+        buf.deinit(alloc);
+        return null;
+    }
+    return buf.toOwnedSlice(alloc) catch null;
+}
+
+const NamespaceResolution = struct {
+    import_path: []const u8,
+};
+
+fn resolveNamespacePath(object_path: []const u8, use_specs: []const UseSpec, alloc: std.mem.Allocator) ?NamespaceResolution {
+    var best_rank: u8 = 255;
+    var best_prefix_len: usize = 0;
+    var best_base: ?[]const u8 = null;
+    var best_suffix: []const u8 = "";
+
+    for (use_specs) |spec| {
+        if (spec.alias_name) |alias| {
+            if (pathPrefixSuffix(object_path, alias)) |suffix| {
+                const rank: u8 = 0;
+                if (rank < best_rank or (rank == best_rank and alias.len > best_prefix_len)) {
+                    best_rank = rank;
+                    best_prefix_len = alias.len;
+                    best_base = spec.module_path;
+                    best_suffix = suffix;
+                }
+            }
+            continue;
+        }
+
+        if (spec.alias_is_underscore) {
+            if (pathPrefixSuffix(object_path, spec.module_path)) |suffix| {
+                const rank: u8 = 1;
+                if (rank < best_rank or (rank == best_rank and spec.module_path.len > best_prefix_len)) {
+                    best_rank = rank;
+                    best_prefix_len = spec.module_path.len;
+                    best_base = spec.module_path;
+                    best_suffix = suffix;
+                }
+            }
+            continue;
+        }
+
+        if (pathPrefixSuffix(object_path, spec.module_path)) |suffix| {
+            const rank: u8 = 2;
+            if (rank < best_rank or (rank == best_rank and spec.module_path.len > best_prefix_len)) {
+                best_rank = rank;
+                best_prefix_len = spec.module_path.len;
+                best_base = spec.module_path;
+                best_suffix = suffix;
+            }
+        }
+    }
+
+    const base = best_base orelse return null;
+    if (best_suffix.len == 0) {
+        return .{ .import_path = utils.dupe(u8, alloc, base) };
+    }
+
+    const import_path = std.fmt.allocPrint(alloc, "{s}.{s}", .{ base, best_suffix }) catch return null;
+    return .{ .import_path = import_path };
+}
+
+fn convertMethodCallToFunctionCall(node: *ast.Node) void {
+    if (node.data != .method_call) return;
+    const method = node.data.method_call;
+    method.object.destroy();
+    node.data = .{ .function_call = .{
+        .name = method.method_name,
+        .is_libc = false,
+        .args = method.args,
+    } };
+}
+
+fn hideFunctionCallName(call_node: *ast.Node) void {
+    if (call_node.data != .function_call) return;
+    const call = &call_node.data.function_call;
+    const hidden_name = std.fmt.allocPrint(call_node.allocator, "__zlang_hidden_import__.{s}", .{call.name}) catch return;
+    call.name = hidden_name;
+}
+
+fn rewriteModuleImportsInNode(current_module: *const ModuleInfo, node: *ast.Node, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), alloc: std.mem.Allocator) void {
+    switch (node.data) {
+        .program => |prog| {
+            for (prog.globals.items) |glob| {
+                rewriteModuleImportsInNode(current_module, glob, use_specs, modules, reachable_modules, alloc);
+            }
+            for (prog.functions.items) |func| {
+                rewriteModuleImportsInNode(current_module, func, use_specs, modules, reachable_modules, alloc);
+            }
+        },
+        .function => |func| {
+            if (func.guard) |guard| {
+                rewriteModuleImportsInNode(current_module, guard, use_specs, modules, reachable_modules, alloc);
+            }
+            for (func.body.items) |stmt| {
+                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+            }
+        },
+        .var_decl => |decl| {
+            if (decl.initializer) |init| {
+                rewriteModuleImportsInNode(current_module, init, use_specs, modules, reachable_modules, alloc);
+            }
+        },
+        .assignment => |as| {
+            rewriteModuleImportsInNode(current_module, as.target, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(current_module, as.value, use_specs, modules, reachable_modules, alloc);
+        },
+        .compound_assignment => |as| {
+            rewriteModuleImportsInNode(current_module, as.target, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(current_module, as.value, use_specs, modules, reachable_modules, alloc);
+        },
+        .function_call => |*call| {
+            for (call.args.items) |arg| {
+                rewriteModuleImportsInNode(current_module, arg, use_specs, modules, reachable_modules, alloc);
+            }
+
+            if (!call.is_libc and isFunctionHiddenByImportOverrides(current_module, use_specs, modules, reachable_modules, call.name)) {
+                hideFunctionCallName(node);
+            }
+        },
+        .method_call => |method| {
+            rewriteModuleImportsInNode(current_module, method.object, use_specs, modules, reachable_modules, alloc);
+            for (method.args.items) |arg| {
+                rewriteModuleImportsInNode(current_module, arg, use_specs, modules, reachable_modules, alloc);
+            }
+
+            const object_path = extractRefPath(method.object, alloc) orelse return;
+            defer alloc.free(object_path);
+
+            const resolved = resolveNamespacePath(object_path, use_specs, alloc) orelse return;
+            defer alloc.free(resolved.import_path);
+
+            if (!hasFunctionInReachableImport(modules, reachable_modules, resolved.import_path, method.method_name)) return;
+            convertMethodCallToFunctionCall(node);
+        },
+        .return_stmt => |ret| {
+            if (ret.expression) |expr| {
+                rewriteModuleImportsInNode(current_module, expr, use_specs, modules, reachable_modules, alloc);
+            }
+        },
+        .defer_stmt => |defer_stmt| rewriteModuleImportsInNode(current_module, defer_stmt.expression, use_specs, modules, reachable_modules, alloc),
+        .if_stmt => |if_stmt| {
+            rewriteModuleImportsInNode(current_module, if_stmt.condition, use_specs, modules, reachable_modules, alloc);
+            for (if_stmt.then_body.items) |stmt| {
+                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+            }
+            if (if_stmt.else_body) |else_body| {
+                for (else_body.items) |stmt| {
+                    rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                }
+            }
+        },
+        .for_stmt => |for_stmt| {
+            if (for_stmt.condition) |cond| {
+                rewriteModuleImportsInNode(current_module, cond, use_specs, modules, reachable_modules, alloc);
+            }
+            for (for_stmt.body.items) |stmt| {
+                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+            }
+        },
+        .c_for_stmt => |c_for| {
+            if (c_for.init) |init| rewriteModuleImportsInNode(current_module, init, use_specs, modules, reachable_modules, alloc);
+            if (c_for.condition) |cond| rewriteModuleImportsInNode(current_module, cond, use_specs, modules, reachable_modules, alloc);
+            if (c_for.increment) |inc| rewriteModuleImportsInNode(current_module, inc, use_specs, modules, reachable_modules, alloc);
+            for (c_for.body.items) |stmt| {
+                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+            }
+        },
+        .array_initializer => |arr| for (arr.elements.items) |elem| rewriteModuleImportsInNode(current_module, elem, use_specs, modules, reachable_modules, alloc),
+        .array_index => |arr| {
+            rewriteModuleImportsInNode(current_module, arr.array, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(current_module, arr.index, use_specs, modules, reachable_modules, alloc);
+        },
+        .array_assignment => |arr| {
+            rewriteModuleImportsInNode(current_module, arr.array, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(current_module, arr.index, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(current_module, arr.value, use_specs, modules, reachable_modules, alloc);
+        },
+        .array_compound_assignment => |arr| {
+            rewriteModuleImportsInNode(current_module, arr.array, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(current_module, arr.index, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(current_module, arr.value, use_specs, modules, reachable_modules, alloc);
+        },
+        .comparison => |cmp| {
+            rewriteModuleImportsInNode(current_module, cmp.lhs, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(current_module, cmp.rhs, use_specs, modules, reachable_modules, alloc);
+        },
+        .binary_op => |bin| {
+            rewriteModuleImportsInNode(current_module, bin.lhs, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(current_module, bin.rhs, use_specs, modules, reachable_modules, alloc);
+        },
+        .unary_op => |un| rewriteModuleImportsInNode(current_module, un.operand, use_specs, modules, reachable_modules, alloc),
+        .cast => |cast| rewriteModuleImportsInNode(current_module, cast.expr, use_specs, modules, reachable_modules, alloc),
+        .expression_block => |block| {
+            for (block.statements.items) |stmt| {
+                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+            }
+            rewriteModuleImportsInNode(current_module, block.result, use_specs, modules, reachable_modules, alloc);
+        },
+        .handled_call_stmt => |handled| {
+            rewriteModuleImportsInNode(current_module, handled.call, use_specs, modules, reachable_modules, alloc);
+            for (handled.handlers.items) |handler| {
+                for (handler.body.items) |stmt| {
+                    rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                }
+            }
+        },
+        .match_stmt => |match_stmt| {
+            rewriteModuleImportsInNode(current_module, match_stmt.condition, use_specs, modules, reachable_modules, alloc);
+            for (match_stmt.cases.items) |match_case| {
+                for (match_case.values.items) |value| {
+                    rewriteModuleImportsInNode(current_module, value, use_specs, modules, reachable_modules, alloc);
+                }
+                for (match_case.body.items) |stmt| {
+                    rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                }
+            }
+        },
+        .struct_initializer => |struct_init| {
+            for (struct_init.field_values.items) |field_val| {
+                rewriteModuleImportsInNode(current_module, field_val.value, use_specs, modules, reachable_modules, alloc);
+            }
+        },
+        .qualified_identifier => |qual| rewriteModuleImportsInNode(current_module, qual.base, use_specs, modules, reachable_modules, alloc),
+        .simd_initializer => |simd_init| for (simd_init.elements.items) |elem| rewriteModuleImportsInNode(current_module, elem, use_specs, modules, reachable_modules, alloc),
+        .simd_index => |simd_idx| {
+            rewriteModuleImportsInNode(current_module, simd_idx.simd, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(current_module, simd_idx.index, use_specs, modules, reachable_modules, alloc);
+        },
+        .simd_assignment => |simd_ass| {
+            rewriteModuleImportsInNode(current_module, simd_ass.simd, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(current_module, simd_ass.index, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(current_module, simd_ass.value, use_specs, modules, reachable_modules, alloc);
+        },
+        .simd_compound_assignment => |simd_ass| {
+            rewriteModuleImportsInNode(current_module, simd_ass.simd, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(current_module, simd_ass.index, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(current_module, simd_ass.value, use_specs, modules, reachable_modules, alloc);
+        },
+        .simd_method_call => |simd_method| {
+            rewriteModuleImportsInNode(current_module, simd_method.simd, use_specs, modules, reachable_modules, alloc);
+            for (simd_method.args.items) |arg| {
+                rewriteModuleImportsInNode(current_module, arg, use_specs, modules, reachable_modules, alloc);
+            }
+        },
+        else => {},
+    }
+}
+
 fn loadStdModulesForDep(dep: []const u8, modules: *std.ArrayList(ModuleInfo), loaded_paths: *std.StringHashMap(void), arena: std.mem.Allocator, alloc: std.mem.Allocator) !void {
     if (std.mem.eql(u8, dep, "std")) {
         const stdlib_path = try getStdlibPath(alloc);
@@ -773,6 +1154,14 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
                 }
             }
         }
+    }
+
+    for (modules.items) |*module| {
+        if (!reachable_modules.contains(module.name)) continue;
+        var use_specs = std.ArrayList(UseSpec){};
+        defer use_specs.deinit(alloc);
+        try collectUseSpecs(module, &use_specs, alloc);
+        rewriteModuleImportsInNode(module, module.ast, use_specs.items, modules.items, &reachable_modules, alloc);
     }
 
     for (modules.items) |*module| {

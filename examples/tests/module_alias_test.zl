@@ -1,0 +1,28 @@
+module app.module_alias_test;
+use std
+use std.random as rand
+use std.time as _
+
+fun main() >> i32 {
+    i32 alias_ok = 0;
+    i32 roll = rand.randRange(1, 6);
+    if (roll >= 1 && roll <= 6) {
+        alias_ok = 1;
+    }
+    printf("expected 1):%d\n", alias_ok);
+
+    i32 namespace_ok = 0;
+    i64 ts = std.time.now();
+    if (ts > 0) {
+        namespace_ok = 1;
+    }
+    printf("expected 1):%d\n", namespace_ok);
+
+    i32 plain_ok = 0;
+    if (strEq("abc", "abc")) {
+        plain_ok = 1;
+    }
+    printf("expected 1):%d\n", plain_ok);
+
+    return 0;
+}
