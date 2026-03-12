@@ -1,0 +1,3 @@
+# Expected diagnostic fragments
+Undefined function '__zlang_hidden_import__.now'
+maybe you forgot to import it?

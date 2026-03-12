@@ -1,0 +1,8 @@
+module app.module_alias_override_fail;
+use std
+use std.time as _
+
+fun main() >> i32 {
+    i64 ts = now();
+    return ts as i32;
+}

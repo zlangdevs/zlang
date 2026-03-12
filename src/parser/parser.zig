@@ -1311,13 +1311,22 @@ export fn zig_create_wrapper_function(name_ptr: [*c]const u8, return_type_ptr: [
     set_node_location(node);
     return @as(*anyopaque, @ptrCast(node));
 }
-export fn zig_create_use_stmt(module_path_ptr: [*c]const u8) ?*anyopaque {
+export fn zig_create_use_stmt(module_path_ptr: [*c]const u8, alias_name_ptr: [*c]const u8, alias_is_underscore: c_int) ?*anyopaque {
     const module_path = std.mem.span(module_path_ptr);
     const module_path_copy = utils.dupe(u8, global_allocator, module_path);
+    var alias_name_copy: ?[]const u8 = null;
+    if (alias_name_ptr != null) {
+        const alias_name = std.mem.span(alias_name_ptr);
+        if (alias_name.len > 0) {
+            alias_name_copy = utils.dupe(u8, global_allocator, alias_name);
+        }
+    }
 
     const use_stmt_data = ast.NodeData{
         .use_stmt = ast.UseStmt{
             .module_path = module_path_copy,
+            .alias_name = alias_name_copy,
+            .alias_is_underscore = alias_is_underscore != 0,
         },
     };
 

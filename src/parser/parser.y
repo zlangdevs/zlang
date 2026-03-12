@@ -49,7 +49,7 @@ extern void* zig_create_array_assignment(void* array, void* index, void* value);
 extern void* zig_create_array_compound_assignment(void* array, void* index, void* value, int op);
 extern void* zig_create_c_function_decl(const char* name, const char* return_type, void* params);
 extern void* zig_create_wrapper_function(const char* name, const char* return_type, void* params);
-extern void* zig_create_use_stmt(const char* module_path);
+extern void* zig_create_use_stmt(const char* module_path, const char* alias_name, int alias_is_underscore);
 extern void* zig_create_enum_decl(const char* name, void* values);
 extern void* zig_create_struct_decl(const char* name, void* fields);
 extern void* zig_create_union_decl(const char* name, void* fields);
@@ -160,7 +160,7 @@ void* ast_root = NULL;
 %type <node> error_declaration send_statement solicit_statement handled_call_statement on_handler_list
 %type <node> enum_values enum_value_list struct_fields struct_field_list
 %type <node> struct_initializer struct_field_values struct_field_value_list initializer_expression ref_expression ref_base
-%type <string> type_name function_name string_literal complex_type_name module_path function_type_core function_type_param_list type_list template_params
+%type <string> type_name function_name string_literal complex_type_name module_path function_type_core function_type_param_list type_list template_params use_alias
 
 %start program
 
@@ -960,9 +960,22 @@ string_literal:
 
 use_statement:
     TOKEN_USE module_path {
-        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_use_stmt($2);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_use_stmt($2, NULL, 0);
         free($2);
     }
+    | TOKEN_USE module_path TOKEN_AS use_alias {
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_use_stmt($2, $4, 0);
+        free($2);
+        free($4);
+    }
+    | TOKEN_USE module_path TOKEN_AS TOKEN_UNDERSCORE {
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_use_stmt($2, NULL, 1);
+        free($2);
+    }
+;
+
+use_alias:
+    TOKEN_IDENTIFIER { $$ = $1; }
 ;
 
 enum_declaration:

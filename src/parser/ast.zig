@@ -249,6 +249,8 @@ pub const CFunctionDecl = struct {
 
 pub const UseStmt = struct {
     module_path: []const u8,
+    alias_name: ?[]const u8 = null,
+    alias_is_underscore: bool = false,
 };
 
 pub const EnumValue = struct {
@@ -600,6 +602,9 @@ pub const Node = struct {
             },
             .use_stmt => |use_stmt| {
                 self.allocator.free(use_stmt.module_path);
+                if (use_stmt.alias_name) |alias_name| {
+                    self.allocator.free(alias_name);
+                }
             },
             .enum_decl => |*enum_decl| {
                 self.allocator.free(enum_decl.name);
@@ -1099,6 +1104,8 @@ fn writeASTNodeJson(writer: anytype, node: *Node, level: usize) anyerror!void {
         },
         .use_stmt => |use_stmt| {
             try writeJsonStringField(writer, level + 1, &first_field, "module_path", use_stmt.module_path);
+            try writeJsonOptionalStringField(writer, level + 1, &first_field, "alias_name", use_stmt.alias_name);
+            try writeJsonBoolField(writer, level + 1, &first_field, "alias_is_underscore", use_stmt.alias_is_underscore);
         },
         .enum_decl => |enum_decl| {
             try writeJsonStringField(writer, level + 1, &first_field, "name", enum_decl.name);
@@ -1716,7 +1723,13 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             }
         },
         .use_stmt => |use_stmt| {
-            std.debug.print("📦 Use Statement: \x1b[35m{s}\x1b[0m\n", .{use_stmt.module_path});
+            if (use_stmt.alias_is_underscore) {
+                std.debug.print("📦 Use Statement: \x1b[35m{s}\x1b[0m as _\n", .{use_stmt.module_path});
+            } else if (use_stmt.alias_name) |alias_name| {
+                std.debug.print("📦 Use Statement: \x1b[35m{s}\x1b[0m as \x1b[36m{s}\x1b[0m\n", .{ use_stmt.module_path, alias_name });
+            } else {
+                std.debug.print("📦 Use Statement: \x1b[35m{s}\x1b[0m\n", .{use_stmt.module_path});
+            }
         },
         .enum_decl => |enum_decl| {
             std.debug.print("🔢 Enum Declaration: \x1b[32m{s}\x1b[0m ({} values)\n", .{ enum_decl.name, enum_decl.values.items.len });
