@@ -2766,6 +2766,106 @@ pub const CodeGenerator = struct {
         return call_result;
     }
 
+    const FixedArrayInfo = struct {
+        element_type_name: []const u8,
+        array_size: usize,
+    };
+
+    fn parseFixedArrayType(type_name: []const u8) ?FixedArrayInfo {
+        if (!(std.mem.startsWith(u8, type_name, "arr<") and std.mem.endsWith(u8, type_name, ">"))) {
+            return null;
+        }
+
+        const inner = type_name[4 .. type_name.len - 1];
+        var comma_pos: ?usize = null;
+        var search_idx: usize = inner.len;
+        while (search_idx > 0) {
+            search_idx -= 1;
+            if (inner[search_idx] == ',') {
+                comma_pos = search_idx;
+                break;
+            }
+        }
+
+        if (comma_pos) |pos| {
+            const element_type_part = inner[0..pos];
+            const element_type_name = std.mem.trim(u8, element_type_part, " \t");
+            const size_part = inner[pos + 1 ..];
+            const size_str = std.mem.trim(u8, size_part, " \t");
+            const parsed_size = std.fmt.parseInt(usize, size_str, 10) catch return null;
+            return .{
+                .element_type_name = element_type_name,
+                .array_size = parsed_size,
+            };
+        }
+
+        return null;
+    }
+
+    fn buildGlobalArrayInitializer(self: *CodeGenerator, decl: ast.VarDecl, array_type: c.LLVMTypeRef, array_info: FixedArrayInfo) errors.CodegenError!c.LLVMValueRef {
+        const element_type = c.LLVMGetElementType(array_type);
+
+        var const_elements = std.ArrayList(c.LLVMValueRef){};
+        defer const_elements.deinit(self.allocator);
+        try const_elements.resize(self.allocator, array_info.array_size);
+
+        const zero = c.LLVMConstNull(element_type);
+        for (0..array_info.array_size) |i| {
+            const_elements.items[i] = zero;
+        }
+
+        if (decl.initializer) |initializer| {
+            switch (initializer.data) {
+                .array_initializer => |init_list| {
+                    if (init_list.elements.items.len > array_info.array_size) {
+                        self.reportErrorFmt("Array initializer for global '{s}' has {d} elements, but size is {d}", .{ decl.name, init_list.elements.items.len, array_info.array_size }, "Reduce elements or increase declared array size");
+                        return errors.CodegenError.TypeMismatch;
+                    }
+
+                    for (init_list.elements.items, 0..) |element, idx| {
+                        var element_const = try self.generateExpressionWithContext(element, array_info.element_type_name);
+
+                        if (!self.typesAreEqual(c.LLVMTypeOf(element_const), element_type)) {
+                            element_const = try self.castWithSourceRules(element_const, element_type, element);
+                        }
+
+                        if (c.LLVMIsConstant(element_const) == 0) {
+                            self.reportErrorFmt("Global array '{s}' must be initialized with compile-time constants", .{decl.name}, "Use only literals in global array initializers");
+                            return errors.CodegenError.TypeMismatch;
+                        }
+
+                        const_elements.items[idx] = element_const;
+                    }
+                },
+                .string_literal => |str_lit| {
+                    const elem_kind = c.LLVMGetTypeKind(element_type);
+                    if (elem_kind != c.LLVMIntegerTypeKind or c.LLVMGetIntTypeWidth(element_type) != 8) {
+                        self.reportTypeMismatchStr("arr<u8, N>", array_type, "global string initializer");
+                        return errors.CodegenError.TypeMismatch;
+                    }
+
+                    const parsed_str = try strings.parseEscape(self.allocator, str_lit.value);
+                    defer self.allocator.free(parsed_str);
+
+                    if (parsed_str.len > array_info.array_size) {
+                        self.reportErrorFmt("String literal for global '{s}' is too long ({d} > {d})", .{ decl.name, parsed_str.len, array_info.array_size }, "Increase array size or shorten the literal");
+                        return errors.CodegenError.TypeMismatch;
+                    }
+
+                    for (parsed_str, 0..) |byte, idx| {
+                        const_elements.items[idx] = c.LLVMConstInt(element_type, @as(c_ulonglong, @intCast(byte)), 0);
+                    }
+                },
+                else => {
+                    self.reportErrorFmt("Unsupported global array initializer for '{s}'", .{decl.name}, "Use array literals or string literals");
+                    return errors.CodegenError.TypeMismatch;
+                },
+            }
+        }
+
+        return c.LLVMConstArray(element_type, const_elements.items.ptr, @intCast(array_info.array_size));
+    }
+
     fn generateGlobalDeclaration(self: *CodeGenerator, global_node: *ast.Node) errors.CodegenError!void {
         switch (global_node.data) {
             .var_decl => |decl| {
@@ -2782,9 +2882,19 @@ pub const CodeGenerator = struct {
                 defer self.allocator.free(var_name_z);
                 const global_var = c.LLVMAddGlobal(self.module, @ptrCast(var_type), var_name_z.ptr);
 
-                if (decl.initializer) |initializer| {
+                const fixed_array_info = parseFixedArrayType(decl.type_name);
+                const is_fixed_array = fixed_array_info != null and c.LLVMGetTypeKind(var_type) == c.LLVMArrayTypeKind;
+
+                if (is_fixed_array) {
+                    const array_init = try self.buildGlobalArrayInitializer(decl, var_type, fixed_array_info.?);
+                    c.LLVMSetInitializer(global_var, array_init);
+                } else if (decl.initializer) |initializer| {
                     const init_value = try self.generateExpression(initializer);
                     const casted_init_value = try self.castWithSourceRules(init_value, @ptrCast(var_type), initializer);
+                    if (c.LLVMIsConstant(casted_init_value) == 0) {
+                        self.reportErrorFmt("Global variable '{s}' must be initialized with compile-time constants", .{decl.name}, "Use literal values or compile-time constants for globals");
+                        return errors.CodegenError.TypeMismatch;
+                    }
                     c.LLVMSetInitializer(global_var, casted_init_value);
                 } else {
                     const default_value = utils.getDefaultValueForType(self, decl.type_name);
@@ -2871,10 +2981,7 @@ pub const CodeGenerator = struct {
         {
             return c.LLVMBuildFPToSI(self.builder, value, target_type, "fptosi");
         } else if (value_kind == c.LLVMPointerTypeKind and target_kind == c.LLVMStructTypeKind) {
-            const pointee_type = c.LLVMGetElementType(value_type);
-            if (pointee_type == target_type) {
-                return c.LLVMBuildLoad2(self.builder, target_type, value, "struct_load");
-            }
+            return c.LLVMBuildLoad2(self.builder, target_type, value, "struct_load");
         } else if (value_kind == c.LLVMPointerTypeKind and target_kind == c.LLVMPointerTypeKind) {
             return c.LLVMBuildBitCast(self.builder, value, target_type, "bitcast");
         }
@@ -2936,6 +3043,33 @@ pub const CodeGenerator = struct {
             const t_float = tk == c.LLVMFloatTypeKind or tk == c.LLVMDoubleTypeKind or tk == c.LLVMHalfTypeKind;
             if (f_float and t_float and floatBitWidth(target_type) >= floatBitWidth(from_ty)) {
                 return self.castToTypeWithSourceInfo(val, target_type, source_type_name);
+            }
+        }
+        if (fk == c.LLVMPointerTypeKind and tk == c.LLVMStructTypeKind) {
+            var can_load_struct = false;
+            if (value_node) |vn3| {
+                switch (vn3.data) {
+                    .struct_initializer => can_load_struct = true,
+                    .identifier => |ident| {
+                        if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
+                            can_load_struct = self.pointerTypeMatchesTargetStruct(var_info.type_name, target_type);
+                        }
+                    },
+                    .cast => |cst| {
+                        if (cst.type_name) |tn| {
+                            can_load_struct = self.pointerTypeMatchesTargetStruct(tn, target_type);
+                        }
+                    },
+                    else => {},
+                }
+            }
+            if (!can_load_struct) {
+                if (source_type_name) |src_name| {
+                    can_load_struct = self.pointerTypeMatchesTargetStruct(src_name, target_type);
+                }
+            }
+            if (can_load_struct) {
+                return c.LLVMBuildLoad2(self.builder, target_type, val, "struct_load");
             }
         }
         if (fk == c.LLVMPointerTypeKind and tk == c.LLVMPointerTypeKind) {
@@ -3024,6 +3158,22 @@ pub const CodeGenerator = struct {
         return false;
     }
 
+    fn pointerTypeMatchesTargetStruct(self: *CodeGenerator, type_name: []const u8, target_type: c.LLVMTypeRef) bool {
+        if (!(std.mem.startsWith(u8, type_name, "ptr<") and std.mem.endsWith(u8, type_name, ">"))) {
+            return false;
+        }
+
+        const inner_name = type_name[4 .. type_name.len - 1];
+        const maybe_inner_ty = utils.getLLVMTypeSilent(self, inner_name) catch null;
+        if (maybe_inner_ty) |inner_ty| {
+            if (c.LLVMGetTypeKind(inner_ty) == c.LLVMStructTypeKind and self.typesAreEqual(inner_ty, target_type)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     fn typesAreEqual(self: *CodeGenerator, type1: c.LLVMTypeRef, type2: c.LLVMTypeRef) bool {
         _ = self;
         if (type1 == type2) return true;
@@ -3082,6 +3232,29 @@ pub const CodeGenerator = struct {
             const t_float = tk == c.LLVMFloatTypeKind or tk == c.LLVMDoubleTypeKind or tk == c.LLVMHalfTypeKind;
             if (f_float and t_float and floatBitWidth(target_type) >= floatBitWidth(from_ty)) {
                 return self.castToType(val, target_type);
+            }
+        }
+
+        if (fk == c.LLVMPointerTypeKind and tk == c.LLVMStructTypeKind) {
+            var can_load_struct = false;
+            if (value_node) |vn3| {
+                switch (vn3.data) {
+                    .struct_initializer => can_load_struct = true,
+                    .identifier => |ident| {
+                        if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
+                            can_load_struct = self.pointerTypeMatchesTargetStruct(var_info.type_name, target_type);
+                        }
+                    },
+                    .cast => |cst| {
+                        if (cst.type_name) |tn| {
+                            can_load_struct = self.pointerTypeMatchesTargetStruct(tn, target_type);
+                        }
+                    },
+                    else => {},
+                }
+            }
+            if (can_load_struct) {
+                return c.LLVMBuildLoad2(self.builder, target_type, val, "struct_load");
             }
         }
 
