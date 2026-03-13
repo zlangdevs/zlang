@@ -5,6 +5,7 @@ const utils = @import("utils.zig");
 const llvm = @import("llvm.zig");
 const variables = @import("variables.zig");
 const structs = @import("structs.zig");
+const strings = @import("strings.zig");
 
 const c_bindings = @import("c_bindings.zig");
 const c = c_bindings.c;
@@ -517,6 +518,10 @@ pub fn generateCFunctionDeclaration(cg: *llvm.CodeGenerator, c_func: ast.CFuncti
 }
 
 pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, expected_return_type: ?[]const u8) errors.CodegenError!c.LLVMValueRef {
+    if (call.is_libc and std.mem.eql(u8, call.name, "__zinterp")) {
+        return try strings.generateInterpolationBuiltin(cg, call);
+    }
+
     if (call.is_libc and std.mem.eql(u8, call.name, "va_arg")) {
         if (call.args.items.len != 2) return errors.CodegenError.TypeMismatch;
         const vl_ptr = try cg.generateExpression(call.args.items[0]);
