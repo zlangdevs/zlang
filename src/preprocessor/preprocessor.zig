@@ -29,6 +29,166 @@ pub const PreprocessOutput = struct {
     }
 };
 
+fn appendQuotedRawSegment(allocator: std.mem.Allocator, out: *std.ArrayList(u8), segment: []const u8) errors.PreprocessError!void {
+    try out.append(allocator, '"');
+    try out.appendSlice(allocator, segment);
+    try out.append(allocator, '"');
+}
+
+fn findInterpolationExprEnd(s: []const u8, start: usize, limit: usize) ?usize {
+    var i = start;
+    var depth: usize = 1;
+
+    while (i < limit) {
+        const ch = s[i];
+
+        if (ch == '"' or ch == '\'') {
+            const quote = ch;
+            i += 1;
+            while (i < limit) {
+                const c = s[i];
+                if (c == '\\') {
+                    i += 2;
+                    continue;
+                }
+                if (c == quote) {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        if (ch == '/' and i + 1 < limit and s[i + 1] == '/') {
+            i += 2;
+            while (i < limit and s[i] != '\n') : (i += 1) {}
+            continue;
+        }
+
+        if (ch == '/' and i + 1 < limit and s[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < limit) : (i += 1) {
+                if (s[i] == '*' and s[i + 1] == '/') {
+                    i += 2;
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (ch == '{') {
+            depth += 1;
+            i += 1;
+            continue;
+        }
+
+        if (ch == '}') {
+            depth -= 1;
+            if (depth == 0) return i;
+            i += 1;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    return null;
+}
+
+fn appendStringWithInterpolation(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    input: []const u8,
+    start_idx: usize,
+    end_idx: usize,
+) errors.PreprocessError!void {
+    var has_interpolation = false;
+    var i = start_idx + 1;
+    while (i < end_idx) {
+        const ch = input[i];
+        if (ch == '\\') {
+            i += 2;
+            continue;
+        }
+        if (ch == '$' and i + 1 < end_idx and input[i + 1] == '{') {
+            has_interpolation = true;
+            break;
+        }
+        i += 1;
+    }
+
+    if (!has_interpolation) {
+        try out.appendSlice(allocator, input[start_idx .. end_idx + 1]);
+        return;
+    }
+
+    var probe = start_idx + 1;
+    var valid = true;
+    while (probe < end_idx) {
+        const ch = input[probe];
+        if (ch == '\\') {
+            probe += 2;
+            continue;
+        }
+        if (ch == '$' and probe + 1 < end_idx and input[probe + 1] == '{') {
+            const expr_end = findInterpolationExprEnd(input, probe + 2, end_idx) orelse {
+                valid = false;
+                break;
+            };
+            probe = expr_end + 1;
+            continue;
+        }
+        probe += 1;
+    }
+
+    if (!valid) {
+        try out.appendSlice(allocator, input[start_idx .. end_idx + 1]);
+        return;
+    }
+
+    try out.appendSlice(allocator, "@__zinterp(");
+
+    var first = true;
+    var seg_start = start_idx + 1;
+    var cur = start_idx + 1;
+
+    while (cur < end_idx) {
+        const ch = input[cur];
+        if (ch == '\\') {
+            cur += 2;
+            continue;
+        }
+
+        if (ch == '$' and cur + 1 < end_idx and input[cur + 1] == '{') {
+            if (!first) try out.appendSlice(allocator, ", ");
+            try appendQuotedRawSegment(allocator, out, input[seg_start..cur]);
+            first = false;
+
+            const expr_start = cur + 2;
+            const expr_end = findInterpolationExprEnd(input, expr_start, end_idx).?;
+            try out.appendSlice(allocator, ", (");
+            try out.appendSlice(allocator, std.mem.trim(u8, input[expr_start..expr_end], " \t\r\n"));
+            try out.appendSlice(allocator, ")");
+
+            cur = expr_end + 1;
+            seg_start = cur;
+            continue;
+        }
+
+        cur += 1;
+    }
+
+    if (!first) {
+        try out.appendSlice(allocator, ", ");
+        try appendQuotedRawSegment(allocator, out, input[seg_start..end_idx]);
+    } else {
+        try appendQuotedRawSegment(allocator, out, input[start_idx + 1 .. end_idx]);
+    }
+
+    try out.append(allocator, ')');
+}
+
 fn appendExpandedText(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
@@ -44,20 +204,23 @@ fn appendExpandedText(
 
         if (ch == '"' or ch == '\'') {
             const quote = ch;
-            try out.append(allocator, ch);
+            const string_start = i;
             i += 1;
             while (i < text.len) {
                 const c = text[i];
-                try out.append(allocator, c);
                 i += 1;
                 if (c == '\\') {
-                    if (i < text.len) {
-                        try out.append(allocator, text[i]);
-                        i += 1;
-                    }
+                    if (i < text.len) i += 1;
                     continue;
                 }
                 if (c == quote) break;
+            }
+
+            const string_end = i - 1;
+            if (quote == '"') {
+                try appendStringWithInterpolation(allocator, out, text, string_start, string_end);
+            } else {
+                try out.appendSlice(allocator, text[string_start..i]);
             }
             continue;
         }
@@ -253,22 +416,25 @@ pub fn preprocessWithFlags(allocator: std.mem.Allocator, input: []const u8) erro
 
         if (ch == '"' or ch == '\'') {
             const quote = ch;
-            try out.append(allocator, ch);
+            const string_start = i;
             i += 1;
             while (i < input.len) {
                 const c = input[i];
-                try out.append(allocator, c);
                 i += 1;
                 if (c == '\\') {
-                    if (i < input.len) {
-                        try out.append(allocator, input[i]);
-                        i += 1;
-                    }
+                    if (i < input.len) i += 1;
                     continue;
                 }
                 if (c == quote) break;
-                if (c == '\n') at_line_start = true else at_line_start = false;
             }
+
+            const string_end = i - 1;
+            if (quote == '"') {
+                try appendStringWithInterpolation(allocator, &out, input, string_start, string_end);
+            } else {
+                try out.appendSlice(allocator, input[string_start..i]);
+            }
+            at_line_start = false;
             continue;
         }
 
