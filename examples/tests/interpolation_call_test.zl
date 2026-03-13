@@ -1,0 +1,13 @@
+use std.string
+
+fun helper(n: i32) >> ptr<u8> {
+    return itoa(n);
+}
+
+fun main() >> i32 {
+    i32 count = 5;
+    ptr<u8> s = "v=${helper(count)}";
+    @printf("%s\n", s);
+    @printf("(expected 1):%d\n", strcmp(s, "v=5") == 0);
+    return 0;
+}

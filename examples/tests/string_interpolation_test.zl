@@ -1,0 +1,47 @@
+use std.string
+
+struct Point {
+    x i32,
+    y i32,
+}
+
+fun inc(v: i32) >> i32 {
+    return v + 1;
+}
+
+fun main() >> i32 {
+    i32 count = 41;
+    bool ok = true;
+    f64 ratio = 3.5;
+    Point p = Point{x = 7, y = 9};
+
+    ptr<u8> s1 = "count: ${count + 1}";
+    ptr<u8> s2 = "ok: ${ok}";
+    ptr<u8> s3 = "ratio: ${ratio}";
+    ptr<u8> s4 = "point: ${p}";
+    ptr<u8> s5 = "raw: \${}";
+    ptr<u8> s6 = "null: ${null}";
+    ptr<u8> s7 = "inc: ${inc(count)}";
+    ptr<u8> s8 = "Hi. Int: ${count - 36}. Float: ${ratio}. Bool: ${ok}. Point: ${p}. Null: ${null}";
+
+    @printf("%s\n", s1);
+    @printf("%s\n", s2);
+    @printf("%s\n", s3);
+    @printf("%s\n", s4);
+    @printf("%s\n", s5);
+    @printf("%s\n", s6);
+    @printf("%s\n", s7);
+    @printf("%s\n", s8);
+
+    @printf("(expected 1):%d\n", strcmp(s1, "count: 42") == 0);
+    @printf("(expected 1):%d\n", strcmp(s2, "ok: true") == 0);
+    @printf("(expected 1):%d\n", strcmp(s4, "point: {x = 7, y = 9}") == 0);
+    @printf("(expected 1):%d\n", strcmp(s5, "raw: \${}") == 0);
+    @printf("(expected 1):%d\n", strcmp(s6, "null: null") == 0);
+    @printf("(expected 1):%d\n", strcmp(s7, "inc: 42") == 0);
+    @printf("(expected 1):%d\n", strstr(s8, "Int: 5") != null);
+    @printf("(expected 1):%d\n", strstr(s8, "Bool: true") != null);
+    @printf("(expected 1):%d\n", strstr(s8, "Point: {x = 7, y = 9}") != null);
+    @printf("(expected 1):%d\n", strstr(s8, "Null: null") != null);
+    return 0;
+}
