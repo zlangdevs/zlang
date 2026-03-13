@@ -1,6 +1,0 @@
-fun main() >> i32 {
-    for i32 i = 0; i < 2; i++ {
-        defer @printf("%d\n", i);
-    }
-    return 0;
-}

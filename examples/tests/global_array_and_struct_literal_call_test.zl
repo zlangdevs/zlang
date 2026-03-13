@@ -1,0 +1,20 @@
+struct Color {
+    r u8,
+    g u8,
+    b u8,
+    a u8,
+}
+
+arr<i32, 4> g_nums = {1, 2, 3, 4};
+arr<u8, 6> g_word = "zlang";
+
+fun read_color(c: Color) >> i32 {
+    return (c.r as i32) + (c.a as i32);
+}
+
+fun main() >> i32 {
+    @printf("(expected 7):%d\n", g_nums[2] + g_nums[3]);
+    @printf("(expected zlang):%s\n", &g_word);
+    @printf("(expected 10):%d\n", read_color(Color{r = 7, g = 0, b = 0, a = 3}));
+    return 0;
+}
