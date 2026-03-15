@@ -707,18 +707,6 @@ fn hasFunctionInReachableImport(modules: []const ModuleInfo, reachable_modules: 
     return false;
 }
 
-fn isFunctionVisibleUnprefixed(current_module: *const ModuleInfo, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), function_name: []const u8) bool {
-    if (moduleHasFunctionByName(current_module, function_name)) return true;
-
-    for (modules) |module| {
-        if (!reachable_modules.contains(module.name)) continue;
-        if (!isModuleVisibleUnprefixed(module.name, use_specs)) continue;
-        if (moduleHasFunctionByName(&module, function_name)) return true;
-    }
-
-    return false;
-}
-
 fn isFunctionHiddenByImportOverrides(current_module: *const ModuleInfo, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), function_name: []const u8) bool {
     if (moduleHasFunctionByName(current_module, function_name)) return false;
 
@@ -739,6 +727,191 @@ fn isFunctionHiddenByImportOverrides(current_module: *const ModuleInfo, use_spec
     }
 
     return hidden_any and !visible_any;
+}
+
+fn moduleHasTypeByName(module: *const ModuleInfo, type_name: []const u8) bool {
+    if (module.ast.data != .program) return false;
+    const prog = module.ast.data.program;
+    for (prog.functions.items) |node| {
+        switch (node.data) {
+            .struct_decl => |decl| {
+                if (std.mem.eql(u8, decl.name, type_name)) return true;
+            },
+            .enum_decl => |decl| {
+                if (std.mem.eql(u8, decl.name, type_name)) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn hasTypeInReachableImport(modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), import_path: []const u8, type_name: []const u8) bool {
+    for (modules) |module| {
+        if (!reachable_modules.contains(module.name)) continue;
+        if (!moduleMatchesImport(import_path, module.name)) continue;
+        if (moduleHasTypeByName(&module, type_name)) return true;
+    }
+    return false;
+}
+
+fn isTypeHiddenByImportOverrides(current_module: *const ModuleInfo, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), type_name: []const u8) bool {
+    if (moduleHasTypeByName(current_module, type_name)) return false;
+
+    var visible_any = false;
+    var hidden_any = false;
+
+    for (modules) |module| {
+        if (!reachable_modules.contains(module.name)) continue;
+        if (!moduleHasTypeByName(&module, type_name)) continue;
+
+        if (isModuleVisibleUnprefixed(module.name, use_specs)) {
+            visible_any = true;
+            continue;
+        }
+        if (isModuleHiddenByAlias(module.name, use_specs)) {
+            hidden_any = true;
+        }
+    }
+
+    return hidden_any and !visible_any;
+}
+
+fn isTypeTokenChar(ch: u8) bool {
+    return std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '.';
+}
+
+fn isAllDigits(text: []const u8) bool {
+    if (text.len == 0) return false;
+    for (text) |ch| {
+        if (!std.ascii.isDigit(ch)) return false;
+    }
+    return true;
+}
+
+fn isBuiltinTypeToken(token: []const u8) bool {
+    return std.mem.eql(u8, token, "i8") or
+        std.mem.eql(u8, token, "i16") or
+        std.mem.eql(u8, token, "i32") or
+        std.mem.eql(u8, token, "i64") or
+        std.mem.eql(u8, token, "u8") or
+        std.mem.eql(u8, token, "u16") or
+        std.mem.eql(u8, token, "u32") or
+        std.mem.eql(u8, token, "u64") or
+        std.mem.eql(u8, token, "f16") or
+        std.mem.eql(u8, token, "f32") or
+        std.mem.eql(u8, token, "f64") or
+        std.mem.eql(u8, token, "bool") or
+        std.mem.eql(u8, token, "void") or
+        std.mem.eql(u8, token, "error") or
+        std.mem.eql(u8, token, "arr") or
+        std.mem.eql(u8, token, "ptr") or
+        std.mem.eql(u8, token, "simd") or
+        std.mem.eql(u8, token, "vararg") or
+        std.mem.eql(u8, token, "const") or
+        std.mem.eql(u8, token, "_");
+}
+
+fn resolveNamespacedTypeToken(type_path: []const u8, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), owner_alloc: std.mem.Allocator) ?[]const u8 {
+    const dot = std.mem.lastIndexOfScalar(u8, type_path, '.') orelse return null;
+    if (dot == 0 or dot + 1 >= type_path.len) return null;
+
+    const namespace_path = type_path[0..dot];
+    const symbol_name = type_path[dot + 1 ..];
+
+    const resolved = resolveNamespacePath(namespace_path, use_specs, owner_alloc) orelse return null;
+    defer owner_alloc.free(resolved.import_path);
+
+    if (!hasTypeInReachableImport(modules, reachable_modules, resolved.import_path, symbol_name)) return null;
+    return utils.dupe(u8, owner_alloc, symbol_name);
+}
+
+fn rewriteTypeNameForImports(type_name: []const u8, current_module: *const ModuleInfo, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), owner_alloc: std.mem.Allocator) []const u8 {
+    var out = std.ArrayList(u8){};
+    defer out.deinit(owner_alloc);
+
+    var changed = false;
+    var i: usize = 0;
+    while (i < type_name.len) {
+        if (isTypeTokenChar(type_name[i])) {
+            const start = i;
+            i += 1;
+            while (i < type_name.len and isTypeTokenChar(type_name[i])) : (i += 1) {}
+            const token = type_name[start..i];
+
+            var replacement = token;
+            var owned_replacement: ?[]const u8 = null;
+            defer {
+                if (owned_replacement) |owned| {
+                    owner_alloc.free(owned);
+                }
+            }
+
+            if (std.mem.indexOfScalar(u8, token, '.')) |_| {
+                if (resolveNamespacedTypeToken(token, use_specs, modules, reachable_modules, owner_alloc)) |resolved_name| {
+                    replacement = resolved_name;
+                    owned_replacement = resolved_name;
+                    changed = true;
+                }
+            } else if (!isAllDigits(token) and !isBuiltinTypeToken(token)) {
+                if (isTypeHiddenByImportOverrides(current_module, use_specs, modules, reachable_modules, token)) {
+                    if (std.fmt.allocPrint(owner_alloc, "__zlang_hidden_import__.{s}", .{token}) catch null) |hidden_name| {
+                        replacement = hidden_name;
+                        owned_replacement = hidden_name;
+                        changed = true;
+                    }
+                }
+            }
+
+            for (replacement) |ch| {
+                out.append(owner_alloc, ch) catch return type_name;
+            }
+            continue;
+        }
+
+        out.append(owner_alloc, type_name[i]) catch return type_name;
+        i += 1;
+    }
+
+    if (!changed) return type_name;
+    return out.toOwnedSlice(owner_alloc) catch type_name;
+}
+
+fn rewriteNodeTypeFields(current_module: *const ModuleInfo, node: *ast.Node, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void)) void {
+    switch (node.data) {
+        .function => |*func| {
+            func.return_type = rewriteTypeNameForImports(func.return_type, current_module, use_specs, modules, reachable_modules, node.allocator);
+            for (func.parameters.items) |*param| {
+                param.type_name = rewriteTypeNameForImports(param.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+            }
+        },
+        .c_function_decl => |*decl| {
+            decl.return_type = rewriteTypeNameForImports(decl.return_type, current_module, use_specs, modules, reachable_modules, node.allocator);
+            for (decl.parameters.items) |*param| {
+                param.type_name = rewriteTypeNameForImports(param.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+            }
+        },
+        .var_decl => |*decl| {
+            decl.type_name = rewriteTypeNameForImports(decl.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+        },
+        .struct_decl => |*decl| {
+            for (decl.fields.items) |*field| {
+                field.type_name = rewriteTypeNameForImports(field.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+            }
+        },
+        .cast => |*cast_node| {
+            if (cast_node.type_name) |type_name| {
+                cast_node.type_name = rewriteTypeNameForImports(type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+            }
+        },
+        .expression_block => |*block| {
+            block.type_name = rewriteTypeNameForImports(block.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+        },
+        .struct_initializer => |*struct_init| {
+            struct_init.struct_name = rewriteTypeNameForImports(struct_init.struct_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+        },
+        else => {},
+    }
 }
 
 fn pathPrefixSuffix(path: []const u8, prefix: []const u8) ?[]const u8 {
@@ -853,6 +1026,8 @@ fn hideFunctionCallName(call_node: *ast.Node) void {
 }
 
 fn rewriteModuleImportsInNode(current_module: *const ModuleInfo, node: *ast.Node, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), alloc: std.mem.Allocator) void {
+    rewriteNodeTypeFields(current_module, node, use_specs, modules, reachable_modules);
+
     switch (node.data) {
         .program => |prog| {
             for (prog.globals.items) |glob| {
