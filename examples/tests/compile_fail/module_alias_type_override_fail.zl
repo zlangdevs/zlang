@@ -1,0 +1,8 @@
+module app.module_alias_type_override_fail;
+use std
+use std.random as rand
+
+fun main() >> i32 {
+    XorShift rng = rand.xorShiftInit(1);
+    return rng.state as i32;
+}

@@ -1,0 +1,30 @@
+module app.module_alias_type_test;
+use std
+use std.random as rand
+use std.time as _
+
+fun main() >> i32 {
+    rand.XorShift rng = rand.xorShiftInit(123);
+    u32 n = rand.xorShiftNext(&rng);
+    i32 alias_type_ok = 0;
+    if (n >= 0) {
+        alias_type_ok = 1;
+    }
+    @printf("expected 1):%d\n", alias_type_ok);
+
+    std.time.Timer timer = std.time.timerStart();
+    i32 ns_type_ok = 0;
+    if (!std.time.timerExpired(timer, 1000.0)) {
+        ns_type_ok = 1;
+    }
+    @printf("expected 1):%d\n", ns_type_ok);
+
+    rand.XorShift from_init = rand.xorShiftInit(5);
+    i32 init_ok = 0;
+    if (from_init.state == 5) {
+        init_ok = 1;
+    }
+    @printf("expected 1):%d\n", init_ok);
+
+    return 0;
+}
