@@ -94,13 +94,12 @@ extern void* current_scanner;
 void* ast_root = NULL;
 %}
 
-/* Expected shift/reduce conflicts (benign, resolved by GLR):
-   - State 1: TOKEN_IDENTIFIER as type_name vs start of complex_type_name
-   - State ~68: TOKEN_IDENTIFIER as ref_base vs function_call vs struct_initializer
-   - State ~236: TOKEN_IDENTIFIER in multiple contexts (label, type, ref_base)
+/* Expected parser conflicts (benign, resolved by GLR):
+   - type/cast parsing around '<' and generic type forms
+   - identifier-leading ambiguities (label/type/ref/struct initializer)
    These ambiguities are inherent to the language syntax and correctly resolved. */
-%expect 4
-%expect-rr 0
+%expect 2
+%expect-rr 5
 
 %define parse.error verbose
 
@@ -160,7 +159,7 @@ void* ast_root = NULL;
 %type <node> error_declaration send_statement solicit_statement handled_call_statement on_handler_list
 %type <node> enum_values enum_value_list struct_fields struct_field_list
 %type <node> struct_initializer struct_field_values struct_field_value_list initializer_expression ref_expression ref_base
-%type <string> type_name function_name string_literal complex_type_name module_path function_type_core function_type_param_list type_list template_params use_alias
+%type <string> type_name function_name string_literal complex_type_name module_path qualified_type_name function_type_core function_type_param_list type_list template_params use_alias
 
 %start program
 
@@ -372,39 +371,55 @@ function_name:
     TOKEN_IDENTIFIER { $$ = strdup($1); }
 ;
 
+qualified_type_name:
+    TOKEN_IDENTIFIER { $$ = strdup($1); }
+  | qualified_type_name TOKEN_DOT TOKEN_IDENTIFIER {
+        size_t len = strlen($1) + strlen($3) + 2;
+        $$ = malloc(len);
+        snprintf($$, len, "%s.%s", $1, $3);
+        free($1);
+    }
+;
+
 complex_type_name:
-    TOKEN_IDENTIFIER TOKEN_LESS type_name TOKEN_COMMA TOKEN_NUMBER TOKEN_GREATER %prec TOKEN_LESS {
+    qualified_type_name TOKEN_LESS type_name TOKEN_COMMA TOKEN_NUMBER TOKEN_GREATER %prec TOKEN_LESS {
         char* result = malloc(strlen($1) + strlen($3) + strlen($5) + 6);
         sprintf(result, "%s<%s, %s>", $1, $3, $5);
+        free($1);
         free($3);
         $$ = result;
     }
-  | TOKEN_IDENTIFIER TOKEN_LESS type_name TOKEN_COMMA TOKEN_UNDERSCORE TOKEN_GREATER %prec TOKEN_LESS {
+  | qualified_type_name TOKEN_LESS type_name TOKEN_COMMA TOKEN_UNDERSCORE TOKEN_GREATER %prec TOKEN_LESS {
         char* result = malloc(strlen($1) + strlen($3) + 6);
         sprintf(result, "%s<%s, _>", $1, $3);
+        free($1);
         free($3);
         $$ = result;
     }
-  | TOKEN_IDENTIFIER TOKEN_LESS TOKEN_UNDERSCORE TOKEN_GREATER %prec TOKEN_LESS {
+  | qualified_type_name TOKEN_LESS TOKEN_UNDERSCORE TOKEN_GREATER %prec TOKEN_LESS {
         char* result = malloc(strlen($1) + 4);
         sprintf(result, "%s<_>", $1);
+        free($1);
         $$ = result;
     }
-  | TOKEN_IDENTIFIER TOKEN_LESS TOKEN_CONST type_name TOKEN_GREATER %prec TOKEN_LESS {
+  | qualified_type_name TOKEN_LESS TOKEN_CONST type_name TOKEN_GREATER %prec TOKEN_LESS {
         char* result = malloc(strlen($1) + strlen($4) + 12);
         sprintf(result, "%s<const %s>", $1, $4);
+        free($1);
         free($4);
         $$ = result;
     }
-  | TOKEN_IDENTIFIER TOKEN_LESS type_name TOKEN_GREATER %prec TOKEN_LESS {
+  | qualified_type_name TOKEN_LESS type_name TOKEN_GREATER %prec TOKEN_LESS {
         char* result = malloc(strlen($1) + strlen($3) + 5);
         sprintf(result, "%s<%s>", $1, $3);
+        free($1);
         free($3);
         $$ = result;
     }
-  | TOKEN_IDENTIFIER TOKEN_LESS function_type_core TOKEN_GREATER %prec TOKEN_LESS {
+  | qualified_type_name TOKEN_LESS function_type_core TOKEN_GREATER %prec TOKEN_LESS {
         char* result = malloc(strlen($1) + strlen($3) + 5);
         sprintf(result, "%s<%s>", $1, $3);
+        free($1);
         free($3);
         $$ = result;
     }
@@ -472,7 +487,7 @@ type_list:
 
  type_name:
     complex_type_name { $$ = $1; }
-  | TOKEN_IDENTIFIER { $$ = strdup($1); }
+  | qualified_type_name { $$ = $1; }
   | TOKEN_LBRACKET type_list TOKEN_RBRACKET {
         const char* list = $2;
         size_t len = strlen(list) + 3; // +2 for [] and +1 for null
