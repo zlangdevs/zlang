@@ -14,6 +14,7 @@ fun main() >> i32 {
     bool ok = true;
     f64 ratio = 3.5;
     Point p = Point{x = 7, y = 9};
+    arr<i32, 5> nums = {1, 2, 3, 4, 5};
 
     ptr<u8> s1 = "count: ${count + 1}";
     ptr<u8> s2 = "ok: ${ok}";
@@ -23,6 +24,7 @@ fun main() >> i32 {
     ptr<u8> s6 = "null: ${null}";
     ptr<u8> s7 = "inc: ${inc(count)}";
     ptr<u8> s8 = "Hi. Int: ${count - 36}. Float: ${ratio}. Bool: ${ok}. Point: ${p}. Null: ${null}";
+    ptr<u8> s9 = "numbers: ${nums}";
 
     @printf("%s\n", s1);
     @printf("%s\n", s2);
@@ -32,6 +34,7 @@ fun main() >> i32 {
     @printf("%s\n", s6);
     @printf("%s\n", s7);
     @printf("%s\n", s8);
+    @printf("%s\n", s9);
 
     @printf("(expected 1):%d\n", strcmp(s1, "count: 42") == 0);
     @printf("(expected 1):%d\n", strcmp(s2, "ok: true") == 0);
@@ -43,5 +46,6 @@ fun main() >> i32 {
     @printf("(expected 1):%d\n", strstr(s8, "Bool: true") != null);
     @printf("(expected 1):%d\n", strstr(s8, "Point: {x = 7, y = 9}") != null);
     @printf("(expected 1):%d\n", strstr(s8, "Null: null") != null);
+    @printf("(expected 1):%d\n", strcmp(s9, "numbers: [1, 2, 3, 4, 5]") == 0);
     return 0;
 }
