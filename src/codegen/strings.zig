@@ -177,6 +177,33 @@ fn appendAnyValue(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, value: c.LLVMVal
         return;
     }
 
+    if (kind == c.LLVMArrayTypeKind) {
+        const elem_ty = c.LLVMGetElementType(ty);
+        const arr_len = c.LLVMGetArrayLength(ty);
+        const i32_ty = c.LLVMInt32TypeInContext(cg.context);
+
+        _ = appendFormatted(cg, dst, "[", &[_]c.LLVMValueRef{});
+
+        const tmp = c.LLVMBuildAlloca(cg.builder, ty, "interp_array_tmp");
+        _ = c.LLVMBuildStore(cg.builder, value, tmp);
+
+        var i: u32 = 0;
+        while (i < arr_len) : (i += 1) {
+            if (i > 0) _ = appendFormatted(cg, dst, ", ", &[_]c.LLVMValueRef{});
+
+            var idxs = [_]c.LLVMValueRef{
+                c.LLVMConstInt(i32_ty, 0, 0),
+                c.LLVMConstInt(i32_ty, @as(c_ulonglong, @intCast(i)), 0),
+            };
+            const elem_ptr = c.LLVMBuildGEP2(cg.builder, ty, tmp, &idxs, 2, "interp_array_elem_ptr");
+            const elem_val = c.LLVMBuildLoad2(cg.builder, elem_ty, elem_ptr, "interp_array_elem_val");
+            try appendAnyValue(cg, dst, elem_val, null);
+        }
+
+        _ = appendFormatted(cg, dst, "]", &[_]c.LLVMValueRef{});
+        return;
+    }
+
     if (kind == c.LLVMStructTypeKind) {
         const struct_name = if (hint_type_name) |n| n else blk: {
             const n_ptr = c.LLVMGetStructName(ty);
