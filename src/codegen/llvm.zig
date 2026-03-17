@@ -3653,6 +3653,25 @@ pub const CodeGenerator = struct {
                         }
                         return result;
                     }
+
+                    if (parseFixedArrayType(type_name)) |array_info| {
+                        if (init_list.elements.items.len > array_info.array_size) {
+                            self.reportErrorFmt("Array initializer has {d} elements, but target type '{s}' has size {d}", .{ init_list.elements.items.len, type_name, array_info.array_size }, "Reduce elements or increase declared array size");
+                            return errors.CodegenError.TypeMismatch;
+                        }
+
+                        const array_type = try self.getLLVMType(type_name);
+                        const element_type = c.LLVMGetElementType(array_type);
+                        var result = c.LLVMConstNull(array_type);
+
+                        for (init_list.elements.items, 0..) |element, i| {
+                            const element_value_raw = try self.generateExpressionWithContext(element, array_info.element_type_name);
+                            const casted_value = try self.castWithRules(element_value_raw, element_type, element);
+                            result = c.LLVMBuildInsertValue(self.builder, result, casted_value, @intCast(i), "array_init");
+                        }
+
+                        return result;
+                    }
                 }
                 return errors.CodegenError.TypeMismatch;
             },
