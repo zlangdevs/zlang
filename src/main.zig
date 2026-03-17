@@ -1524,6 +1524,731 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
         context;
 }
 
+const ZliLoadedModule = struct {
+    path: []const u8,
+    module_name: []const u8,
+};
+
+fn deinitZliLoadedModules(loaded_modules: *std.ArrayList(ZliLoadedModule), alloc: std.mem.Allocator) void {
+    for (loaded_modules.items) |item| {
+        alloc.free(item.path);
+        alloc.free(item.module_name);
+    }
+    loaded_modules.deinit(alloc);
+}
+
+fn deinitOwnedStringList(strings: *std.ArrayList([]const u8), alloc: std.mem.Allocator) void {
+    for (strings.items) |item| {
+        alloc.free(item);
+    }
+    strings.deinit(alloc);
+}
+
+fn clearOwnedStringList(strings: *std.ArrayList([]const u8), alloc: std.mem.Allocator) void {
+    for (strings.items) |item| {
+        alloc.free(item);
+    }
+    strings.clearRetainingCapacity();
+}
+
+fn clearZliLoadedModules(loaded_modules: *std.ArrayList(ZliLoadedModule), alloc: std.mem.Allocator) void {
+    for (loaded_modules.items) |item| {
+        alloc.free(item.path);
+        alloc.free(item.module_name);
+    }
+    loaded_modules.clearRetainingCapacity();
+}
+
+fn containsLoadedPath(list: []const ZliLoadedModule, path: []const u8) bool {
+    for (list) |item| {
+        if (std.mem.eql(u8, item.path, path)) return true;
+    }
+    return false;
+}
+
+fn stripMatchingQuotes(text: []const u8) []const u8 {
+    if (text.len >= 2) {
+        if ((text[0] == '"' and text[text.len - 1] == '"') or (text[0] == '\'' and text[text.len - 1] == '\'')) {
+            return text[1 .. text.len - 1];
+        }
+    }
+    return text;
+}
+
+fn inferModuleNameFromFile(file_path: []const u8, alloc: std.mem.Allocator) ![]const u8 {
+    var temp_arena = ast.ArenaAST.init(alloc);
+    defer temp_arena.deinit();
+
+    var module = try parseModuleFile(file_path, temp_arena.allocator(), alloc);
+    defer module.deinit(alloc);
+
+    return utils.dupe(u8, alloc, module.name);
+}
+
+fn loadModuleIntoZli(loaded_modules: *std.ArrayList(ZliLoadedModule), file_path_arg: []const u8, alloc: std.mem.Allocator) !void {
+    const trimmed = trimSpaces(file_path_arg);
+    if (trimmed.len == 0) {
+        std.debug.print("Usage: :load <file.zl>\n", .{});
+        return;
+    }
+
+    const raw_path = stripMatchingQuotes(trimmed);
+    const abs_path = std.fs.cwd().realpathAlloc(alloc, raw_path) catch |err| {
+        std.debug.print("zli: cannot load '{s}': {}\n", .{ raw_path, err });
+        return;
+    };
+
+    if (containsLoadedPath(loaded_modules.items, abs_path)) {
+        std.debug.print("zli: already loaded {s}\n", .{abs_path});
+        alloc.free(abs_path);
+        return;
+    }
+
+    const module_name = inferModuleNameFromFile(abs_path, alloc) catch |err| {
+        std.debug.print("zli: failed to parse module '{s}': {}\n", .{ abs_path, err });
+        alloc.free(abs_path);
+        return;
+    };
+
+    try loaded_modules.append(alloc, .{
+        .path = abs_path,
+        .module_name = module_name,
+    });
+
+    std.debug.print("zli: loaded {s} (module {s})\n", .{ abs_path, module_name });
+}
+
+fn addZliImport(imports: *std.ArrayList([]const u8), import_name_arg: []const u8, alloc: std.mem.Allocator) !void {
+    const trimmed = trimSpaces(import_name_arg);
+    if (trimmed.len == 0) {
+        std.debug.print("Usage: :import <module.path>\n", .{});
+        return;
+    }
+
+    if (containsString(imports.items, trimmed)) {
+        std.debug.print("zli: import already present: {s}\n", .{trimmed});
+        return;
+    }
+
+    try imports.append(alloc, utils.dupe(u8, alloc, trimmed));
+    std.debug.print("zli: import added: {s}\n", .{trimmed});
+}
+
+fn printZliHelp() void {
+    std.debug.print(
+        \\zli commands:
+        \\  :load <file.zl>     Load a source file into session
+        \\  :import <module>    Add a module import for eval snippets
+        \\  :files              Show loaded files and imports
+        \\  :clear              Clear loaded files and imports
+        \\  :reload             No-op (files are compiled fresh each eval)
+        \\  :help               Show this help
+        \\  :quit / :q / :exit  Exit zli
+        \\
+        \\Expressions print their value automatically (ghci-style).
+        \\Non-expression lines are executed as statements inside temporary main().
+        \\
+    , .{});
+}
+
+fn makeZliStatement(line: []const u8, alloc: std.mem.Allocator) ![]const u8 {
+    const trimmed = trimSpaces(line);
+    if (trimmed.len == 0) return utils.dupe(u8, alloc, "");
+
+    const last = trimmed[trimmed.len - 1];
+    if (last == ';' or last == '}') {
+        return utils.dupe(u8, alloc, trimmed);
+    }
+
+    return std.fmt.allocPrint(alloc, "{s};", .{trimmed});
+}
+
+fn isZliCalcExprChar(ch: u8) bool {
+    if (std.ascii.isWhitespace(ch) or std.ascii.isDigit(ch)) return true;
+    return ch == '+' or ch == '-' or ch == '*' or ch == '/' or ch == '%' or ch == '(' or ch == ')' or ch == '.' or ch == '\'';
+}
+
+fn isLikelyCalculatorExpression(expr: []const u8) bool {
+    var has_op = false;
+    var has_digit = false;
+    for (expr) |ch| {
+        if (!isZliCalcExprChar(ch)) return false;
+        if (std.ascii.isDigit(ch)) has_digit = true;
+        if (ch == '+' or ch == '-' or ch == '*' or ch == '/' or ch == '%') has_op = true;
+    }
+    return has_op and has_digit;
+}
+
+fn rewriteCalcIntegersToFloat(expr: []const u8, alloc: std.mem.Allocator) ![]const u8 {
+    var out = std.ArrayList(u8){};
+    defer out.deinit(alloc);
+
+    var i: usize = 0;
+    while (i < expr.len) {
+        const ch = expr[i];
+        if (!std.ascii.isDigit(ch)) {
+            try out.append(alloc, ch);
+            i += 1;
+            continue;
+        }
+
+        const start = i;
+        i += 1;
+        while (i < expr.len and (std.ascii.isDigit(expr[i]) or expr[i] == '\'')) : (i += 1) {}
+
+        var has_fraction = false;
+        if (i + 1 < expr.len and expr[i] == '.' and std.ascii.isDigit(expr[i + 1])) {
+            has_fraction = true;
+            i += 1;
+            while (i < expr.len and (std.ascii.isDigit(expr[i]) or expr[i] == '\'')) : (i += 1) {}
+        }
+
+        var has_exp = false;
+        if (i < expr.len and (expr[i] == 'e' or expr[i] == 'E')) {
+            var j = i + 1;
+            if (j < expr.len and (expr[j] == '+' or expr[j] == '-')) j += 1;
+            const exp_start = j;
+            while (j < expr.len and std.ascii.isDigit(expr[j])) : (j += 1) {}
+            if (j > exp_start) {
+                has_exp = true;
+                i = j;
+            }
+        }
+
+        try out.appendSlice(alloc, expr[start..i]);
+        if (!has_fraction and !has_exp) {
+            try out.appendSlice(alloc, ".0");
+        }
+    }
+
+    return out.toOwnedSlice(alloc);
+}
+
+fn makeZliExpressionPrintStatement(line: []const u8, alloc: std.mem.Allocator) ![]const u8 {
+    const trimmed = trimSpaces(line);
+    if (trimmed.len == 0) return utils.dupe(u8, alloc, "");
+
+    if (isLikelyCalculatorExpression(trimmed) and std.mem.indexOfScalar(u8, trimmed, '/') != null and std.mem.indexOfScalar(u8, trimmed, '%') == null) {
+        const calc_expr = try rewriteCalcIntegersToFloat(trimmed, alloc);
+        defer alloc.free(calc_expr);
+        return std.fmt.allocPrint(alloc, "@printf(\"%.15g\\n\", ({s}));", .{calc_expr});
+    }
+
+    return std.fmt.allocPrint(alloc, "println(\"${{{s}}}\");", .{trimmed});
+}
+
+const ZliSnippetMode = enum {
+    statement,
+    expression,
+};
+
+fn buildZliSnippetSource(loaded_modules: []const ZliLoadedModule, imports: []const []const u8, statement_line: []const u8, mode: ZliSnippetMode, alloc: std.mem.Allocator) ![]const u8 {
+    var out = std.ArrayList(u8){};
+    defer out.deinit(alloc);
+    var writer = out.writer(alloc);
+
+    try writer.print("module zli.session;\n", .{});
+
+    var use_set = std.StringHashMap(void).init(alloc);
+    defer use_set.deinit();
+
+    for (imports) |import_name| {
+        if (!use_set.contains(import_name)) {
+            try use_set.put(import_name, {});
+            try writer.print("use {s}\n", .{import_name});
+        }
+    }
+
+    for (loaded_modules) |loaded| {
+        if (!use_set.contains(loaded.module_name)) {
+            try use_set.put(loaded.module_name, {});
+            try writer.print("use {s}\n", .{loaded.module_name});
+        }
+    }
+
+    if (mode == .expression and !use_set.contains("std")) {
+        try use_set.put("std", {});
+        try writer.print("use std\n", .{});
+    }
+
+    const statement = switch (mode) {
+        .statement => try makeZliStatement(statement_line, alloc),
+        .expression => try makeZliExpressionPrintStatement(statement_line, alloc),
+    };
+    defer alloc.free(statement);
+
+    try writer.print("\nfun main() >> i32 {{\n    {s}\n    return 0;\n}}\n", .{statement});
+    return out.toOwnedSlice(alloc);
+}
+
+fn runZliSnippet(exe_path: []const u8, loaded_modules: []const ZliLoadedModule, imports: []const []const u8, line: []const u8, mode: ZliSnippetMode, alloc: std.mem.Allocator) !u8 {
+    const snippet_src = try buildZliSnippetSource(loaded_modules, imports, line, mode, alloc);
+    defer alloc.free(snippet_src);
+
+    const tmp_path = try std.fmt.allocPrint(alloc, "__zli_eval_{d}.zl", .{std.time.nanoTimestamp()});
+    defer alloc.free(tmp_path);
+
+    var tmp_file = std.fs.cwd().createFile(tmp_path, .{ .truncate = true }) catch |err| {
+        std.debug.print("zli: failed to create temp file: {}\n", .{err});
+        return 1;
+    };
+    defer tmp_file.close();
+
+    try tmp_file.writeAll(snippet_src);
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    var argv = std.ArrayList([]const u8){};
+    defer argv.deinit(alloc);
+
+    try argv.append(alloc, exe_path);
+    try argv.append(alloc, "run");
+    for (loaded_modules) |loaded| {
+        try argv.append(alloc, loaded.path);
+    }
+    try argv.append(alloc, tmp_path);
+
+    var child = std.process.Child.init(argv.items, alloc);
+    child.stdin_behavior = .Inherit;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+
+    var env_map = std.process.getEnvMap(alloc) catch null;
+    defer if (env_map) |*map| map.deinit();
+
+    var zstdpath_for_child: ?[]const u8 = null;
+    defer if (zstdpath_for_child) |p| alloc.free(p);
+
+    var has_zstdpath = false;
+    if (std.process.getEnvVarOwned(alloc, "ZSTDPATH")) |existing_path| {
+        has_zstdpath = true;
+        alloc.free(existing_path);
+    } else |_| {}
+
+    if (!has_zstdpath) {
+        if (std.fs.cwd().realpathAlloc(alloc, "stdlib") catch null) |stdlib_path| {
+            zstdpath_for_child = stdlib_path;
+            if (env_map) |*map| {
+                try map.put("ZSTDPATH", stdlib_path);
+            }
+        }
+    }
+
+    if (env_map) |*map| {
+        child.env_map = map;
+    }
+
+    const term = try child.spawnAndWait();
+    return switch (term) {
+        .Exited => |code| code,
+        else => 1,
+    };
+}
+
+const ZliCapturedRun = struct {
+    exit_code: u8,
+    stdout: []u8,
+    stderr: []u8,
+};
+
+fn runZliSnippetCaptured(exe_path: []const u8, loaded_modules: []const ZliLoadedModule, imports: []const []const u8, line: []const u8, mode: ZliSnippetMode, alloc: std.mem.Allocator) !ZliCapturedRun {
+    const snippet_src = try buildZliSnippetSource(loaded_modules, imports, line, mode, alloc);
+    defer alloc.free(snippet_src);
+
+    const tmp_path = try std.fmt.allocPrint(alloc, "__zli_eval_{d}.zl", .{std.time.nanoTimestamp()});
+    defer alloc.free(tmp_path);
+
+    var tmp_file = std.fs.cwd().createFile(tmp_path, .{ .truncate = true }) catch |err| {
+        std.debug.print("zli: failed to create temp file: {}\n", .{err});
+        return error.TempFileFailed;
+    };
+    defer tmp_file.close();
+
+    try tmp_file.writeAll(snippet_src);
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    var argv = std.ArrayList([]const u8){};
+    defer argv.deinit(alloc);
+
+    try argv.append(alloc, exe_path);
+    try argv.append(alloc, "run");
+    for (loaded_modules) |loaded| {
+        try argv.append(alloc, loaded.path);
+    }
+    try argv.append(alloc, tmp_path);
+
+    var env_map = std.process.getEnvMap(alloc) catch null;
+    defer if (env_map) |*map| map.deinit();
+
+    var zstdpath_for_child: ?[]const u8 = null;
+    defer if (zstdpath_for_child) |p| alloc.free(p);
+
+    var has_zstdpath = false;
+    if (std.process.getEnvVarOwned(alloc, "ZSTDPATH")) |existing_path| {
+        has_zstdpath = true;
+        alloc.free(existing_path);
+    } else |_| {}
+
+    if (!has_zstdpath) {
+        if (std.fs.cwd().realpathAlloc(alloc, "stdlib") catch null) |stdlib_path| {
+            zstdpath_for_child = stdlib_path;
+            if (env_map) |*map| {
+                try map.put("ZSTDPATH", stdlib_path);
+            }
+        }
+    }
+
+    const env_map_ptr: ?*const std.process.EnvMap = if (env_map) |*map| map else null;
+    const run_res = try std.process.Child.run(.{
+        .allocator = alloc,
+        .argv = argv.items,
+        .env_map = env_map_ptr,
+        .max_output_bytes = 1024 * 1024,
+    });
+
+    return .{
+        .exit_code = switch (run_res.term) {
+            .Exited => |code| code,
+            else => 1,
+        },
+        .stdout = run_res.stdout,
+        .stderr = run_res.stderr,
+    };
+}
+
+fn printZliFiles(loaded_modules: []const ZliLoadedModule, imports: []const []const u8) void {
+    if (loaded_modules.len == 0 and imports.len == 0) {
+        std.debug.print("zli: no loaded files or imports\n", .{});
+        return;
+    }
+
+    if (loaded_modules.len > 0) {
+        std.debug.print("Loaded files:\n", .{});
+        for (loaded_modules) |loaded| {
+            std.debug.print("  - {s}  (module {s})\n", .{ loaded.path, loaded.module_name });
+        }
+    }
+
+    if (imports.len > 0) {
+        std.debug.print("Imports:\n", .{});
+        for (imports) |import_name| {
+            std.debug.print("  - {s}\n", .{import_name});
+        }
+    }
+}
+
+fn zliPushHistory(history: *std.ArrayList([]const u8), line: []const u8, alloc: std.mem.Allocator) !void {
+    const trimmed = trimSpaces(line);
+    if (trimmed.len == 0) return;
+    if (history.items.len > 0 and std.mem.eql(u8, history.items[history.items.len - 1], line)) return;
+    try history.append(alloc, utils.dupe(u8, alloc, line));
+}
+
+fn zliReadByte(stdin_file: std.fs.File) !?u8 {
+    var b: [1]u8 = undefined;
+    const n = try stdin_file.read(&b);
+    if (n == 0) return null;
+    return b[0];
+}
+
+fn zliReplaceLine(buf: *std.ArrayList(u8), cursor: *usize, text: []const u8, alloc: std.mem.Allocator) !void {
+    buf.clearRetainingCapacity();
+    try buf.appendSlice(alloc, text);
+    cursor.* = buf.items.len;
+}
+
+fn zliRedraw(prompt: []const u8, line: []const u8, cursor: usize, alloc: std.mem.Allocator) !void {
+    const stdout_file = std.fs.File.stdout();
+    try stdout_file.writeAll("\r");
+    try stdout_file.writeAll(prompt);
+    try stdout_file.writeAll(line);
+    try stdout_file.writeAll("\x1b[K");
+
+    const tail = line.len - cursor;
+    if (tail > 0) {
+        const move_left = try std.fmt.allocPrint(alloc, "\x1b[{d}D", .{tail});
+        defer alloc.free(move_left);
+        try stdout_file.writeAll(move_left);
+    }
+}
+
+fn readZliLineInteractive(prompt: []const u8, history: *std.ArrayList([]const u8), alloc: std.mem.Allocator) !?[]const u8 {
+    const stdin_file = std.fs.File.stdin();
+
+    const orig_termios = try std.posix.tcgetattr(stdin_file.handle);
+    var raw_termios = orig_termios;
+    raw_termios.lflag.ICANON = false;
+    raw_termios.lflag.ECHO = false;
+    raw_termios.cc[@intFromEnum(std.posix.V.MIN)] = 1;
+    raw_termios.cc[@intFromEnum(std.posix.V.TIME)] = 0;
+    try std.posix.tcsetattr(stdin_file.handle, .NOW, raw_termios);
+    defer std.posix.tcsetattr(stdin_file.handle, .NOW, orig_termios) catch {};
+
+    var line_buf = std.ArrayList(u8){};
+    defer line_buf.deinit(alloc);
+
+    var draft_buf = std.ArrayList(u8){};
+    defer draft_buf.deinit(alloc);
+
+    var cursor: usize = 0;
+    var history_index: ?usize = null;
+
+    try zliRedraw(prompt, line_buf.items, cursor, alloc);
+
+    while (true) {
+        const maybe_ch = try zliReadByte(stdin_file);
+        if (maybe_ch == null) {
+            const stdout_file = std.fs.File.stdout();
+            try stdout_file.writeAll("\n");
+            if (line_buf.items.len == 0) return null;
+            const out = try line_buf.toOwnedSlice(alloc);
+            try zliPushHistory(history, out, alloc);
+            return out;
+        }
+
+        const ch = maybe_ch.?;
+        switch (ch) {
+            '\r', '\n' => {
+                const stdout_file = std.fs.File.stdout();
+                try stdout_file.writeAll("\r\n");
+                const out = try line_buf.toOwnedSlice(alloc);
+                try zliPushHistory(history, out, alloc);
+                return out;
+            },
+            3 => {
+                const stdout_file = std.fs.File.stdout();
+                try stdout_file.writeAll("^C\r\n");
+                return utils.dupe(u8, alloc, "");
+            },
+            4 => {
+                if (line_buf.items.len == 0) {
+                    const stdout_file = std.fs.File.stdout();
+                    try stdout_file.writeAll("\r\n");
+                    return null;
+                }
+            },
+            127, 8 => {
+                if (cursor > 0) {
+                    const len = line_buf.items.len;
+                    std.mem.copyForwards(u8, line_buf.items[cursor - 1 .. len - 1], line_buf.items[cursor..len]);
+                    line_buf.shrinkRetainingCapacity(len - 1);
+                    cursor -= 1;
+                    try zliRedraw(prompt, line_buf.items, cursor, alloc);
+                }
+            },
+            1 => {
+                cursor = 0;
+                try zliRedraw(prompt, line_buf.items, cursor, alloc);
+            },
+            5 => {
+                cursor = line_buf.items.len;
+                try zliRedraw(prompt, line_buf.items, cursor, alloc);
+            },
+            12 => {
+                const stdout_file = std.fs.File.stdout();
+                try stdout_file.writeAll("\x1b[2J\x1b[H");
+                try zliRedraw(prompt, line_buf.items, cursor, alloc);
+            },
+            27 => {
+                const esc1 = try zliReadByte(stdin_file) orelse continue;
+                if (esc1 != '[') continue;
+                const esc2 = try zliReadByte(stdin_file) orelse continue;
+
+                switch (esc2) {
+                    'D' => {
+                        if (cursor > 0) {
+                            cursor -= 1;
+                            try zliRedraw(prompt, line_buf.items, cursor, alloc);
+                        }
+                    },
+                    'C' => {
+                        if (cursor < line_buf.items.len) {
+                            cursor += 1;
+                            try zliRedraw(prompt, line_buf.items, cursor, alloc);
+                        }
+                    },
+                    'A' => {
+                        if (history.items.len == 0) continue;
+                        if (history_index == null) {
+                            draft_buf.clearRetainingCapacity();
+                            try draft_buf.appendSlice(alloc, line_buf.items);
+                            history_index = history.items.len - 1;
+                        } else if (history_index.? > 0) {
+                            history_index = history_index.? - 1;
+                        }
+                        try zliReplaceLine(&line_buf, &cursor, history.items[history_index.?], alloc);
+                        try zliRedraw(prompt, line_buf.items, cursor, alloc);
+                    },
+                    'B' => {
+                        if (history_index == null) continue;
+                        if (history_index.? + 1 < history.items.len) {
+                            history_index = history_index.? + 1;
+                            try zliReplaceLine(&line_buf, &cursor, history.items[history_index.?], alloc);
+                        } else {
+                            history_index = null;
+                            try zliReplaceLine(&line_buf, &cursor, draft_buf.items, alloc);
+                        }
+                        try zliRedraw(prompt, line_buf.items, cursor, alloc);
+                    },
+                    'H' => {
+                        cursor = 0;
+                        try zliRedraw(prompt, line_buf.items, cursor, alloc);
+                    },
+                    'F' => {
+                        cursor = line_buf.items.len;
+                        try zliRedraw(prompt, line_buf.items, cursor, alloc);
+                    },
+                    '3' => {
+                        const tilde = try zliReadByte(stdin_file) orelse continue;
+                        if (tilde == '~' and cursor < line_buf.items.len) {
+                            const len = line_buf.items.len;
+                            std.mem.copyForwards(u8, line_buf.items[cursor .. len - 1], line_buf.items[cursor + 1 .. len]);
+                            line_buf.shrinkRetainingCapacity(len - 1);
+                            try zliRedraw(prompt, line_buf.items, cursor, alloc);
+                        }
+                    },
+                    else => {},
+                }
+            },
+            else => {
+                if (ch < 32) continue;
+
+                const len = line_buf.items.len;
+                try line_buf.append(alloc, 0);
+                if (cursor < len) {
+                    std.mem.copyBackwards(u8, line_buf.items[cursor + 1 .. len + 1], line_buf.items[cursor..len]);
+                }
+                line_buf.items[cursor] = ch;
+                cursor += 1;
+                try zliRedraw(prompt, line_buf.items, cursor, alloc);
+            },
+        }
+    }
+}
+
+fn runZli(cli_args: [][:0]u8, alloc: std.mem.Allocator) !u8 {
+    if (!interpreter.checkLLIAvailable(alloc)) {
+        std.debug.print("Error: lli (LLVM interpreter) is not available.\n", .{});
+        std.debug.print("Please ensure LLVM is installed and lli is in your PATH.\n", .{});
+        return 1;
+    }
+
+    const exe_path = try std.fs.selfExePathAlloc(alloc);
+    defer alloc.free(exe_path);
+
+    var loaded_modules = std.ArrayList(ZliLoadedModule){};
+    defer deinitZliLoadedModules(&loaded_modules, alloc);
+
+    var imports = std.ArrayList([]const u8){};
+    defer deinitOwnedStringList(&imports, alloc);
+
+    for (cli_args) |arg| {
+        try loadModuleIntoZli(&loaded_modules, arg, alloc);
+    }
+
+    std.debug.print("zli: interactive mode (type :help for commands)\n", .{});
+
+    const stdin_file = std.fs.File.stdin();
+    const stdin_is_tty = stdin_file.isTty();
+
+    var history = std.ArrayList([]const u8){};
+    defer deinitOwnedStringList(&history, alloc);
+
+    var stdin_buf: [4096]u8 = undefined;
+    var stdin_reader = stdin_file.reader(&stdin_buf);
+
+    while (true) {
+        var owned_line: ?[]const u8 = null;
+        defer if (owned_line) |line_to_free| alloc.free(line_to_free);
+
+        const line = if (stdin_is_tty) blk: {
+            const maybe_line = try readZliLineInteractive("zli> ", &history, alloc);
+            if (maybe_line == null) break;
+            owned_line = maybe_line.?;
+            break :blk maybe_line.?;
+        } else blk: {
+            std.debug.print("zli> ", .{});
+            const maybe_line = stdin_reader.interface.takeDelimiter('\n') catch |err| switch (err) {
+                error.StreamTooLong => {
+                    _ = stdin_reader.interface.discardDelimiterInclusive('\n') catch {};
+                    std.debug.print("zli: input line is too long\n", .{});
+                    continue;
+                },
+                else => {
+                    std.debug.print("zli: failed to read input: {}\n", .{err});
+                    break;
+                },
+            };
+            if (maybe_line == null) {
+                std.debug.print("\n", .{});
+                break;
+            }
+            break :blk maybe_line.?;
+        };
+
+        const trimmed = trimSpaces(line);
+        if (trimmed.len == 0) continue;
+
+        if (trimmed[0] == ':') {
+            const cmd = trimSpaces(trimmed[1..]);
+
+            if (std.mem.eql(u8, cmd, "q") or std.mem.eql(u8, cmd, "quit") or std.mem.eql(u8, cmd, "exit")) {
+                break;
+            } else if (std.mem.eql(u8, cmd, "help") or std.mem.eql(u8, cmd, "h")) {
+                printZliHelp();
+            } else if (std.mem.eql(u8, cmd, "files")) {
+                printZliFiles(loaded_modules.items, imports.items);
+            } else if (std.mem.eql(u8, cmd, "clear")) {
+                clearZliLoadedModules(&loaded_modules, alloc);
+                clearOwnedStringList(&imports, alloc);
+                std.debug.print("zli: cleared\n", .{});
+            } else if (std.mem.eql(u8, cmd, "reload")) {
+                std.debug.print("zli: reload is a no-op (files compile fresh on each eval)\n", .{});
+            } else if (std.mem.startsWith(u8, cmd, "load ")) {
+                const arg = trimSpaces(cmd[5..]);
+                try loadModuleIntoZli(&loaded_modules, arg, alloc);
+            } else if (std.mem.eql(u8, cmd, "load")) {
+                std.debug.print("Usage: :load <file.zl>\n", .{});
+            } else if (std.mem.startsWith(u8, cmd, "import ")) {
+                const arg = trimSpaces(cmd[7..]);
+                try addZliImport(&imports, arg, alloc);
+            } else if (std.mem.eql(u8, cmd, "import")) {
+                std.debug.print("Usage: :import <module.path>\n", .{});
+            } else {
+                std.debug.print("zli: unknown command ':{s}' (type :help)\n", .{cmd});
+            }
+
+            continue;
+        }
+
+        const ends_as_statement = trimmed[trimmed.len - 1] == ';' or trimmed[trimmed.len - 1] == '}';
+
+        if (!ends_as_statement) {
+            const expr_eval = runZliSnippetCaptured(exe_path, loaded_modules.items, imports.items, trimmed, .expression, alloc) catch |err| {
+                std.debug.print("zli: expression evaluation failed: {}\n", .{err});
+                continue;
+            };
+            defer alloc.free(expr_eval.stdout);
+            defer alloc.free(expr_eval.stderr);
+
+            if (expr_eval.exit_code == 0) {
+                if (expr_eval.stdout.len > 0) std.debug.print("{s}", .{expr_eval.stdout});
+                if (expr_eval.stderr.len > 0) std.debug.print("{s}", .{expr_eval.stderr});
+                continue;
+            }
+        }
+
+        const exit_code = runZliSnippet(exe_path, loaded_modules.items, imports.items, trimmed, .statement, alloc) catch |err| {
+            std.debug.print("zli: evaluation failed: {}\n", .{err});
+            continue;
+        };
+        if (exit_code != 0) {
+            std.debug.print("zli: command exited with code {d}\n", .{exit_code});
+        }
+    }
+
+    return 0;
+}
+
 fn compileBrainfuck(ctx: *Context, alloc: std.mem.Allocator) !u8 {
     const bf = @import("codegen/bf.zig");
     const c_bindings = @import("codegen/c_bindings.zig");
@@ -1927,6 +2652,10 @@ pub fn main() !u8 {
             help.printHelp();
         }
         return 0;
+    }
+    if (std.mem.eql(u8, args[1], "zli")) {
+        const zli_args = if (args.len > 2) args[2..] else args[args.len..args.len];
+        return runZli(zli_args, allocator);
     }
     if (std.mem.eql(u8, args[1], "wrap") or std.mem.eql(u8, args[1], "wrap-clang")) {
         const use_clang = std.mem.eql(u8, args[1], "wrap-clang");
