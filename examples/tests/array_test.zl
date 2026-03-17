@@ -34,6 +34,15 @@ fun main() >> i32 {
     myarr[4] = myarr[2] * 5 + 3;
     @printf("(expected 8):%d\n", myarr[4]);
 
+    arr<arr<i32, 5>, 5> matrix = {
+        {1, 2, 3, 4, 5},
+        {1, 2, 3, 4, 5},
+        {1, 2, 3, 4, 5},
+        {1, 2, 3, 4, 5},
+        {1, 2, 3, 4, 5}
+    };
+    @printf("(expected 5):%d\n", matrix[4][4]);
+
     ?? Test inferred array access
     @printf("(expected 30):%d\n", inferred_int[2]);
     @printf("(expected zlang):%s\n", &inferred_str);
