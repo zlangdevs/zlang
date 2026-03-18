@@ -3175,7 +3175,6 @@ pub const CodeGenerator = struct {
     }
 
     fn typesAreEqual(self: *CodeGenerator, type1: c.LLVMTypeRef, type2: c.LLVMTypeRef) bool {
-        _ = self;
         if (type1 == type2) return true;
 
         const kind1 = c.LLVMGetTypeKind(type1);
@@ -3186,6 +3185,14 @@ pub const CodeGenerator = struct {
         switch (kind1) {
             c.LLVMIntegerTypeKind => {
                 return c.LLVMGetIntTypeWidth(type1) == c.LLVMGetIntTypeWidth(type2);
+            },
+            c.LLVMArrayTypeKind => {
+                const len1 = c.LLVMGetArrayLength(type1);
+                const len2 = c.LLVMGetArrayLength(type2);
+                if (len1 != len2) return false;
+                const elem1 = c.LLVMGetElementType(type1);
+                const elem2 = c.LLVMGetElementType(type2);
+                return self.typesAreEqual(elem1, elem2);
             },
             c.LLVMFloatTypeKind, c.LLVMDoubleTypeKind, c.LLVMHalfTypeKind => {
                 return true;

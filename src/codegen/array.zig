@@ -273,7 +273,9 @@ pub fn generateArrayDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.
                     }
                 },
                 else => {
-                    return errors.CodegenError.TypeMismatch;
+                    const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
+                    const casted_init_value = try self.castWithSourceRules(init_value, array_type, initializer);
+                    _ = c.LLVMBuildStore(self.builder, casted_init_value, alloca);
                 },
             }
         }

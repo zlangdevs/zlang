@@ -1,3 +1,8 @@
+fun make_test_array() >> arr<i32, 5> {
+    arr<i32, 5> local = {9, 8, 7, 6, 5};
+    return local;
+}
+
 fun main() >> i32 {
     arr<u8, 3> u8_arr = {1, 2, 3};
     arr<u16, 3> u16_arr = {100, 200, 300};
@@ -42,6 +47,9 @@ fun main() >> i32 {
         {1, 2, 3, 4, 5}
     };
     @printf("(expected 5):%d\n", matrix[4][4]);
+
+    arr<i32, 5> from_fn = make_test_array();
+    @printf("(expected 14):%d\n", from_fn[0] + from_fn[4]);
 
     ?? Test inferred array access
     @printf("(expected 30):%d\n", inferred_int[2]);
