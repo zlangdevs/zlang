@@ -2222,8 +2222,10 @@ fn runZli(cli_args: [][:0]u8, alloc: std.mem.Allocator) !u8 {
 
         const ends_as_statement = trimmed[trimmed.len - 1] == ';' or trimmed[trimmed.len - 1] == '}';
 
-        if (!ends_as_statement) {
-            const expr_eval = runZliSnippetCaptured(exe_path, loaded_modules.items, imports.items, trimmed, .expression, alloc) catch |err| {
+        const expr_candidate: ?[]const u8 = if (!ends_as_statement) trimmed else null;
+
+        if (expr_candidate) |expr_text| {
+            const expr_eval = runZliSnippetCaptured(exe_path, loaded_modules.items, imports.items, expr_text, .expression, alloc) catch |err| {
                 std.debug.print("zli: expression evaluation failed: {}\n", .{err});
                 continue;
             };
