@@ -1135,9 +1135,10 @@ pub const CodeGenerator = struct {
                         const rhs_value = try self.generateExpressionWithContext(cas.value, var_info.type_name);
                         const rhs_casted = try self.castWithSourceRules(rhs_value, @ptrCast(var_info.type_ref), cas.value);
 
-                        const is_float = std.mem.eql(u8, var_info.type_name, "f16") or
-                            std.mem.eql(u8, var_info.type_name, "f32") or
-                            std.mem.eql(u8, var_info.type_name, "f64");
+                        const current_type_kind = c.LLVMGetTypeKind(var_info.type_ref);
+                        const is_float = current_type_kind == c.LLVMFloatTypeKind or
+                            current_type_kind == c.LLVMDoubleTypeKind or
+                            current_type_kind == c.LLVMHalfTypeKind;
 
                         const new_value = switch (cas.op) {
                             '+' => if (is_float)
@@ -1316,9 +1317,10 @@ pub const CodeGenerator = struct {
                         const rhs_value = try self.generateExpressionWithContext(cas.value, field_type_name);
                         const rhs_casted = try self.castWithSourceRules(rhs_value, field_type, cas.value);
 
-                        const is_float = std.mem.eql(u8, field_type_name, "f16") or
-                            std.mem.eql(u8, field_type_name, "f32") or
-                            std.mem.eql(u8, field_type_name, "f64");
+                        const field_type_kind = c.LLVMGetTypeKind(field_type);
+                        const is_float = field_type_kind == c.LLVMFloatTypeKind or
+                            field_type_kind == c.LLVMDoubleTypeKind or
+                            field_type_kind == c.LLVMHalfTypeKind;
 
                         const new_value = switch (cas.op) {
                             '+' => if (is_float)
@@ -4752,8 +4754,8 @@ pub const CodeGenerator = struct {
         const is_rhs_float = rhs_kind == c.LLVMFloatTypeKind or
             rhs_kind == c.LLVMDoubleTypeKind or
             rhs_kind == c.LLVMHalfTypeKind;
-        const is_float_op = is_lhs_float or is_rhs_float;
-        const result_type = if (is_float_op) blk: {
+        const inferred_float_op = is_lhs_float or is_rhs_float;
+        const result_type = if (inferred_float_op) blk: {
             if (lhs_kind == c.LLVMDoubleTypeKind or rhs_kind == c.LLVMDoubleTypeKind) {
                 break :blk c.LLVMDoubleTypeInContext(self.context);
             } else if (lhs_kind == c.LLVMFloatTypeKind or rhs_kind == c.LLVMFloatTypeKind) {
@@ -4772,7 +4774,7 @@ pub const CodeGenerator = struct {
         var casted_lhs = lhs_value;
         var casted_rhs = rhs_value;
 
-        if (is_float_op) {
+        if (inferred_float_op) {
             if (lhs_kind == c.LLVMIntegerTypeKind) {
                 if (utils.isUnsignedType(lhs_type_name_inferred))
                     casted_lhs = c.LLVMBuildUIToFP(self.builder, lhs_value, result_type, "uitofp_lhs")
@@ -4826,27 +4828,37 @@ pub const CodeGenerator = struct {
             casted_rhs = self.castToType(rhs_value, result_type);
         }
 
+        const final_lhs_kind = c.LLVMGetTypeKind(c.LLVMTypeOf(casted_lhs));
+        const final_rhs_kind = c.LLVMGetTypeKind(c.LLVMTypeOf(casted_rhs));
+        const final_is_lhs_float = final_lhs_kind == c.LLVMFloatTypeKind or
+            final_lhs_kind == c.LLVMDoubleTypeKind or
+            final_lhs_kind == c.LLVMHalfTypeKind;
+        const final_is_rhs_float = final_rhs_kind == c.LLVMFloatTypeKind or
+            final_rhs_kind == c.LLVMDoubleTypeKind or
+            final_rhs_kind == c.LLVMHalfTypeKind;
+        const use_float_op = final_is_lhs_float or final_is_rhs_float;
+
         return switch (bin_op.op) {
-            '+' => if (is_float_op)
+            '+' => if (use_float_op)
                 c.LLVMBuildFAdd(self.builder, casted_lhs, casted_rhs, "fadd")
             else
                 c.LLVMBuildAdd(self.builder, casted_lhs, casted_rhs, "add"),
-            '-' => if (is_float_op)
+            '-' => if (use_float_op)
                 c.LLVMBuildFSub(self.builder, casted_lhs, casted_rhs, "fsub")
             else
                 c.LLVMBuildSub(self.builder, casted_lhs, casted_rhs, "sub"),
-            '*' => if (is_float_op)
+            '*' => if (use_float_op)
                 c.LLVMBuildFMul(self.builder, casted_lhs, casted_rhs, "fmul")
             else
                 c.LLVMBuildMul(self.builder, casted_lhs, casted_rhs, "mul"),
-            '/' => if (is_float_op)
+            '/' => if (use_float_op)
                 c.LLVMBuildFDiv(self.builder, casted_lhs, casted_rhs, "fdiv")
             else if (utils.isUnsignedType(result_type_name_inferred))
                 c.LLVMBuildUDiv(self.builder, casted_lhs, casted_rhs, "udiv")
             else
                 c.LLVMBuildSDiv(self.builder, casted_lhs, casted_rhs, "sdiv"),
             '%' => {
-                if (is_float_op) {
+                if (use_float_op) {
                     self.uses_float_modulo = true;
                     return c.LLVMBuildFRem(self.builder, casted_lhs, casted_rhs, "frem");
                 } else {
@@ -4867,23 +4879,23 @@ pub const CodeGenerator = struct {
             '&' => self.generateLogicalAnd(bin_op.lhs, bin_op.rhs),
             '|' => self.generateLogicalOr(bin_op.lhs, bin_op.rhs),
             'A' => {
-                if (is_float_op) return errors.CodegenError.UnsupportedOperation;
+                if (use_float_op) return errors.CodegenError.UnsupportedOperation;
                 return c.LLVMBuildAnd(self.builder, casted_lhs, casted_rhs, "and");
             },
             '$' => {
-                if (is_float_op) return errors.CodegenError.UnsupportedOperation;
+                if (use_float_op) return errors.CodegenError.UnsupportedOperation;
                 return c.LLVMBuildOr(self.builder, casted_lhs, casted_rhs, "or");
             },
             '^' => {
-                if (is_float_op) return errors.CodegenError.UnsupportedOperation;
+                if (use_float_op) return errors.CodegenError.UnsupportedOperation;
                 return c.LLVMBuildXor(self.builder, casted_lhs, casted_rhs, "xor");
             },
             '<' => {
-                if (is_float_op) return errors.CodegenError.UnsupportedOperation;
+                if (use_float_op) return errors.CodegenError.UnsupportedOperation;
                 return c.LLVMBuildShl(self.builder, casted_lhs, casted_rhs, "shl");
             },
             '>' => {
-                if (is_float_op) return errors.CodegenError.UnsupportedOperation;
+                if (use_float_op) return errors.CodegenError.UnsupportedOperation;
                 if (utils.isUnsignedType(result_type_name_inferred))
                     return c.LLVMBuildLShr(self.builder, casted_lhs, casted_rhs, "lshr")
                 else
