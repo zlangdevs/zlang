@@ -56,6 +56,18 @@ fun main() >> i32 {
     if t.right == null {@printf("Test 3a: t.right is null\n");}
     if t.left == null {@printf("Test 3b: t.left is null\n");}
 
+    ptr<i32> pz = null;
+    i32 local = 5;
+    ptr<i32> qz = &local;
+    i32 ptr_zero_cmp_ok = 0;
+    if (pz == 0) {
+        ptr_zero_cmp_ok += 1;
+    }
+    if (qz != 0) {
+        ptr_zero_cmp_ok += 2;
+    }
+    @printf("(expected 3):%d\n", ptr_zero_cmp_ok);
+
     @printf("Tests completed - pointer comparisons working correctly\n");
 
     return 0;

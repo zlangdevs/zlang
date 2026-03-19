@@ -1,0 +1,10 @@
+struct Theme {
+    name ptr<u8>,
+    value i32,
+}
+
+arr<Theme, 2> g_themes = {Theme{}, Theme{}};
+
+fun main() >> i32 {
+    return 0;
+}
