@@ -2853,6 +2853,11 @@ pub const CodeGenerator = struct {
                     }
 
                     for (init_list.elements.items, 0..) |element, idx| {
+                        if (element.data == .struct_initializer) {
+                            self.reportErrorFmt("Global array '{s}' with struct literals is not supported", .{decl.name}, "Initialize this array at runtime or use primitive compile-time constants");
+                            return errors.CodegenError.TypeMismatch;
+                        }
+
                         var element_const = try self.generateExpressionWithContext(element, array_info.element_type_name);
 
                         if (!self.typesAreEqual(c.LLVMTypeOf(element_const), element_type)) {
@@ -2919,6 +2924,11 @@ pub const CodeGenerator = struct {
                     const array_init = try self.buildGlobalArrayInitializer(decl, var_type, fixed_array_info.?);
                     c.LLVMSetInitializer(global_var, array_init);
                 } else if (decl.initializer) |initializer| {
+                    if (initializer.data == .struct_initializer) {
+                        self.reportErrorFmt("Global variable '{s}' with struct literal initializer is not supported", .{decl.name}, "Initialize this value at runtime");
+                        return errors.CodegenError.TypeMismatch;
+                    }
+
                     const init_value = try self.generateExpression(initializer);
                     const casted_init_value = try self.castWithSourceRules(init_value, @ptrCast(var_type), initializer);
                     if (c.LLVMIsConstant(casted_init_value) == 0) {
@@ -4496,9 +4506,27 @@ pub const CodeGenerator = struct {
             var casted_lhs = lhs_value;
             var casted_rhs = rhs_value;
             if (is_lhs_pointer and !is_rhs_pointer) {
-                casted_rhs = c.LLVMBuildPointerCast(self.builder, rhs_value, lhs_type, "cast_to_ptr");
+                if (rhs_kind == c.LLVMIntegerTypeKind) {
+                    const rhs_const_int = c.LLVMIsAConstantInt(rhs_value);
+                    if (rhs_const_int != null and c.LLVMConstIntGetSExtValue(rhs_value) == 0) {
+                        casted_rhs = c.LLVMConstNull(lhs_type);
+                    } else {
+                        casted_rhs = c.LLVMBuildIntToPtr(self.builder, rhs_value, lhs_type, "int_to_ptr");
+                    }
+                } else {
+                    return errors.CodegenError.TypeMismatch;
+                }
             } else if (!is_lhs_pointer and is_rhs_pointer) {
-                casted_lhs = c.LLVMBuildPointerCast(self.builder, lhs_value, rhs_type, "cast_to_ptr");
+                if (lhs_kind == c.LLVMIntegerTypeKind) {
+                    const lhs_const_int = c.LLVMIsAConstantInt(lhs_value);
+                    if (lhs_const_int != null and c.LLVMConstIntGetSExtValue(lhs_value) == 0) {
+                        casted_lhs = c.LLVMConstNull(rhs_type);
+                    } else {
+                        casted_lhs = c.LLVMBuildIntToPtr(self.builder, lhs_value, rhs_type, "int_to_ptr");
+                    }
+                } else {
+                    return errors.CodegenError.TypeMismatch;
+                }
             }
             return switch (comparison.op) {
                 '=' => c.LLVMBuildICmp(self.builder, c.LLVMIntEQ, casted_lhs, casted_rhs, "ptr_null_cmp_eq"),
