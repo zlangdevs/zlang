@@ -120,6 +120,34 @@ fun readAll(fd: i32, buffer: ptr<u8>, max_size: u64) >> i64 {
     return read(fd, buffer as ptr<void>, max_size);
 }
 
+?? Read a chunk of text from file descriptor into buffer.
+?? Returns bytes read (>0), 0 on EOF, -1 on error.
+fun readLineFd(fd: i32, buffer: ptr<u8>, max_len: i32) >> i32 {
+    if (max_len <= 1) {
+        return -1;
+    }
+    i64 count = read(fd, buffer as ptr<void>, (max_len - 1) as u64);
+    if (count <= 0) {
+        return count as i32;
+    }
+    buffer[count as i32] = 0;
+    return count as i32;
+}
+
+?? Write a text line to file descriptor (appends '\n').
+?? Returns written bytes, or -1 on error.
+fun writeLineFd(fd: i32, str: ptr<u8>) >> i64 {
+    i64 first = writeString(fd, str);
+    if (first < 0) {
+        return -1;
+    }
+    i64 second = writeString(fd, "\n");
+    if (second < 0) {
+        return -1;
+    }
+    return first + second;
+}
+
 ?? Write string to FILE* stream
 fun fprintString(stream: ptr<void>, str: ptr<u8>) >> bool {
     i32 result = fputs(str, stream);
