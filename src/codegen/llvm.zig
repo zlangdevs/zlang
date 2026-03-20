@@ -746,6 +746,10 @@ pub const CodeGenerator = struct {
                         try self.generateCFunctionDeclaration(func.data.c_function_decl);
                     } else if (func.data == .function) {
                         try self.function_asts.put(func.data.function.name, func.data.function);
+                    }
+                }
+                for (prog.functions.items) |func| {
+                    if (func.data == .function) {
                         try self.declareFunction(func.data.function);
                     }
                 }

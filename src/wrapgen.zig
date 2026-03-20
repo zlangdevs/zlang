@@ -1371,12 +1371,21 @@ fn emitPackUnpackHelpers(writer: anytype, ordered_structs: []const *StructInfo, 
                 const f1 = info.fields.items[1].name;
                 const f2 = info.fields.items[2].name;
                 const f3 = info.fields.items[3].name;
+                const t0 = info.fields.items[0].z_type;
+                const t1 = info.fields.items[1].z_type;
+                const t2 = info.fields.items[2].z_type;
+                const t3 = info.fields.items[3].z_type;
+
+                const m0 = if (std.mem.eql(u8, t0, "u8")) "0xFF" else if (std.mem.eql(u8, t0, "u16")) "0xFFFF" else if (std.mem.eql(u8, t0, "u32")) "0xFFFFFFFF" else "0xFFFFFFFF";
+                const m1 = if (std.mem.eql(u8, t1, "u8")) "0xFF" else if (std.mem.eql(u8, t1, "u16")) "0xFFFF" else if (std.mem.eql(u8, t1, "u32")) "0xFFFFFFFF" else "0xFFFFFFFF";
+                const m2 = if (std.mem.eql(u8, t2, "u8")) "0xFF" else if (std.mem.eql(u8, t2, "u16")) "0xFFFF" else if (std.mem.eql(u8, t2, "u32")) "0xFFFFFFFF" else "0xFFFFFFFF";
+                const m3 = if (std.mem.eql(u8, t3, "u8")) "0xFF" else if (std.mem.eql(u8, t3, "u16")) "0xFFFF" else if (std.mem.eql(u8, t3, "u32")) "0xFFFFFFFF" else "0xFFFFFFFF";
 
                 try writer.print("fun __abi_pack_{s}(value: {s}) >> u32 {{\n", .{ info.name, info.name });
-                try writer.print("    return (value.{s} as u32) |\n", .{f0});
-                try writer.print("           ((value.{s} as u32) << 8) |\n", .{f1});
-                try writer.print("           ((value.{s} as u32) << 16) |\n", .{f2});
-                try writer.print("           ((value.{s} as u32) << 24);\n", .{f3});
+                try writer.print("    return ((value.{s} as u32) & {s}) |\n", .{ f0, m0 });
+                try writer.print("           (((value.{s} as u32) & {s}) << 8) |\n", .{ f1, m1 });
+                try writer.print("           (((value.{s} as u32) & {s}) << 16) |\n", .{ f2, m2 });
+                try writer.print("           (((value.{s} as u32) & {s}) << 24);\n", .{ f3, m3 });
                 try writer.writeAll("}\n\n");
 
                 try writer.print("fun __abi_unpack_{s}(value: u32) >> {s} {{\n", .{ info.name, info.name });
