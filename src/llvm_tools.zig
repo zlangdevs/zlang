@@ -6,12 +6,14 @@ pub const LLVMTool = enum {
     lli,
     opt,
     clang,
+    zig,
     pub fn baseName(self: LLVMTool) []const u8 {
         return switch (self) {
             .llc => "llc",
             .lli => "lli",
             .opt => "opt",
             .clang => "clang",
+            .zig => "zig",
         };
     }
 };
@@ -27,6 +29,13 @@ pub const ToolPath = struct {
 
 pub fn findLLVMTool(allocator: std.mem.Allocator, tool: LLVMTool) !?ToolPath {
     const base_name = tool.baseName();
+    if (tool == .zig) {
+        if (try isToolAvailable(allocator, base_name)) {
+            return ToolPath{ .path = base_name, .owned = false };
+        }
+        return null;
+    }
+
     const version_suffixes = [_][]const u8{
         "-20", "-19", "-18", "-17", "-16", "-15", "-14", "",
     };
@@ -55,15 +64,24 @@ pub fn findLLVMTool(allocator: std.mem.Allocator, tool: LLVMTool) !?ToolPath {
 }
 
 fn isToolAvailable(allocator: std.mem.Allocator, tool_name: []const u8) !bool {
-    var child = std.process.Child.init(&[_][]const u8{ tool_name, "--version" }, allocator);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    const term = child.spawnAndWait() catch return false;
-    return switch (term) {
-        .Exited => |code| code == 0,
-        else => false,
+    const probe_args = [_][]const []const u8{
+        &[_][]const u8{ tool_name, "--version" },
+        &[_][]const u8{ tool_name, "version" },
     };
+
+    for (probe_args) |argv| {
+        var child = std.process.Child.init(argv, allocator);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Ignore;
+        const term = child.spawnAndWait() catch continue;
+        const ok = switch (term) {
+            .Exited => |code| code == 0,
+            else => false,
+        };
+        if (ok) return true;
+    }
+    return false;
 }
 
 pub const ToolCache = struct {
@@ -71,6 +89,7 @@ pub const ToolCache = struct {
     lli: ?ToolPath = null,
     opt: ?ToolPath = null,
     clang: ?ToolPath = null,
+    zig: ?ToolPath = null,
     allocator: std.mem.Allocator,
     pub fn init(allocator: std.mem.Allocator) ToolCache {
         return .{
@@ -82,6 +101,7 @@ pub const ToolCache = struct {
         if (self.lli) |tool| tool.deinit(self.allocator);
         if (self.opt) |tool| tool.deinit(self.allocator);
         if (self.clang) |tool| tool.deinit(self.allocator);
+        if (self.zig) |tool| tool.deinit(self.allocator);
     }
     pub fn get(self: *ToolCache, tool: LLVMTool) !?[]const u8 {
         const cached = switch (tool) {
@@ -89,6 +109,7 @@ pub const ToolCache = struct {
             .lli => &self.lli,
             .opt => &self.opt,
             .clang => &self.clang,
+            .zig => &self.zig,
         };
         if (cached.*) |tool_path| {
             return tool_path.path;
