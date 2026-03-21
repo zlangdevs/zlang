@@ -89,10 +89,12 @@ Compiles a ZLang source file to an executable named `output` (default).
 
 **Target Architecture**
 
-- `-arch <target>` - Specify target architecture
+- `-arch <target>` - Specify target architecture or full target triple
   ```bash
-  zlang main.zl -arch x86_64-linux-gnu
+  zlang main.zl -arch x86_64
+  zlang main.zl -arch x86_64-linux-gnu.2.17
   ```
+  Note: `-arch` uses `zig` for sysroot-compatible linking. Ensure `zig` is installed and available in `PATH`.
 
 **Brainfuck Mode**
 

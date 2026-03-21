@@ -40,6 +40,7 @@ pub const CodeGenerator = struct {
     loop_context_stack: std.ArrayList(structs.LoopContext),
     variable_scopes: std.ArrayList(std.HashMap([]const u8, structs.VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage)),
     uses_float_modulo: bool,
+
     struct_types: std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     struct_fields: std.HashMap([]const u8, std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     struct_declarations: std.HashMap([]const u8, ast.StructDecl, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
@@ -78,6 +79,29 @@ pub const CodeGenerator = struct {
         expression: *ast.Node,
         active_flag_ptr: c.LLVMValueRef,
     };
+
+    fn normalizeClangTarget(alloc: std.mem.Allocator, arch: []const u8) ![]const u8 {
+        if (arch.len == 0) return "";
+        if (std.mem.indexOfScalar(u8, arch, '-') != null) return arch;
+        if (std.mem.eql(u8, arch, "x86_64")) return "x86_64-unknown-linux-gnu";
+        if (std.mem.eql(u8, arch, "aarch64")) return "aarch64-unknown-linux-gnu";
+        if (std.mem.eql(u8, arch, "arm64")) return "aarch64-unknown-linux-gnu";
+        return try std.fmt.allocPrint(alloc, "{s}-unknown-linux-gnu", .{arch});
+    }
+
+    fn normalizeLlcTriple(alloc: std.mem.Allocator, clang_target: []const u8) ![]const u8 {
+        if (clang_target.len == 0) return "";
+        const gnu_idx = std.mem.indexOf(u8, clang_target, "-gnu") orelse return clang_target;
+        const after_gnu = gnu_idx + 4;
+        if (after_gnu < clang_target.len and clang_target[after_gnu] == '.') {
+            return try alloc.dupe(u8, clang_target[0..after_gnu]);
+        }
+        return clang_target;
+    }
+
+    fn isVersionedGlibcTarget(target: []const u8) bool {
+        return std.mem.indexOf(u8, target, "-gnu.") != null;
+    }
 
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
         _ = c.LLVMInitializeNativeTarget();
@@ -4978,9 +5002,19 @@ pub const CodeGenerator = struct {
         const obj_file = try std.fmt.allocPrint(arena_alloc, "{s}.o", .{output});
         defer arena_alloc.free(obj_file);
 
+        const clang_target = try normalizeClangTarget(arena_alloc, arch);
+        const llc_triple = try normalizeLlcTriple(arena_alloc, clang_target);
+
         const opt_tool = if (optimize) try llvm_tools.getLLVMToolPath(arena_alloc, .opt) else null;
         const llc_tool = try llvm_tools.getLLVMToolPath(arena_alloc, .llc);
         const clang_tool = try llvm_tools.getLLVMToolPath(arena_alloc, .clang);
+        const zig_tool = if (arch.len != 0) try llvm_tools.getLLVMToolPath(arena_alloc, .zig) else null;
+
+        if (arch.len != 0 and zig_tool == null) {
+            std.debug.print("Error: -arch requires zig in PATH for sysroot-compatible linking.\n", .{});
+            std.debug.print("Please install Zig or remove -arch.\n", .{});
+            return error.CompilationFailed;
+        }
 
         if (llc_tool == null) {
             std.debug.print("Error: llc not found. Please install LLVM tools.\n", .{});
@@ -5028,8 +5062,8 @@ pub const CodeGenerator = struct {
             try llc_args_list.append(arena_alloc, "-O3");
         }
 
-        if (arch.len != 0) {
-            const march_flag: []const u8 = try std.fmt.allocPrint(arena_alloc, "-mtriple={s}", .{arch});
+        if (llc_triple.len != 0) {
+            const march_flag: []const u8 = try std.fmt.allocPrint(arena_alloc, "-mtriple={s}", .{llc_triple});
             try llc_args_list.append(arena_alloc, march_flag);
         }
 
@@ -5045,12 +5079,46 @@ pub const CodeGenerator = struct {
         }
 
         var lld_success = false;
+
+        if (isVersionedGlibcTarget(clang_target)) {
+            var zig_cc_args = std.ArrayList([]const u8){};
+            try zig_cc_args.appendSlice(arena_alloc, &[_][]const u8{ zig_tool.?, "cc", "-target", clang_target, obj_file, "-o", output, "-lc", "-L/usr/lib", "-L/lib", "-L/lib64" });
+
+            for (link_objects) |obj| {
+                try zig_cc_args.append(arena_alloc, obj);
+            }
+
+            if (self.uses_float_modulo) {
+                try zig_cc_args.append(arena_alloc, "-lm");
+            }
+
+            for (extra_flags) |ef| {
+                try zig_cc_args.append(arena_alloc, ef);
+            }
+
+            var zig_cc_child = std.process.Child.init(zig_cc_args.items, arena_alloc);
+            zig_cc_child.stdout_behavior = .Pipe;
+            zig_cc_child.stderr_behavior = .Inherit;
+
+            zig_cc_child.spawn() catch {
+                std.debug.print("Error: -arch {s} requires 'zig cc' for portable glibc linking, but zig was not found.\n", .{clang_target});
+                return error.CompilationFailed;
+            };
+            const zig_cc_result = try zig_cc_child.wait();
+            if (zig_cc_result == .Exited and zig_cc_result.Exited == 0) {
+                lld_success = true;
+            } else {
+                std.debug.print("Error: zig cc failed to link target {s}.\n", .{clang_target});
+                return error.CompilationFailed;
+            }
+        }
+
         const crt1_exists = blk: {
             std.fs.cwd().access("/usr/lib/crt1.o", .{}) catch break :blk false;
             break :blk true;
         };
 
-        if (crt1_exists) {
+        if (crt1_exists and arch.len == 0) {
             var lld_args_list = std.ArrayList([]const u8){};
             try lld_args_list.appendSlice(arena_alloc, &[_][]const u8{
                 "ld.lld",
@@ -5104,6 +5172,11 @@ pub const CodeGenerator = struct {
 
             var clang_args_list = std.ArrayList([]const u8){};
             try clang_args_list.appendSlice(arena_alloc, &[_][]const u8{ clang_tool.?, obj_file, "-o", output, "-lc" });
+
+            if (clang_target.len != 0) {
+                const target_arg = try std.fmt.allocPrint(arena_alloc, "--target={s}", .{clang_target});
+                try clang_args_list.append(arena_alloc, target_arg);
+            }
 
             for (link_objects) |obj| {
                 try clang_args_list.append(arena_alloc, obj);

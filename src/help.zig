@@ -64,7 +64,8 @@ pub fn printHelp() void {
     std.debug.print(
         \\{s}Options:{s}
         \\  {s}-o <file>{s}     Specify output file
-        \\  {s}-arch <arch>{s}  Specify target architecture (e.g., x86_64)
+        \\  {s}-arch <arch>{s}  Specify target/triple (e.g., x86_64 or x86_64-linux-gnu.2.17)
+        \\                     Note: -arch uses zig for sysroot-compatible linking
         \\  {s}-keepll{s}      Keep intermediate LLVM IR files
         \\  {s}-dast{s}        Dump Abstract Syntax Tree
         \\  {s}-q, -quiet{s}   Suppress non-error output
