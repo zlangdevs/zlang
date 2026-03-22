@@ -1,5 +1,13 @@
 use std.time
 
+struct TimerHolder {
+    timer Timer,
+}
+
+fun getHolderTimer(h: TimerHolder) >> Timer {
+    return h.timer;
+}
+
 fun main() >> i32 {
     @printf("=== Testing zlang std.time module ===\n");
 
@@ -36,6 +44,15 @@ fun main() >> i32 {
     @printf("\n2. Testing Timer functionality:\n");
     Timer timer = timerStart();
     @printf("Timer started and checked immediately...\n");
+
+    TimerHolder holder;
+    holder.timer = timer;
+    Timer holder_timer = getHolderTimer(holder);
+    i32 holder_ok = 0;
+    if (timerElapsed(holder_timer) >= 0.0) {
+        holder_ok = 1;
+    }
+    @printf("(expected 1):%d\n", holder_ok);
 
     f64 elapsed = timerElapsed(timer);
     @printf("Elapsed time: %.2f seconds\n", elapsed);
