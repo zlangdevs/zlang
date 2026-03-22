@@ -40,6 +40,7 @@ pub const CodeGenerator = struct {
     loop_context_stack: std.ArrayList(structs.LoopContext),
     variable_scopes: std.ArrayList(std.HashMap([]const u8, structs.VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage)),
     uses_float_modulo: bool,
+    global_string_counter: usize,
 
     struct_types: std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     struct_fields: std.HashMap([]const u8, std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
@@ -66,6 +67,7 @@ pub const CodeGenerator = struct {
     current_source_function_name: ?[]const u8,
     deferred_actions: std.ArrayList(DeferredAction),
     defer_scope_markers: std.ArrayList(usize),
+    pending_global_inits: std.ArrayList(PendingGlobalInit),
 
     const SolicitCaptureBinding = struct {
         name: []const u8,
@@ -78,6 +80,13 @@ pub const CodeGenerator = struct {
     const DeferredAction = struct {
         expression: *ast.Node,
         active_flag_ptr: c.LLVMValueRef,
+    };
+
+    const PendingGlobalInit = struct {
+        global_var: c.LLVMValueRef,
+        initializer: *ast.Node,
+        type_ref: c.LLVMTypeRef,
+        type_name: []const u8,
     };
 
     fn normalizeClangTarget(alloc: std.mem.Allocator, arch: []const u8) ![]const u8 {
@@ -142,6 +151,7 @@ pub const CodeGenerator = struct {
             .loop_context_stack = std.ArrayList(structs.LoopContext){},
             .variable_scopes = variable_scopes,
             .uses_float_modulo = false,
+            .global_string_counter = 0,
             .struct_types = std.HashMap([]const u8, c.LLVMTypeRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .struct_fields = std.HashMap([]const u8, std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .struct_declarations = std.HashMap([]const u8, ast.StructDecl, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
@@ -167,6 +177,7 @@ pub const CodeGenerator = struct {
             .current_source_function_name = null,
             .deferred_actions = std.ArrayList(DeferredAction){},
             .defer_scope_markers = defer_scope_markers,
+            .pending_global_inits = std.ArrayList(PendingGlobalInit){},
         };
     }
 
@@ -203,6 +214,7 @@ pub const CodeGenerator = struct {
         self.function_asts.deinit();
         self.deferred_actions.deinit(self.allocator);
         self.defer_scope_markers.deinit(self.allocator);
+        self.pending_global_inits.deinit(self.allocator);
 
         self.module_manager.deinit();
         for (self.variable_scopes.items) |*scope| {
@@ -556,7 +568,7 @@ pub const CodeGenerator = struct {
         return .{ .ptr = field_ptr, .ty = field_ty };
     }
 
-    fn getQualifiedFieldPtrAndType(self: *CodeGenerator, qual_node: *ast.Node) errors.CodegenError!struct { ptr: c.LLVMValueRef, ty: c.LLVMTypeRef } {
+    pub fn getQualifiedFieldPtrAndType(self: *CodeGenerator, qual_node: *ast.Node) errors.CodegenError!struct { ptr: c.LLVMValueRef, ty: c.LLVMTypeRef } {
         if (qual_node.data != .qualified_identifier) {
             return errors.CodegenError.TypeMismatch;
         }
@@ -762,6 +774,17 @@ pub const CodeGenerator = struct {
                     }
                 }
                 for (prog.functions.items) |func| {
+                    if (func.data == .struct_decl) {
+                        const struct_decl = func.data.struct_decl;
+                        if (self.struct_types.get(struct_decl.name) == null) {
+                            const struct_name_z = utils.dupeZ(self.allocator, struct_decl.name);
+                            defer self.allocator.free(struct_name_z);
+                            const struct_type = c.LLVMStructCreateNamed(@ptrCast(self.context), struct_name_z.ptr);
+                            try self.struct_types.put(struct_decl.name, @ptrCast(struct_type));
+                        }
+                    }
+                }
+                for (prog.functions.items) |func| {
                     if (func.data == .enum_decl) {
                         try enums.generateEnumDeclaration(self, func.data.enum_decl);
                     } else if (func.data == .struct_decl) {
@@ -778,12 +801,61 @@ pub const CodeGenerator = struct {
                     }
                 }
                 for (prog.globals.items) |glob| try self.generateGlobalDeclaration(glob);
+                try self.generatePendingGlobalInitializers();
                 for (prog.functions.items) |func| {
                     if (func.data == .function) try self.generateFunctionBody(func.data.function);
                 }
             },
             else => return errors.CodegenError.TypeMismatch,
         }
+    }
+
+    fn generatePendingGlobalInitializers(self: *CodeGenerator) errors.CodegenError!void {
+        if (self.pending_global_inits.items.len == 0) return;
+
+        const fn_ty = c.LLVMFunctionType(c.LLVMVoidTypeInContext(self.context), null, 0, 0);
+        const init_fn = c.LLVMAddFunction(self.module, "__zlang_global_init", fn_ty);
+        c.LLVMSetLinkage(init_fn, c.LLVMInternalLinkage);
+
+        const entry = c.LLVMAppendBasicBlockInContext(self.context, init_fn, "entry");
+        c.LLVMPositionBuilderAtEnd(self.builder, entry);
+
+        const prev_fn = self.current_function;
+        const prev_ret = self.current_function_return_type;
+        self.current_function = init_fn;
+        self.current_function_return_type = "void";
+        defer {
+            self.current_function = prev_fn;
+            self.current_function_return_type = prev_ret;
+        }
+
+        for (self.pending_global_inits.items) |pending| {
+            const value_raw = try self.generateExpressionWithContext(pending.initializer, pending.type_name);
+            const final_value = try self.castWithSourceRules(value_raw, pending.type_ref, pending.initializer);
+            _ = c.LLVMBuildStore(self.builder, final_value, pending.global_var);
+        }
+
+        _ = c.LLVMBuildRetVoid(self.builder);
+
+        const i32_ty = c.LLVMInt32TypeInContext(self.context);
+        const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+        var ctor_field_tys = [_]c.LLVMTypeRef{ i32_ty, i8_ptr, i8_ptr };
+        const ctor_struct_ty = c.LLVMStructTypeInContext(self.context, &ctor_field_tys, 3, 0);
+
+        const priority = c.LLVMConstInt(i32_ty, 65535, 0);
+        const fn_ptr = c.LLVMConstBitCast(init_fn, i8_ptr);
+        const data_ptr = c.LLVMConstNull(i8_ptr);
+        var ctor_vals = [_]c.LLVMValueRef{ priority, fn_ptr, data_ptr };
+        const ctor_item = c.LLVMConstNamedStruct(ctor_struct_ty, &ctor_vals, 3);
+
+        const ctor_array_ty = c.LLVMArrayType(ctor_struct_ty, 1);
+        var ctor_items = [_]c.LLVMValueRef{ctor_item};
+        const ctor_array = c.LLVMConstArray(ctor_struct_ty, &ctor_items, 1);
+
+        const ctors_global = c.LLVMAddGlobal(self.module, ctor_array_ty, "llvm.global_ctors");
+        c.LLVMSetInitializer(ctors_global, ctor_array);
+        c.LLVMSetLinkage(ctors_global, c.LLVMAppendingLinkage);
+        c.LLVMSetGlobalConstant(ctors_global, 1);
     }
 
     fn hasValidControlFlow(self: *CodeGenerator, func_node: *ast.Node) errors.CodegenError!bool {
@@ -1010,26 +1082,37 @@ pub const CodeGenerator = struct {
                                 }
                             }
                         } else if (c.LLVMGetTypeKind(var_type) == c.LLVMStructTypeKind) {
-                            const struct_name = std.mem.span(c.LLVMGetStructName(var_type));
-                            const struct_decl = self.getStructDecl(struct_name) orelse return errors.CodegenError.TypeMismatch;
+                            const is_zero_struct_init = initializer.data == .array_initializer and blk: {
+                                const arr = initializer.data.array_initializer;
+                                break :blk arr.elements.items.len == 1 and
+                                    arr.elements.items[0].data == .number_literal and
+                                    std.mem.eql(u8, arr.elements.items[0].data.number_literal.value, "0");
+                            };
 
-                            for (struct_decl.fields.items, 0..) |field, i| {
-                                const field_ptr = try self.getStructFieldPointer(var_type, alloca, @intCast(i));
-                                const zero_value = utils.getDefaultValueForType(self, field.type_name);
-                                _ = c.LLVMBuildStore(self.builder, zero_value, field_ptr);
-                            }
+                            if (is_zero_struct_init) {
+                                _ = c.LLVMBuildStore(self.builder, c.LLVMConstNull(var_type), alloca);
+                            } else {
+                                const struct_name = std.mem.span(c.LLVMGetStructName(var_type));
+                                const struct_decl = self.getStructDecl(struct_name) orelse return errors.CodegenError.TypeMismatch;
 
-                            for (struct_decl.fields.items, 0..) |field, i| {
-                                if (field.default_value) |default_val| {
+                                for (struct_decl.fields.items, 0..) |field, i| {
                                     const field_ptr = try self.getStructFieldPointer(var_type, alloca, @intCast(i));
-                                    const value = try self.generateExpression(default_val);
-                                    const casted_value = try self.castWithRules(value, try self.getLLVMType(field.type_name), default_val);
-                                    _ = c.LLVMBuildStore(self.builder, casted_value, field_ptr);
+                                    const zero_value = utils.getDefaultValueForType(self, field.type_name);
+                                    _ = c.LLVMBuildStore(self.builder, zero_value, field_ptr);
                                 }
+
+                                for (struct_decl.fields.items, 0..) |field, i| {
+                                    if (field.default_value) |default_val| {
+                                        const field_ptr = try self.getStructFieldPointer(var_type, alloca, @intCast(i));
+                                        const value = try self.generateExpression(default_val);
+                                        const casted_value = try self.castWithRules(value, try self.getLLVMType(field.type_name), default_val);
+                                        _ = c.LLVMBuildStore(self.builder, casted_value, field_ptr);
+                                    }
+                                }
+                                const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
+                                const casted_value = try self.castWithSourceRules(init_value, var_type, initializer);
+                                _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                             }
-                            const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
-                            const casted_value = try self.castWithSourceRules(init_value, var_type, initializer);
-                            _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                         } else {
                             const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
                             const casted_value = try self.castWithSourceRules(init_value, var_type, initializer);
@@ -2832,6 +2915,127 @@ pub const CodeGenerator = struct {
         return null;
     }
 
+    fn createGlobalConstStringPtr(self: *CodeGenerator, str_lit: ast.StringLiteral) errors.CodegenError!c.LLVMValueRef {
+        const parsed = try strings.parseEscape(self.allocator, str_lit.value);
+        defer self.allocator.free(parsed);
+
+        const arr_ty = c.LLVMArrayType(c.LLVMInt8TypeInContext(self.context), @intCast(parsed.len));
+        const str_const = c.LLVMConstStringInContext(self.context, parsed.ptr, @intCast(parsed.len), 1);
+
+        const name = try std.fmt.allocPrint(self.allocator, "__zlang_gstr_{d}", .{self.global_string_counter});
+        defer self.allocator.free(name);
+        self.global_string_counter += 1;
+
+        const name_z = utils.dupeZ(self.allocator, name);
+        defer self.allocator.free(name_z);
+
+        const global_str = c.LLVMAddGlobal(self.module, arr_ty, name_z.ptr);
+        c.LLVMSetInitializer(global_str, str_const);
+        c.LLVMSetLinkage(global_str, c.LLVMPrivateLinkage);
+        c.LLVMSetGlobalConstant(global_str, 1);
+
+        const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+        return c.LLVMConstBitCast(global_str, i8_ptr);
+    }
+
+    fn buildGlobalConstStructInitializer(self: *CodeGenerator, struct_init: ast.StructInitializer, struct_type: c.LLVMTypeRef) errors.CodegenError!c.LLVMValueRef {
+        const struct_decl = self.getStructDecl(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
+        const field_map = self.struct_fields.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
+
+        var field_values = std.ArrayList(c.LLVMValueRef){};
+        defer field_values.deinit(self.allocator);
+        try field_values.resize(self.allocator, struct_decl.fields.items.len);
+
+        for (struct_decl.fields.items, 0..) |field, i| {
+            const field_type = try self.getLLVMType(field.type_name);
+            if (field.default_value) |default_val| {
+                field_values.items[i] = try self.buildGlobalConstValue(default_val, field_type, field.type_name);
+            } else {
+                field_values.items[i] = c.LLVMConstNull(field_type);
+            }
+        }
+
+        for (struct_init.field_values.items, 0..) |field_val, idx| {
+            const field_index = if (field_val.field_name) |field_name|
+                field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable
+            else
+                @as(c_uint, @intCast(idx));
+            const field_decl = struct_decl.fields.items[field_index];
+            const field_type = try self.getLLVMType(field_decl.type_name);
+            field_values.items[field_index] = try self.buildGlobalConstValue(field_val.value, field_type, field_decl.type_name);
+        }
+
+        return c.LLVMConstNamedStruct(struct_type, field_values.items.ptr, @intCast(field_values.items.len));
+    }
+
+    fn buildGlobalConstValue(self: *CodeGenerator, expr: *ast.Node, expected_type: c.LLVMTypeRef, expected_type_name: []const u8) errors.CodegenError!c.LLVMValueRef {
+        switch (expr.data) {
+            .string_literal => |str_lit| {
+                const kind = c.LLVMGetTypeKind(expected_type);
+                if (kind == c.LLVMArrayTypeKind) {
+                    const elem_type = c.LLVMGetElementType(expected_type);
+                    if (c.LLVMGetTypeKind(elem_type) != c.LLVMIntegerTypeKind or c.LLVMGetIntTypeWidth(elem_type) != 8) {
+                        return errors.CodegenError.TypeMismatch;
+                    }
+
+                    const parsed = try strings.parseEscape(self.allocator, str_lit.value);
+                    defer self.allocator.free(parsed);
+
+                    const arr_len = c.LLVMGetArrayLength(expected_type);
+                    if (parsed.len > arr_len) return errors.CodegenError.TypeMismatch;
+
+                    var bytes = std.ArrayList(c.LLVMValueRef){};
+                    defer bytes.deinit(self.allocator);
+                    try bytes.resize(self.allocator, arr_len);
+                    const zero = c.LLVMConstInt(elem_type, 0, 0);
+                    for (0..arr_len) |i| bytes.items[i] = zero;
+                    for (parsed, 0..) |ch, i| {
+                        bytes.items[i] = c.LLVMConstInt(elem_type, @intCast(ch), 0);
+                    }
+                    return c.LLVMConstArray(elem_type, bytes.items.ptr, arr_len);
+                }
+
+                if (kind == c.LLVMPointerTypeKind and std.mem.eql(u8, expected_type_name, "ptr<u8>")) {
+                    const ptr_val = try self.createGlobalConstStringPtr(str_lit);
+                    if (self.typesAreEqual(c.LLVMTypeOf(ptr_val), expected_type)) return ptr_val;
+                    return c.LLVMConstBitCast(ptr_val, expected_type);
+                }
+
+                return errors.CodegenError.TypeMismatch;
+            },
+            .struct_initializer => |struct_init| {
+                if (c.LLVMGetTypeKind(expected_type) != c.LLVMStructTypeKind) return errors.CodegenError.TypeMismatch;
+                return self.buildGlobalConstStructInitializer(struct_init, expected_type);
+            },
+            .array_initializer => |arr| {
+                if (c.LLVMGetTypeKind(expected_type) != c.LLVMArrayTypeKind) return errors.CodegenError.TypeMismatch;
+                const element_type = c.LLVMGetElementType(expected_type);
+                const arr_len = c.LLVMGetArrayLength(expected_type);
+                if (arr.elements.items.len > arr_len) return errors.CodegenError.TypeMismatch;
+
+                var elems = std.ArrayList(c.LLVMValueRef){};
+                defer elems.deinit(self.allocator);
+                try elems.resize(self.allocator, arr_len);
+                const zero = c.LLVMConstNull(element_type);
+                for (0..arr_len) |i| elems.items[i] = zero;
+
+                for (arr.elements.items, 0..) |item, i| {
+                    const v = try self.buildGlobalConstValue(item, element_type, self.getTypeNameFromLLVMType(element_type));
+                    elems.items[i] = v;
+                }
+                return c.LLVMConstArray(element_type, elems.items.ptr, arr_len);
+            },
+            else => {
+                var v = try self.generateExpressionWithContext(expr, expected_type_name);
+                if (!self.typesAreEqual(c.LLVMTypeOf(v), expected_type)) {
+                    v = try self.castWithSourceRules(v, expected_type, expr);
+                }
+                if (c.LLVMIsConstant(v) == 0) return errors.CodegenError.TypeMismatch;
+                return v;
+            },
+        }
+    }
+
     fn buildGlobalArrayInitializer(self: *CodeGenerator, decl: ast.VarDecl, array_type: c.LLVMTypeRef, array_info: FixedArrayInfo) errors.CodegenError!c.LLVMValueRef {
         const element_type = c.LLVMGetElementType(array_type);
 
@@ -2853,21 +3057,10 @@ pub const CodeGenerator = struct {
                     }
 
                     for (init_list.elements.items, 0..) |element, idx| {
-                        if (element.data == .struct_initializer) {
-                            self.reportErrorFmt("Global array '{s}' with struct literals is not supported", .{decl.name}, "Initialize this array at runtime or use primitive compile-time constants");
-                            return errors.CodegenError.TypeMismatch;
-                        }
-
-                        var element_const = try self.generateExpressionWithContext(element, array_info.element_type_name);
-
-                        if (!self.typesAreEqual(c.LLVMTypeOf(element_const), element_type)) {
-                            element_const = try self.castWithSourceRules(element_const, element_type, element);
-                        }
-
-                        if (c.LLVMIsConstant(element_const) == 0) {
+                        const element_const = self.buildGlobalConstValue(element, element_type, array_info.element_type_name) catch {
                             self.reportErrorFmt("Global array '{s}' must be initialized with compile-time constants", .{decl.name}, "Use only literals in global array initializers");
                             return errors.CodegenError.TypeMismatch;
-                        }
+                        };
 
                         const_elements.items[idx] = element_const;
                     }
@@ -2924,18 +3117,44 @@ pub const CodeGenerator = struct {
                     const array_init = try self.buildGlobalArrayInitializer(decl, var_type, fixed_array_info.?);
                     c.LLVMSetInitializer(global_var, array_init);
                 } else if (decl.initializer) |initializer| {
-                    if (initializer.data == .struct_initializer) {
-                        self.reportErrorFmt("Global variable '{s}' with struct literal initializer is not supported", .{decl.name}, "Initialize this value at runtime");
-                        return errors.CodegenError.TypeMismatch;
-                    }
+                    var allow_runtime_init = false;
 
-                    const init_value = try self.generateExpression(initializer);
-                    const casted_init_value = try self.castWithSourceRules(init_value, @ptrCast(var_type), initializer);
+                    const casted_init_value = blk: {
+                        if (initializer.data == .function_call or initializer.data == .method_call) {
+                            allow_runtime_init = true;
+                            break :blk c.LLVMConstNull(var_type);
+                        }
+
+                        if (initializer.data == .array_initializer and c.LLVMGetTypeKind(var_type) == c.LLVMStructTypeKind) {
+                            const arr = initializer.data.array_initializer;
+                            if (arr.elements.items.len == 1 and arr.elements.items[0].data == .number_literal and std.mem.eql(u8, arr.elements.items[0].data.number_literal.value, "0")) {
+                                break :blk c.LLVMConstNull(var_type);
+                            }
+                        }
+
+                        break :blk self.buildGlobalConstValue(initializer, var_type, decl.type_name) catch {
+                            allow_runtime_init = true;
+                            break :blk c.LLVMConstNull(var_type);
+                        };
+                    };
+
                     if (c.LLVMIsConstant(casted_init_value) == 0) {
                         self.reportErrorFmt("Global variable '{s}' must be initialized with compile-time constants", .{decl.name}, "Use literal values or compile-time constants for globals");
                         return errors.CodegenError.TypeMismatch;
                     }
                     c.LLVMSetInitializer(global_var, casted_init_value);
+
+                    if (allow_runtime_init and !decl.is_const) {
+                        try self.pending_global_inits.append(self.allocator, .{
+                            .global_var = global_var,
+                            .initializer = initializer,
+                            .type_ref = var_type,
+                            .type_name = decl.type_name,
+                        });
+                    } else if (allow_runtime_init and decl.is_const) {
+                        self.reportErrorFmt("Global variable '{s}' must be initialized with compile-time constants", .{decl.name}, "const globals cannot use runtime initialization");
+                        return errors.CodegenError.TypeMismatch;
+                    }
                 } else {
                     const default_value = utils.getDefaultValueForType(self, decl.type_name);
                     c.LLVMSetInitializer(global_var, @ptrCast(default_value));
@@ -3853,6 +4072,22 @@ pub const CodeGenerator = struct {
                 return "void";
             },
             .unary_op => |un| {
+                if (un.op == '&') {
+                    const operand_type = switch (un.operand.data) {
+                        .identifier => |ident| blk: {
+                            if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
+                                break :blk var_info.type_name;
+                            }
+                            break :blk try self.inferType(un.operand);
+                        },
+                        .qualified_identifier => blk: {
+                            const pair = try self.getQualifiedFieldPtrAndType(un.operand);
+                            break :blk self.getTypeNameFromLLVMType(pair.ty);
+                        },
+                        else => try self.inferType(un.operand),
+                    };
+                    return try std.fmt.allocPrint(self.allocator, "ptr<{s}>", .{operand_type});
+                }
                 return self.inferType(un.operand);
             },
             .comparison => return "bool",
@@ -3976,6 +4211,12 @@ pub const CodeGenerator = struct {
                 }
                 const type_kind = c.LLVMGetTypeKind(result_type);
                 if (type_kind == c.LLVMStructTypeKind) {
+                    if (result_type_name.len == 0) {
+                        const name_ptr = c.LLVMGetStructName(result_type);
+                        if (name_ptr != null) {
+                            result_type_name = std.mem.span(name_ptr);
+                        }
+                    }
                     const struct_type = self.struct_types.get(result_type_name) orelse return errors.CodegenError.TypeMismatch;
                     const field_map = self.struct_fields.get(result_type_name) orelse return errors.CodegenError.TypeMismatch;
                     const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
@@ -4115,7 +4356,8 @@ pub const CodeGenerator = struct {
                                 return var_info.value;
                             }
                         } else if (un.operand.data == .qualified_identifier) {
-                            return try self.generateExpression(un.operand);
+                            const pair = try self.getQualifiedFieldPtrAndType(un.operand);
+                            return pair.ptr;
                         } else if (un.operand.data == .array_index) {
                             const arr_idx = un.operand.data.array_index;
                             const array_name = try self.getBaseIdentifierName(arr_idx.array);

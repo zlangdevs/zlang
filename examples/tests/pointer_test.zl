@@ -2,6 +2,14 @@ fun testPointerParameter(ptr: ptr<i32>) >> void {
     @printf("Function received pointer: %p\n", ptr);
 }
 
+struct Game {
+    theme_index i32,
+}
+
+fun bump(v: ptr<i32>) >> void {
+    v[0] += 1;
+}
+
 fun testAllTypes() >> i32 {
     @printf("=== Testing All Pointer Types ===\n");
 
@@ -180,5 +188,9 @@ fun main() >> i32 {
     ptr<i32> q = &x;
     ptr<i32> r = ptr_function(q);
     @printf("ptr_function call: %p -> %p\n", q, r);
+
+    Game g = {0};
+    bump(&g.theme_index);
+    @printf("(expected 1):%d\n", g.theme_index);
     return 0;
 }
