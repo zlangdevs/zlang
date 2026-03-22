@@ -1,8 +1,49 @@
 i32 x = 42;
 
+struct Game {
+    x i32,
+    y i32,
+}
+
+struct ZeroState {
+    x i32,
+    y i32,
+}
+
+struct Theme {
+    name ptr<u8>,
+    value i32,
+}
+
+struct S {
+    data arr<i32, 4>,
+    x i32,
+}
+
+Game g = Game{x = 1, y = 2};
+ZeroState g_zero = {0};
+arr<Theme, 2> g_themes = {
+    Theme{name = "A", value = 1},
+    Theme{name = "B", value = 2},
+};
+S g_struct = {0};
+
+fun pack(r: i32, g: i32, b: i32, a: i32) >> u32 {
+    return (r as u32) | ((g as u32) << 8) | ((b as u32) << 16) | ((a as u32) << 24);
+}
+
+u32 g_color = pack(1, 2, 3, 255);
+
 fun main() >> i32 {
     @printf("x = (expected 42):%d\n", x);
     x += 100;
     @printf("x after assignment = (expected 142):%d\n", x);
+    @printf("(expected 3):%d\n", g.x + g.y);
+    @printf("(expected 3):%d\n", g_themes[0].value + g_themes[1].value);
+    @printf("(expected 0):%d\n", g_zero.x + g_zero.y);
+    @printf("(expected 1):%d\n", (g_color & 255) as i32);
+    g_struct.data[1] = 7;
+    g_struct.x = 3;
+    @printf("(expected 10):%d\n", g_struct.data[1] + g_struct.x);
     return 0;
 }

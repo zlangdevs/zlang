@@ -438,11 +438,16 @@ pub fn generateStructFieldAccess(cg: *llvm.CodeGenerator, struct_var_info: Varia
 }
 
 pub fn generateStructType(cg: *llvm.CodeGenerator, struct_decl: ast.StructDecl) errors.CodegenError!void {
-    const struct_name_z = utils.dupeZ(cg.allocator, struct_decl.name);
-    defer cg.allocator.free(struct_name_z);
-    const struct_type = c.LLVMStructCreateNamed(@ptrCast(cg.context), struct_name_z.ptr);
+    const struct_type = if (cg.struct_types.get(struct_decl.name)) |existing|
+        existing
+    else blk: {
+        const struct_name_z = utils.dupeZ(cg.allocator, struct_decl.name);
+        defer cg.allocator.free(struct_name_z);
+        const created = c.LLVMStructCreateNamed(@ptrCast(cg.context), struct_name_z.ptr);
+        try cg.struct_types.put(struct_decl.name, created);
+        break :blk created;
+    };
 
-    try cg.struct_types.put(struct_decl.name, @ptrCast(struct_type));
     try cg.struct_declarations.put(struct_decl.name, struct_decl);
 
     var field_types = std.ArrayList(c.LLVMTypeRef){};

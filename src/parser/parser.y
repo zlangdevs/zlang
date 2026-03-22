@@ -848,6 +848,9 @@ arguments:
         zig_add_to_arg_list($1, $3);
         $$ = $1;
     }
+  | arguments TOKEN_COMMA {
+        $$ = $1;
+    }
 ;
 
 expression:
@@ -960,6 +963,11 @@ primary_expression:
     | string_literal { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_string_literal($1); free($1); }
     | handled_call_statement { $$ = $1; }
     | function_call { $$ = $1; }
+    | function_call TOKEN_DOT TOKEN_IDENTIFIER {
+        const char* field_copy = strdup($3);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_qualified_identifier($1, field_copy);
+        free($3);
+    }
     | TOKEN_LPAREN expression TOKEN_RPAREN { $$ = $2; }
     | expression_block { $$ = $1; }
     | TOKEN_NULL { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_null_literal(); }
