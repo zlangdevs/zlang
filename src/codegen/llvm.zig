@@ -712,6 +712,14 @@ pub const CodeGenerator = struct {
         if (var_type_kind == c.LLVMArrayTypeKind) {
             try array.generateArrayReassignment(self, ident.name, as.value);
         } else {
+            if (var_type_kind == c.LLVMStructTypeKind and as.value.data == .array_initializer) {
+                const arr = as.value.data.array_initializer;
+                if (arr.elements.items.len == 1 and arr.elements.items[0].data == .number_literal and std.mem.eql(u8, arr.elements.items[0].data.number_literal.value, "0")) {
+                    _ = c.LLVMBuildStore(self.builder, c.LLVMConstNull(var_info.type_ref), var_info.value);
+                    return;
+                }
+            }
+
             const value_raw = try self.generateExpressionWithContext(as.value, var_info.type_name);
             const final_value = try self.castWithSourceRules(value_raw, @ptrCast(var_info.type_ref), as.value);
             _ = c.LLVMBuildStore(@ptrCast(self.builder), @ptrCast(final_value), @ptrCast(var_info.value));
