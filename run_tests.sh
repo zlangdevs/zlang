@@ -522,8 +522,17 @@ for test_file in "$TEST_DIR"/*.zl; do
     maybe_clear_screen
     echo "Testing $filename..."
     echo "====================================================="
-    
-    if run_compiler "$test_file" $math_link 2>/dev/null; then
+
+    collect_sidecar_args "$test_file"
+    compile_args=()
+    if [ -n "$math_link" ]; then
+        compile_args+=("$math_link")
+    fi
+    if [ ${#SIDE_ARGS[@]} -gt 0 ]; then
+        compile_args+=("${SIDE_ARGS[@]}")
+    fi
+
+    if run_compiler "$test_file" "${compile_args[@]}" 2>/dev/null; then
         if [ -f "a.out" ]; then
             BINARY="a.out"
         elif [ -f "output" ]; then
@@ -619,7 +628,16 @@ if [ -d "$STDLIB_TEST_DIR" ]; then
         echo "Testing stdlib/$filename..."
         echo "====================================================="
 
-        if run_compiler "$test_file" $math_link 2>/dev/null; then
+        collect_sidecar_args "$test_file"
+        compile_args=()
+        if [ -n "$math_link" ]; then
+            compile_args+=("$math_link")
+        fi
+        if [ ${#SIDE_ARGS[@]} -gt 0 ]; then
+            compile_args+=("${SIDE_ARGS[@]}")
+        fi
+
+        if run_compiler "$test_file" "${compile_args[@]}" 2>/dev/null; then
             if [ -f "a.out" ]; then
                 BINARY="a.out"
             elif [ -f "output" ]; then
