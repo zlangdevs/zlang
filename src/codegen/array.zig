@@ -69,7 +69,6 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
     var base_type: c.LLVMTypeRef = undefined;
     var base_type_name: []const u8 = "";
     var base_is_const = false;
-    var const_owner_name: []const u8 = "<expr>";
 
     if (base_node.data == .qualified_identifier) {
         const pair = try self.getQualifiedFieldPtrAndType(base_node);
@@ -81,7 +80,6 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
         defer self.allocator.free(root_name);
         if (CodeGenerator.getVariable(self, root_name)) |root_var| {
             base_is_const = root_var.is_const;
-            const_owner_name = root_name;
         }
     } else {
         const array_name = try self.getBaseIdentifierName(base_node);
@@ -91,11 +89,14 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
         base_type = var_info.type_ref;
         base_type_name = var_info.type_name;
         base_is_const = var_info.is_const;
-        const_owner_name = array_name;
     }
 
     if (base_is_const) {
-        self.reportErrorFmt("Cannot modify element of const array '{s}'", .{const_owner_name}, "Array is declared as const");
+        const owner_name = switch (base_node.data) {
+            .identifier => |ident| ident.name,
+            else => "array",
+        };
+        self.reportErrorFmt("Cannot modify element of const array '{s}'", .{owner_name}, "Array is declared as const");
         return errors.CodegenError.ConstReassignment;
     }
 
