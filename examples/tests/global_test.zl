@@ -45,5 +45,7 @@ fun main() >> i32 {
     g_struct.data[1] = 7;
     g_struct.x = 3;
     @printf("(expected 10):%d\n", g_struct.data[1] + g_struct.x);
+    g_struct = {0};
+    @printf("(expected 0):%d\n", g_struct.data[1] + g_struct.x);
     return 0;
 }
