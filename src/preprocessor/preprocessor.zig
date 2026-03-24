@@ -20,14 +20,43 @@ fn skipSpaces(s: []const u8, i: *usize) void {
 pub const PreprocessOutput = struct {
     text: []u8,
     flags: std.ArrayList([]const u8),
+    defined_names: std.ArrayList([]const u8),
 
     pub fn deinitFlags(self: *PreprocessOutput, allocator: std.mem.Allocator) void {
         for (self.flags.items) |flag| {
             allocator.free(flag);
         }
         self.flags.deinit(allocator);
+
+        for (self.defined_names.items) |name| {
+            allocator.free(name);
+        }
+        self.defined_names.deinit(allocator);
     }
 };
+
+pub const DefineOverride = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
+fn findDefineOverride(define_overrides: []const DefineOverride, name: []const u8) ?[]const u8 {
+    for (define_overrides) |entry| {
+        if (std.mem.eql(u8, entry.name, name)) return entry.value;
+    }
+    return null;
+}
+
+fn appendUniqueDefineName(allocator: std.mem.Allocator, defined_names: *std.ArrayList([]const u8), name: []const u8) errors.PreprocessError!void {
+    for (defined_names.items) |existing| {
+        if (std.mem.eql(u8, existing, name)) return;
+    }
+    const name_copy = allocator.dupe(u8, name) catch return errors.PreprocessError.OutOfMemory;
+    defined_names.append(allocator, name_copy) catch {
+        allocator.free(name_copy);
+        return errors.PreprocessError.OutOfMemory;
+    };
+}
 
 fn appendQuotedRawSegment(allocator: std.mem.Allocator, out: *std.ArrayList(u8), segment: []const u8) errors.PreprocessError!void {
     try out.append(allocator, '"');
@@ -274,7 +303,13 @@ fn appendExpandedText(
     }
 }
 
-fn parseDefineLine(allocator: std.mem.Allocator, defs: *std.StringHashMap([]const u8), line: []const u8) errors.PreprocessError!void {
+fn parseDefineLine(
+    allocator: std.mem.Allocator,
+    defs: *std.StringHashMap([]const u8),
+    defined_names: *std.ArrayList([]const u8),
+    define_overrides: []const DefineOverride,
+    line: []const u8,
+) errors.PreprocessError!void {
     var i: usize = 0;
     skipSpaces(line, &i);
     if (i >= line.len or line[i] != '#') return errors.PreprocessError.InvalidDirective;
@@ -293,9 +328,11 @@ fn parseDefineLine(allocator: std.mem.Allocator, defs: *std.StringHashMap([]cons
     i += 1;
     while (i < line.len and isIdentChar(line[i])) : (i += 1) {}
     const name = line[name_start..i];
+    try appendUniqueDefineName(allocator, defined_names, name);
 
     skipSpaces(line, &i);
-    const value = std.mem.trimRight(u8, line[i..], " \t\r");
+    const source_value = std.mem.trimRight(u8, line[i..], " \t\r");
+    const value = findDefineOverride(define_overrides, name) orelse source_value;
 
     const name_copy = try allocator.dupe(u8, name);
     const value_copy = try allocator.dupe(u8, value);
@@ -341,6 +378,8 @@ fn parseDirectiveLine(
     allocator: std.mem.Allocator,
     defs: *std.StringHashMap([]const u8),
     flags: *std.ArrayList([]const u8),
+    defined_names: *std.ArrayList([]const u8),
+    define_overrides: []const DefineOverride,
     line: []const u8,
 ) errors.PreprocessError!void {
     var i: usize = 0;
@@ -354,7 +393,7 @@ fn parseDirectiveLine(
     const kw = line[kw_start..i];
 
     if (std.mem.eql(u8, kw, "define")) {
-        try parseDefineLine(allocator, defs, line);
+        try parseDefineLine(allocator, defs, defined_names, define_overrides, line);
         return;
     }
 
@@ -366,7 +405,7 @@ fn parseDirectiveLine(
     return errors.PreprocessError.InvalidDirective;
 }
 
-pub fn preprocessWithFlags(allocator: std.mem.Allocator, input: []const u8) errors.PreprocessError!PreprocessOutput {
+pub fn preprocessWithFlagsAndDefines(allocator: std.mem.Allocator, input: []const u8, define_overrides: []const DefineOverride) errors.PreprocessError!PreprocessOutput {
     var defs = std.StringHashMap([]const u8).init(allocator);
     defer {
         var it = defs.iterator();
@@ -388,6 +427,14 @@ pub fn preprocessWithFlags(allocator: std.mem.Allocator, input: []const u8) erro
         flags.deinit(allocator);
     }
 
+    var defined_names = std.ArrayList([]const u8){};
+    errdefer {
+        for (defined_names.items) |name| {
+            allocator.free(name);
+        }
+        defined_names.deinit(allocator);
+    }
+
     var i: usize = 0;
     var at_line_start = true;
 
@@ -399,7 +446,7 @@ pub fn preprocessWithFlags(allocator: std.mem.Allocator, input: []const u8) erro
                 var line_end = j;
                 while (line_end < input.len and input[line_end] != '\n') : (line_end += 1) {}
                 const line = input[i..line_end];
-                try parseDirectiveLine(allocator, &defs, &flags, line);
+                try parseDirectiveLine(allocator, &defs, &flags, &defined_names, define_overrides, line);
                 if (line_end < input.len and input[line_end] == '\n') {
                     try out.append(allocator, '\n');
                     i = line_end + 1;
@@ -496,7 +543,12 @@ pub fn preprocessWithFlags(allocator: std.mem.Allocator, input: []const u8) erro
     return PreprocessOutput{
         .text = try out.toOwnedSlice(allocator),
         .flags = flags,
+        .defined_names = defined_names,
     };
+}
+
+pub fn preprocessWithFlags(allocator: std.mem.Allocator, input: []const u8) errors.PreprocessError!PreprocessOutput {
+    return preprocessWithFlagsAndDefines(allocator, input, &[_]DefineOverride{});
 }
 
 pub fn preprocess(allocator: std.mem.Allocator, input: []const u8) errors.PreprocessError![]u8 {

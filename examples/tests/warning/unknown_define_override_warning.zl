@@ -1,0 +1,10 @@
+#define LOGMODE false
+
+fun main() >> i32 {
+    i32 x = 0;
+    if (LOGMODE) {
+        x = 1;
+    }
+    @printf("(expected 0):%d\n", x);
+    return 0;
+}
