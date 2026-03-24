@@ -6,6 +6,20 @@ struct Game {
     theme_index i32,
 }
 
+struct Foo {
+    value i32,
+}
+
+struct Wrap {
+    foo Foo,
+}
+
+Wrap g_wrap = {0};
+
+fun getFoo() >> ptr<Foo> {
+    return &g_wrap.foo;
+}
+
 fun bump(v: ptr<i32>) >> void {
     v[0] += 1;
 }
@@ -192,5 +206,9 @@ fun main() >> i32 {
     Game g = {0};
     bump(&g.theme_index);
     @printf("(expected 1):%d\n", g.theme_index);
+
+    g_wrap.foo.value = 7;
+    ptr<Foo> fptr = getFoo();
+    @printf("(expected 7):%d\n", fptr[0].value);
     return 0;
 }
