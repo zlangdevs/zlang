@@ -590,12 +590,22 @@ pub const CodeGenerator = struct {
                 const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
                 var index_value = try self.generateExpression(arr_idx.index);
                 index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
-                var indices = [_]c.LLVMValueRef{
-                    c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0),
-                    index_value,
-                };
-                base_val = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
-                base_ty = c.LLVMGetElementType(var_info.type_ref);
+                if (std.mem.startsWith(u8, var_info.type_name, "ptr<") and std.mem.endsWith(u8, var_info.type_name, ">")) {
+                    const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
+                    const element_type = try self.getLLVMType(element_type_name);
+                    const index64 = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
+                    const loaded_ptr = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_for_field");
+                    var indices = [_]c.LLVMValueRef{index64};
+                    base_val = c.LLVMBuildGEP2(self.builder, element_type, loaded_ptr, &indices[0], 1, "ptr_index_field_ptr");
+                    base_ty = element_type;
+                } else {
+                    var indices = [_]c.LLVMValueRef{
+                        c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0),
+                        index_value,
+                    };
+                    base_val = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
+                    base_ty = c.LLVMGetElementType(var_info.type_ref);
+                }
             },
             .qualified_identifier => {
                 const inner = try self.getQualifiedFieldPtrAndType(qual_id.base);
@@ -4189,15 +4199,32 @@ pub const CodeGenerator = struct {
                         defer self.allocator.free(array_name);
                         const array_var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
                         const index_value = try self.generateExpression(array_index.index);
-                        const element_type = c.LLVMGetElementType(@ptrCast(array_var_info.type_ref));
-                        var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
-                        result_value = c.LLVMBuildGEP2(self.builder, @ptrCast(array_var_info.type_ref), @ptrCast(array_var_info.value), &indices[0], 2, "array_element_ptr");
-                        result_type = element_type;
-                        const elem_type_kind = c.LLVMGetTypeKind(element_type);
-                        if (elem_type_kind == c.LLVMStructTypeKind) {
-                            const name_ptr = c.LLVMGetStructName(element_type);
-                            if (name_ptr != null) {
-                                result_type_name = std.mem.span(name_ptr);
+                        if (std.mem.startsWith(u8, array_var_info.type_name, "ptr<") and std.mem.endsWith(u8, array_var_info.type_name, ">")) {
+                            const element_type_name = array_var_info.type_name[4 .. array_var_info.type_name.len - 1];
+                            const element_type = try self.getLLVMType(element_type_name);
+                            const index64 = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
+                            const loaded_ptr = c.LLVMBuildLoad2(self.builder, array_var_info.type_ref, array_var_info.value, "load_ptr_for_field_access");
+                            var indices = [_]c.LLVMValueRef{index64};
+                            result_value = c.LLVMBuildGEP2(self.builder, element_type, loaded_ptr, &indices[0], 1, "ptr_element_ptr");
+                            result_type = element_type;
+                            const elem_type_kind = c.LLVMGetTypeKind(element_type);
+                            if (elem_type_kind == c.LLVMStructTypeKind) {
+                                const name_ptr = c.LLVMGetStructName(element_type);
+                                if (name_ptr != null) {
+                                    result_type_name = std.mem.span(name_ptr);
+                                }
+                            }
+                        } else {
+                            const element_type = c.LLVMGetElementType(@ptrCast(array_var_info.type_ref));
+                            var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
+                            result_value = c.LLVMBuildGEP2(self.builder, @ptrCast(array_var_info.type_ref), @ptrCast(array_var_info.value), &indices[0], 2, "array_element_ptr");
+                            result_type = element_type;
+                            const elem_type_kind = c.LLVMGetTypeKind(element_type);
+                            if (elem_type_kind == c.LLVMStructTypeKind) {
+                                const name_ptr = c.LLVMGetStructName(element_type);
+                                if (name_ptr != null) {
+                                    result_type_name = std.mem.span(name_ptr);
+                                }
                             }
                         }
                     },
