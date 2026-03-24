@@ -73,11 +73,13 @@ pub fn printHelp() void {
         \\  {s}-stats{s}       Show compilation statistics
         \\  {s}-optimize{s}    Enable optimizations
         \\  {s}-c{s}           Compile to object file only
+        \\  {s}-DNAME=VALUE{s} Override #define value in source
         \\  {s}-l<lib>{s}      Link with library
         \\  {s}-L<path>{s}     Add library search path
         \\
     , .{
         bold,   reset,
+        yellow, reset,
         yellow, reset,
         yellow, reset,
         yellow, reset,
@@ -116,6 +118,7 @@ pub fn printHelp() void {
         \\  zlang wrap mylib.h -o mylib.zl
         \\  zlang wrap-clang SDL2/SDL.h -o sdl.zl -- -I/usr/include/SDL2 -D_REENTRANT
         \\  zlang -o myapp main.zl -lSDL2
+        \\  zlang main.zl -DLOGMODE=true -o myapp
         \\  zlang -b mandelbrot.bf -o mandelbrot
         \\  zlang -b32 program.b -o output
         \\

@@ -60,6 +60,27 @@ run_compiler() {
     fi
 }
 
+collect_sidecar_args() {
+    local test_file="$1"
+    SIDE_ARGS=()
+    local args_file="${test_file%.zl}.args"
+    if [ ! -f "$args_file" ]; then
+        return
+    fi
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        if [ -z "$line" ]; then
+            continue
+        fi
+        if [[ "$line" =~ ^[[:space:]]*# ]]; then
+            continue
+        fi
+        for token in $line; do
+            SIDE_ARGS+=("$token")
+        done
+    done < "$args_file"
+}
+
 ensure_appimage_ready() {
     if [ -x "$APPIMAGE_PATH" ]; then
         return 0
@@ -144,8 +165,17 @@ test_single_file() {
         math_link="-lm"
     fi
     
+    collect_sidecar_args "$test_file"
+    local -a compile_args=()
+    if [ -n "$math_link" ]; then
+        compile_args+=("$math_link")
+    fi
+    if [ ${#SIDE_ARGS[@]} -gt 0 ]; then
+        compile_args+=("${SIDE_ARGS[@]}")
+    fi
+
     echo "Compiling with $(compiler_label):"
-    if run_compiler "$test_file" $math_link; then
+    if run_compiler "$test_file" "${compile_args[@]}"; then
         if [ -f "a.out" ]; then
             BINARY="a.out"
         elif [ -f "output" ]; then
@@ -221,8 +251,9 @@ test_compile_fail_file() {
     echo "Testing compile-fail $filename..."
     echo "====================================================="
 
+    collect_sidecar_args "$test_file"
     local output
-    output=$(run_compiler "$test_file" 2>&1)
+    output=$(run_compiler "$test_file" "${SIDE_ARGS[@]}" 2>&1)
     local compile_exit=$?
 
     rm -f "output" "a.out"
@@ -291,8 +322,17 @@ test_warning_file() {
         math_link="-lm"
     fi
 
+    collect_sidecar_args "$test_file"
+    local -a compile_args=()
+    if [ -n "$math_link" ]; then
+        compile_args+=("$math_link")
+    fi
+    if [ ${#SIDE_ARGS[@]} -gt 0 ]; then
+        compile_args+=("${SIDE_ARGS[@]}")
+    fi
+
     local output
-    output=$(run_compiler "$test_file" $math_link 2>&1)
+    output=$(run_compiler "$test_file" "${compile_args[@]}" 2>&1)
     local compile_exit=$?
 
     rm -f "output" "a.out"

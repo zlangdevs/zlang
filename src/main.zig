@@ -82,6 +82,8 @@ pub const Context = struct {
     run_mode: bool,
     brainfuck_mode: bool,
     bf_cell_size: i32,
+    define_overrides: std.ArrayList(preprocessor.DefineOverride),
+    seen_define_names: std.ArrayList([]const u8),
 
     pub fn init() Context {
         return Context{
@@ -100,6 +102,8 @@ pub const Context = struct {
             .run_mode = false,
             .brainfuck_mode = false,
             .bf_cell_size = 8,
+            .define_overrides = std.ArrayList(preprocessor.DefineOverride){},
+            .seen_define_names = std.ArrayList([]const u8){},
         };
     }
 
@@ -108,6 +112,15 @@ pub const Context = struct {
         self.link_objects.deinit(alloc);
         self.extra_args.deinit(alloc);
         self.program_args.deinit(alloc);
+        for (self.define_overrides.items) |entry| {
+            alloc.free(entry.name);
+            alloc.free(entry.value);
+        }
+        self.define_overrides.deinit(alloc);
+        for (self.seen_define_names.items) |name| {
+            alloc.free(name);
+        }
+        self.seen_define_names.deinit(alloc);
     }
 
     pub fn print(self: *const Context) void {
@@ -359,13 +372,13 @@ fn parseErrorHint(message: []const u8) ?[]const u8 {
     return null;
 }
 
-fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_alloc: std.mem.Allocator) !ModuleInfo {
+fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_alloc: std.mem.Allocator, ctx: *Context) !ModuleInfo {
     const input = read_file(file_path) catch |err| {
         std.debug.print("Error reading file {s}: {}\n", .{ file_path, err });
         return err;
     };
 
-    var preprocessed = preprocessor.preprocessWithFlags(arena, input) catch |err| {
+    var preprocessed = preprocessor.preprocessWithFlagsAndDefines(arena, input, ctx.define_overrides.items) catch |err| {
         const msg = switch (err) {
             errors.PreprocessError.InvalidDirective => "Invalid preprocessor directive",
             errors.PreprocessError.InvalidDefine => "Invalid #define",
@@ -382,6 +395,12 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
         return err;
     };
     defer preprocessed.deinitFlags(arena);
+
+    for (preprocessed.defined_names.items) |name| {
+        if (!containsString(ctx.seen_define_names.items, name)) {
+            try ctx.seen_define_names.append(backing_alloc, utils.dupe(u8, backing_alloc, name));
+        }
+    }
 
     const parsed_header = parseModuleHeader(arena, preprocessed.text) catch |err| {
         if (err == error.InvalidModuleHeader) {
@@ -451,6 +470,14 @@ fn containsString(list: []const []const u8, value: []const u8) bool {
         if (std.mem.eql(u8, item, value)) return true;
     }
     return false;
+}
+
+fn emitUnknownDefineOverrideWarnings(ctx: *const Context) void {
+    for (ctx.define_overrides.items) |entry| {
+        if (!containsString(ctx.seen_define_names.items, entry.name)) {
+            std.debug.print("Warning: -D{s}=... was provided but #define {s} was not found in parsed .zl files\n", .{ entry.name, entry.name });
+        }
+    }
 }
 
 fn resolvePathRelativeToModule(alloc: std.mem.Allocator, module_path: []const u8, raw_path: []const u8) ![]const u8 {
@@ -1196,7 +1223,7 @@ fn rewriteModuleImportsInNode(current_module: *const ModuleInfo, node: *ast.Node
     }
 }
 
-fn loadStdModulesForDep(dep: []const u8, modules: *std.ArrayList(ModuleInfo), loaded_paths: *std.StringHashMap(void), arena: std.mem.Allocator, alloc: std.mem.Allocator) !void {
+fn loadStdModulesForDep(dep: []const u8, modules: *std.ArrayList(ModuleInfo), loaded_paths: *std.StringHashMap(void), arena: std.mem.Allocator, alloc: std.mem.Allocator, ctx: *Context) !void {
     if (std.mem.eql(u8, dep, "std")) {
         const stdlib_path = try getStdlibPath(alloc);
         defer alloc.free(stdlib_path);
@@ -1214,7 +1241,7 @@ fn loadStdModulesForDep(dep: []const u8, modules: *std.ArrayList(ModuleInfo), lo
 
             if (loaded_paths.contains(full)) continue;
 
-            const module = try parseModuleFile(full, arena, alloc);
+            const module = try parseModuleFile(full, arena, alloc, ctx);
             try loaded_paths.put(utils.dupe(u8, alloc, full), {});
             try modules.append(alloc, module);
         }
@@ -1227,7 +1254,7 @@ fn loadStdModulesForDep(dep: []const u8, modules: *std.ArrayList(ModuleInfo), lo
 
     if (loaded_paths.contains(std_path)) return;
 
-    const std_module = try parseModuleFile(std_path, arena, alloc);
+    const std_module = try parseModuleFile(std_path, arena, alloc, ctx);
     try loaded_paths.put(utils.dupe(u8, alloc, std_path), {});
     try modules.append(alloc, std_module);
 }
@@ -1249,7 +1276,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
 
     for (ctx.input_files.items) |input_file| {
         if (loaded_paths.contains(input_file)) continue;
-        const module = try parseModuleFile(input_file, arena, alloc);
+        const module = try parseModuleFile(input_file, arena, alloc, ctx);
         try loaded_paths.put(utils.dupe(u8, alloc, input_file), {});
         try modules.append(alloc, module);
     }
@@ -1261,7 +1288,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
             if (!(std.mem.eql(u8, dep, "std") or std.mem.startsWith(u8, dep, "std."))) continue;
             if (hasModuleByName(modules.items, dep)) continue;
 
-            loadStdModulesForDep(dep, &modules, &loaded_paths, arena, alloc) catch {
+            loadStdModulesForDep(dep, &modules, &loaded_paths, arena, alloc, ctx) catch {
                 std.debug.print("\x1b[31mError:\x1b[0m Cannot resolve module '\x1b[33m{s}\x1b[0m' imported from {s}\n", .{ dep, module.path });
                 arena_ast.deinit();
                 return error.ModuleNotFound;
@@ -1476,6 +1503,37 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                 } else if (std.mem.eql(u8, flag, "-c")) {
                     try context.extra_args.append(allocator, flag);
                     context.output = "output.o";
+                } else if (std.mem.eql(u8, flag, "-D") or std.mem.startsWith(u8, flag, "-D")) {
+                    var define_spec: []const u8 = undefined;
+                    if (std.mem.eql(u8, flag, "-D")) {
+                        i += 1;
+                        if (i >= args.len) return errors.CLIError.InvalidArgument;
+                        define_spec = args[i];
+                    } else {
+                        define_spec = flag[2..];
+                    }
+
+                    const eq_index = std.mem.indexOfScalar(u8, define_spec, '=') orelse return errors.CLIError.InvalidArgument;
+                    const name = std.mem.trim(u8, define_spec[0..eq_index], " \t");
+                    const value = std.mem.trim(u8, define_spec[eq_index + 1 ..], " \t");
+                    if (name.len == 0) return errors.CLIError.InvalidArgument;
+
+                    var replaced = false;
+                    for (context.define_overrides.items) |*entry| {
+                        if (std.mem.eql(u8, entry.name, name)) {
+                            allocator.free(entry.value);
+                            entry.value = utils.dupe(u8, allocator, value);
+                            replaced = true;
+                            break;
+                        }
+                    }
+
+                    if (!replaced) {
+                        try context.define_overrides.append(allocator, .{
+                            .name = utils.dupe(u8, allocator, name),
+                            .value = utils.dupe(u8, allocator, value),
+                        });
+                    }
                 } else if (std.mem.startsWith(u8, flag, "-l") and flag.len > 2) {
                     try context.extra_args.append(allocator, flag);
                 } else if (std.mem.startsWith(u8, flag, "-L") and flag.len > 2) {
@@ -1579,7 +1637,10 @@ fn inferModuleNameFromFile(file_path: []const u8, alloc: std.mem.Allocator) ![]c
     var temp_arena = ast.ArenaAST.init(alloc);
     defer temp_arena.deinit();
 
-    var module = try parseModuleFile(file_path, temp_arena.allocator(), alloc);
+    var temp_ctx = Context.init();
+    defer temp_ctx.deinit(alloc);
+
+    var module = try parseModuleFile(file_path, temp_arena.allocator(), alloc, &temp_ctx);
     defer module.deinit(alloc);
 
     return utils.dupe(u8, alloc, module.name);
@@ -2767,6 +2828,7 @@ pub fn main() !u8 {
     var ast_root = parseMultiFile(&ctx, allocator) catch {
         return 1;
     };
+    emitUnknownDefineOverrideWarnings(&ctx);
     const parse_end = std.time.nanoTimestamp();
     stats.parse_time_ns = @intCast(parse_end - parse_start);
 
