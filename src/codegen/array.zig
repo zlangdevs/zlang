@@ -45,16 +45,30 @@ pub fn generateArrayElementFieldAssignment(self: *CodeGenerator, array_index: as
     defer self.allocator.free(array_name);
     const array_var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
     var index_value = try self.generateExpression(array_index.index);
-    index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
-    const element_type = c.LLVMGetElementType(@ptrCast(array_var_info.type_ref));
+
+    var element_type: c.LLVMTypeRef = undefined;
+    var array_element_ptr: c.LLVMValueRef = undefined;
+
+    if (std.mem.startsWith(u8, array_var_info.type_name, "ptr<") and std.mem.endsWith(u8, array_var_info.type_name, ">")) {
+        const element_type_name = array_var_info.type_name[4 .. array_var_info.type_name.len - 1];
+        element_type = try self.getLLVMType(element_type_name);
+        const index64 = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
+        const loaded_ptr = c.LLVMBuildLoad2(self.builder, array_var_info.type_ref, array_var_info.value, "load_ptr_for_field_assign");
+        var ptr_indices = [_]c.LLVMValueRef{index64};
+        array_element_ptr = c.LLVMBuildGEP2(self.builder, element_type, loaded_ptr, &ptr_indices[0], 1, "ptr_struct_element_ptr");
+    } else {
+        index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
+        element_type = c.LLVMGetElementType(@ptrCast(array_var_info.type_ref));
+        var array_indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
+        array_element_ptr = c.LLVMBuildGEP2(@ptrCast(self.builder), @ptrCast(array_var_info.type_ref), @ptrCast(array_var_info.value), &array_indices[0], 2, "array_element_ptr");
+    }
+
     const element_type_kind = c.LLVMGetTypeKind(element_type);
     if (element_type_kind != c.LLVMStructTypeKind) {
         return errors.CodegenError.TypeMismatch;
     }
     const struct_name = try self.getStructTypeName(@ptrCast(element_type));
     defer self.allocator.free(struct_name);
-    var array_indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
-    const array_element_ptr = c.LLVMBuildGEP2(@ptrCast(self.builder), @ptrCast(array_var_info.type_ref), @ptrCast(array_var_info.value), &array_indices[0], 2, "array_element_ptr");
     try self.generateRecursiveFieldAssignment(array_element_ptr, element_type, struct_name, field_path, value_expr);
 }
 
