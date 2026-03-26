@@ -3833,23 +3833,31 @@ pub const CodeGenerator = struct {
                             else => errors.CodegenError.UnsupportedOperation,
                         };
                     } else if (kind == c.LLVMIntegerTypeKind) {
+                        var lhs_int = lhs_val;
+                        var rhs_int = rhs_val;
+                        if (c.LLVMTypeOf(lhs_int) != target_ty) {
+                            lhs_int = self.castToTypeWithSourceInfo(lhs_int, target_ty, try self.inferType(b.lhs));
+                        }
+                        if (c.LLVMTypeOf(rhs_int) != target_ty) {
+                            rhs_int = self.castToTypeWithSourceInfo(rhs_int, target_ty, try self.inferType(b.rhs));
+                        }
                         return switch (b.op) {
-                            '+' => c.LLVMBuildAdd(self.builder, lhs_val, rhs_val, "add"),
-                            '-' => c.LLVMBuildSub(self.builder, lhs_val, rhs_val, "sub"),
-                            '*' => c.LLVMBuildMul(self.builder, lhs_val, rhs_val, "mul"),
+                            '+' => c.LLVMBuildAdd(self.builder, lhs_int, rhs_int, "add"),
+                            '-' => c.LLVMBuildSub(self.builder, lhs_int, rhs_int, "sub"),
+                            '*' => c.LLVMBuildMul(self.builder, lhs_int, rhs_int, "mul"),
                             '/' => blk: {
                                 const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(target_ty));
                                 break :blk if (is_unsigned)
-                                    c.LLVMBuildUDiv(self.builder, lhs_val, rhs_val, "udiv")
+                                    c.LLVMBuildUDiv(self.builder, lhs_int, rhs_int, "udiv")
                                 else
-                                    c.LLVMBuildSDiv(self.builder, lhs_val, rhs_val, "sdiv");
+                                    c.LLVMBuildSDiv(self.builder, lhs_int, rhs_int, "sdiv");
                             },
                             '%' => blk: {
                                 const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(target_ty));
                                 break :blk if (is_unsigned)
-                                    c.LLVMBuildURem(self.builder, lhs_val, rhs_val, "urem")
+                                    c.LLVMBuildURem(self.builder, lhs_int, rhs_int, "urem")
                                 else
-                                    c.LLVMBuildSRem(self.builder, lhs_val, rhs_val, "srem");
+                                    c.LLVMBuildSRem(self.builder, lhs_int, rhs_int, "srem");
                             },
                             '&', '|', 'A', '$', '^', '<', '>' => try self.generateBinaryOp(b),
                             else => errors.CodegenError.UnsupportedOperation,

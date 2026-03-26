@@ -45,6 +45,11 @@ fun main() >> i32 {
 
     i32 mod_g = 41;
     @printf("(expected 1): %i", mod_g % -2); ?? Why would you do that?
+
+    i64 row_h = 76;
+    i32 start_row = 4;
+    i64 mixed_mul = 270 + row_h * start_row;
+    @printf("(expected 574):%d\n", mixed_mul as i32);
     
     return 0;
 }
