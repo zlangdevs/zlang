@@ -44,7 +44,7 @@ fun main() >> i32 {
     @printf("(expected 2.001222):%f\n", flo % 2.011);
 
     i32 mod_g = 41;
-    @printf("(expected 1): %i", mod_g % -2); ?? Why would you do that?
+    @printf("(expected 1): %i\n", mod_g % -2); ?? Why would you do that?
 
     i64 row_h = 76;
     i32 start_row = 4;
