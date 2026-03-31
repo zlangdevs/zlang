@@ -11,6 +11,12 @@ struct Metrics {
     other i32,
 }
 
+arr<i32, 4> g_values = {0};
+
+fun values() >> ptr<i32> {
+    return &g_values[0];
+}
+
 fun bump(v: ptr<i32>) >> void {
     v[0] += 1;
 }
@@ -210,5 +216,8 @@ fun main() >> i32 {
     Metrics m = {0};
     fill(&m);
     @printf("(expected 22):%d\n", score(&m, 7));
+
+    values()[0] = 7;
+    @printf("(expected 7):%d\n", values()[0]);
     return 0;
 }
