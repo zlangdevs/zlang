@@ -783,6 +783,14 @@ assignment:
         void* deref = zig_create_unary_op('*', inner_expr);
         zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_compound_assignment(deref, $6, $5);
     }
+  | function_call TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_ASSIGN initializer_expression {
+        void* arr_idx = zig_create_array_index($1, $3);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_assignment(arr_idx, $6);
+    }
+  | function_call TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_REASSIGN expression {
+        void* arr_idx = zig_create_array_index($1, $3);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_compound_assignment(arr_idx, $6, $5);
+    }
 ;
 
 array_initializer:
@@ -963,6 +971,9 @@ primary_expression:
     | string_literal { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_string_literal($1); free($1); }
     | handled_call_statement { $$ = $1; }
     | function_call { $$ = $1; }
+    | function_call TOKEN_LBRACKET expression TOKEN_RBRACKET {
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_array_index($1, $3);
+    }
     | function_call TOKEN_DOT TOKEN_IDENTIFIER {
         const char* field_copy = strdup($3);
         zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_qualified_identifier($1, field_copy);
