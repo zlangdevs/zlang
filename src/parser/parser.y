@@ -98,7 +98,7 @@ void* ast_root = NULL;
    - type/cast parsing around '<' and generic type forms
    - identifier-leading ambiguities (label/type/ref/struct initializer)
    These ambiguities are inherent to the language syntax and correctly resolved. */
-%expect 2
+%expect 1
 %expect-rr 5
 
 %define parse.error verbose
@@ -148,6 +148,8 @@ void* ast_root = NULL;
 %left TOKEN_AT
 %right TOKEN_AS
 %right NOT UMINUS UPLUS UAMPERSAND UDEREF UBIT_NOT
+%nonassoc REF_BASE_PREC
+%nonassoc TOKEN_LBRACE
 
 %type <node> parameter_list parameters parameter
 %type <node> program function_list function statement_list statement
@@ -743,7 +745,7 @@ brainfuck_statement:
 /* ========== EXPRESSIONS ========== */
 
 ref_base:
-    TOKEN_IDENTIFIER { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_identifier($1); }
+    TOKEN_IDENTIFIER %prec REF_BASE_PREC { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_identifier($1); }
 ;
 
 ref_expression:
