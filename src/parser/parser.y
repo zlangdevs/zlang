@@ -398,6 +398,12 @@ complex_type_name:
         free($3);
         $$ = result;
     }
+  | qualified_type_name TOKEN_LESS type_name TOKEN_COMMA TOKEN_LPAREN expression TOKEN_RPAREN TOKEN_GREATER %prec TOKEN_LESS {
+        yyerror("array size must be a literal integer; constant expressions are not supported");
+        free($1);
+        free($3);
+        YYERROR;
+    }
   | qualified_type_name TOKEN_LESS TOKEN_UNDERSCORE TOKEN_GREATER %prec TOKEN_LESS {
         char* result = malloc(strlen($1) + 4);
         sprintf(result, "%s<_>", $1);

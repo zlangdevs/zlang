@@ -1,0 +1,10 @@
+module test_array_size_define_expression_fail;
+
+#define COUNT 3
+#define HISTORY_SLOTS (COUNT - 1)
+
+arr<i32, HISTORY_SLOTS> g_values = {0};
+
+fun main() >> i32 {
+    return 0;
+}
