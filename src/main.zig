@@ -43,6 +43,7 @@ const ModuleInfo = struct {
 pub const CompilationStats = struct {
     parse_time_ns: u64,
     codegen_time_ns: u64,
+    backend_time_ns: u64,
     link_time_ns: u64,
     total_time_ns: u64,
     lines_of_code: usize,
@@ -52,6 +53,7 @@ pub const CompilationStats = struct {
 fn printStats(stats: CompilationStats) void {
     const parse_ms = @as(f64, @floatFromInt(stats.parse_time_ns)) / 1_000_000.0;
     const codegen_ms = @as(f64, @floatFromInt(stats.codegen_time_ns)) / 1_000_000.0;
+    const backend_ms = @as(f64, @floatFromInt(stats.backend_time_ns)) / 1_000_000.0;
     const link_ms = @as(f64, @floatFromInt(stats.link_time_ns)) / 1_000_000.0;
     const total_ms = @as(f64, @floatFromInt(stats.total_time_ns)) / 1_000_000.0;
 
@@ -59,6 +61,7 @@ fn printStats(stats: CompilationStats) void {
     std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
     std.debug.print("  Parse time:      {d:.2} ms\n", .{parse_ms});
     std.debug.print("  Codegen time:    {d:.2} ms\n", .{codegen_ms});
+    std.debug.print("  Backend time:    {d:.2} ms\n", .{backend_ms});
     std.debug.print("  Link time:       {d:.2} ms\n", .{link_ms});
     std.debug.print("  Total time:      {d:.2} ms\n", .{total_ms});
     std.debug.print("  Lines of code:   {d}\n", .{stats.lines_of_code});
@@ -478,6 +481,34 @@ fn emitUnknownDefineOverrideWarnings(ctx: *const Context) void {
             std.debug.print("Warning: -D{s}=... was provided but #define {s} was not found in parsed .zl files\n", .{ entry.name, entry.name });
         }
     }
+}
+
+fn parseProcStatusKbValue(content: []const u8, key: []const u8) ?usize {
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, key)) continue;
+        const rest = std.mem.trimLeft(u8, line[key.len..], " \t:");
+        var i: usize = 0;
+        while (i < rest.len and (rest[i] < '0' or rest[i] > '9')) : (i += 1) {}
+        var j = i;
+        while (j < rest.len and rest[j] >= '0' and rest[j] <= '9') : (j += 1) {}
+        if (j <= i) return null;
+        return std.fmt.parseInt(usize, rest[i..j], 10) catch null;
+    }
+    return null;
+}
+
+fn readMemoryPeakKb() usize {
+    if (builtin.os.tag != .linux) return 0;
+    const file = std.fs.cwd().openFile("/proc/self/status", .{}) catch return 0;
+    defer file.close();
+
+    var buffer: [16384]u8 = undefined;
+    const bytes_read = file.readAll(&buffer) catch return 0;
+    const content = buffer[0..bytes_read];
+
+    return parseProcStatusKbValue(content, "VmHWM") orelse
+        parseProcStatusKbValue(content, "VmPeak") orelse 0;
 }
 
 fn resolvePathRelativeToModule(alloc: std.mem.Allocator, module_path: []const u8, raw_path: []const u8) ![]const u8 {
@@ -2363,7 +2394,7 @@ fn compileBrainfuck(ctx: *Context, alloc: std.mem.Allocator) !u8 {
     const ret_val = c.LLVMConstInt(c.LLVMInt32TypeInContext(code_generator.context), 0, 0);
     _ = c.LLVMBuildRet(code_generator.builder, ret_val);
 
-    code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items) catch |err| {
+    code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items, null) catch |err| {
         std.debug.print("Error compiling to executable: {}\n", .{err});
         return 1;
     };
@@ -2798,6 +2829,7 @@ pub fn main() !u8 {
     var stats = CompilationStats{
         .parse_time_ns = 0,
         .codegen_time_ns = 0,
+        .backend_time_ns = 0,
         .link_time_ns = 0,
         .total_time_ns = 0,
         .lines_of_code = 0,
@@ -2944,13 +2976,13 @@ pub fn main() !u8 {
         }
         return exit_code;
     } else {
-        const link_start = std.time.nanoTimestamp();
-        code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items) catch |err| {
+        var backend_timing = codegen.CodeGenerator.BackendTiming{};
+        code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items, &backend_timing) catch |err| {
             std.debug.print("Error compiling to executable: {}\n", .{err});
             return 1;
         };
-        const link_end = std.time.nanoTimestamp();
-        stats.link_time_ns = @intCast(link_end - link_start);
+        stats.backend_time_ns = backend_timing.opt_time_ns + backend_timing.llc_time_ns;
+        stats.link_time_ns = backend_timing.link_time_ns;
         stats.total_time_ns = @intCast(std.time.nanoTimestamp() - total_start);
 
         if (ctx.verbose and !ctx.quiet) {
@@ -2958,27 +2990,7 @@ pub fn main() !u8 {
         }
 
         if (ctx.stats) {
-            if (builtin.os.tag == .linux) {
-                const stat_file = "/proc/self/status";
-                const file = std.fs.cwd().openFile(stat_file, .{}) catch null;
-                if (file) |f| {
-                    defer f.close();
-                    var buffer: [4096]u8 = undefined;
-                    const bytes_read = f.readAll(&buffer) catch 0;
-                    const content = buffer[0..bytes_read];
-                    var lines = std.mem.splitScalar(u8, content, '\n');
-                    while (lines.next()) |line| {
-                        if (std.mem.startsWith(u8, line, "VmPeak:")) {
-                            var it = std.mem.splitScalar(u8, line, ' ');
-                            _ = it.next();
-                            if (it.next()) |kb_str| {
-                                stats.memory_peak_kb = std.fmt.parseInt(usize, kb_str, 10) catch 0;
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
+            stats.memory_peak_kb = readMemoryPeakKb();
             std.debug.print("\n", .{});
             printStats(stats);
         }

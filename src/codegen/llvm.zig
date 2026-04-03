@@ -89,6 +89,12 @@ pub const CodeGenerator = struct {
         type_name: []const u8,
     };
 
+    pub const BackendTiming = struct {
+        opt_time_ns: u64 = 0,
+        llc_time_ns: u64 = 0,
+        link_time_ns: u64 = 0,
+    };
+
     fn normalizeClangTarget(alloc: std.mem.Allocator, arch: []const u8) ![]const u8 {
         if (arch.len == 0) return "";
         if (std.mem.indexOfScalar(u8, arch, '-') != null) return arch;
@@ -5306,7 +5312,7 @@ pub const CodeGenerator = struct {
         return ir_file;
     }
 
-    pub fn compileToExecutable(self: *CodeGenerator, output: []const u8, arch: []const u8, link_objects: []const []const u8, keep_ll: bool, optimize: bool, extra_flags: []const []const u8) !void {
+    pub fn compileToExecutable(self: *CodeGenerator, output: []const u8, arch: []const u8, link_objects: []const []const u8, keep_ll: bool, optimize: bool, extra_flags: []const []const u8, timing: ?*BackendTiming) !void {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
@@ -5343,6 +5349,7 @@ pub const CodeGenerator = struct {
                 std.debug.print("Warning: opt not found. Skipping optimization pass.\n", .{});
                 std.debug.print("Tried: opt-20, opt-19, opt-18, ..., opt\n", .{});
             } else {
+                const opt_start = std.time.nanoTimestamp();
                 var opt_args_list = std.ArrayList([]const u8){};
                 try opt_args_list.appendSlice(arena_alloc, &[_][]const u8{
                     opt_tool.?,
@@ -5361,9 +5368,11 @@ pub const CodeGenerator = struct {
                 if (result != .Exited or result.Exited != 0) {
                     return error.CompilationFailed;
                 }
+                if (timing) |t| t.opt_time_ns = @intCast(std.time.nanoTimestamp() - opt_start);
             }
         }
 
+        const llc_start = std.time.nanoTimestamp();
         var llc_args_list = std.ArrayList([]const u8){};
         try llc_args_list.appendSlice(arena_alloc, &[_][]const u8{
             llc_tool.?,
@@ -5393,10 +5402,12 @@ pub const CodeGenerator = struct {
         if (llc_result != .Exited or llc_result.Exited != 0) {
             return error.CompilationFailed;
         }
+        if (timing) |t| t.llc_time_ns = @intCast(std.time.nanoTimestamp() - llc_start);
 
         var lld_success = false;
 
         if (isVersionedGlibcTarget(clang_target)) {
+            const link_start = std.time.nanoTimestamp();
             var zig_cc_args = std.ArrayList([]const u8){};
             try zig_cc_args.appendSlice(arena_alloc, &[_][]const u8{ zig_tool.?, "cc", "-target", clang_target, obj_file, "-o", output, "-lc", "-L/usr/lib", "-L/lib", "-L/lib64" });
 
@@ -5423,6 +5434,7 @@ pub const CodeGenerator = struct {
             const zig_cc_result = try zig_cc_child.wait();
             if (zig_cc_result == .Exited and zig_cc_result.Exited == 0) {
                 lld_success = true;
+                if (timing) |t| t.link_time_ns = @intCast(std.time.nanoTimestamp() - link_start);
             } else {
                 std.debug.print("Error: zig cc failed to link target {s}.\n", .{clang_target});
                 return error.CompilationFailed;
@@ -5435,6 +5447,7 @@ pub const CodeGenerator = struct {
         };
 
         if (crt1_exists and arch.len == 0) {
+            const link_start = std.time.nanoTimestamp();
             var lld_args_list = std.ArrayList([]const u8){};
             try lld_args_list.appendSlice(arena_alloc, &[_][]const u8{
                 "ld.lld",
@@ -5476,10 +5489,12 @@ pub const CodeGenerator = struct {
 
             if (lld_result == .Exited and lld_result.Exited == 0) {
                 lld_success = true;
+                if (timing) |t| t.link_time_ns = @intCast(std.time.nanoTimestamp() - link_start);
             }
         }
 
         if (!lld_success) {
+            const link_start = std.time.nanoTimestamp();
             if (clang_tool == null) {
                 std.debug.print("Error: clang not found for linking. Please install clang.\n", .{});
                 std.debug.print("Tried: clang-20, clang-19, clang-18, ..., clang\n", .{});
@@ -5516,6 +5531,7 @@ pub const CodeGenerator = struct {
             if (clang_result != .Exited or clang_result.Exited != 0) {
                 return error.CompilationFailed;
             }
+            if (timing) |t| t.link_time_ns = @intCast(std.time.nanoTimestamp() - link_start);
         }
 
         if (!keep_ll) {
