@@ -2,12 +2,50 @@ const std = @import("std");
 
 fn makeNoOp(_: *std.Build.Step, _: std.Build.Step.MakeOptions) anyerror!void {}
 
+fn detectLlvmLibName(allocator: std.mem.Allocator) []const u8 {
+    const candidates = [_][]const u8{
+        "llvm-config-21",
+        "llvm-config21",
+        "llvm-config-20",
+        "llvm-config-19",
+        "llvm-config-18",
+        "llvm-config",
+    };
+
+    for (candidates) |exe| {
+        const run = std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &[_][]const u8{ exe, "--version" },
+        }) catch continue;
+        defer allocator.free(run.stdout);
+        defer allocator.free(run.stderr);
+        if (run.term != .Exited or run.term.Exited != 0) continue;
+
+        const out = std.mem.trim(u8, run.stdout, " \t\r\n");
+        if (out.len == 0) continue;
+        const dot = std.mem.indexOfScalar(u8, out, '.') orelse out.len;
+        const major_str = out[0..dot];
+        const major = std.fmt.parseInt(u8, major_str, 10) catch continue;
+        return switch (major) {
+            21 => "LLVM-21",
+            20 => "LLVM-20",
+            19 => "LLVM-19",
+            18 => "LLVM-18",
+            17 => "LLVM-17",
+            else => "LLVM-21",
+        };
+    }
+
+    return "LLVM-21";
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const appimage_optimize: std.builtin.OptimizeMode = .ReleaseFast;
     const system_prefix = b.option([]const u8, "system-prefix", "Install root for zlang binary and stdlib") orelse "/usr/local/lib/zlang";
     const system_symlink = b.option([]const u8, "system-symlink", "Symlink path for zlang executable") orelse "/usr/bin/zlang";
+    const llvm_lib = b.option([]const u8, "llvm-lib", "LLVM library name to link against (e.g. LLVM-21, LLVM-20)") orelse detectLlvmLibName(b.allocator);
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -81,11 +119,11 @@ pub fn build(b: *std.Build) void {
         \\    chmod 755 "$APPDIR/usr/bin/$tool_target"
         \\  fi
         \\}
-        \\copy_tool "llc" llc-20 llc-19 llc-18 llc
-        \\copy_tool "opt" opt-20 opt-19 opt-18 opt
-        \\copy_tool "clang" clang-20 clang-19 clang-18 clang
-        \\copy_tool "lli" lli-20 lli-19 lli-18 lli
-        \\copy_tool "ld.lld" ld.lld-20 ld.lld-19 ld.lld-18 ld.lld
+        \\copy_tool "llc" llc-21 llc21 llc-20 llc20 llc-19 llc19 llc-18 llc18 llc
+        \\copy_tool "opt" opt-21 opt21 opt-20 opt20 opt-19 opt19 opt-18 opt18 opt
+        \\copy_tool "clang" clang-21 clang21 clang-20 clang20 clang-19 clang19 clang-18 clang18 clang
+        \\copy_tool "lli" lli-21 lli21 lli-20 lli20 lli-19 lli19 lli-18 lli18 lli
+        \\copy_tool "ld.lld" ld.lld-21 ld.lld21 ld.lld-20 ld.lld20 ld.lld-19 ld.lld19 ld.lld-18 ld.lld18 ld.lld
         \\collect_libs() {
         \\  bin_path="$1"
         \\  [ -x "$bin_path" ] || return 0
@@ -202,7 +240,7 @@ pub fn build(b: *std.Build) void {
 
     //exe.linkSystemLibrary("fl");
     exe.linkLibC();
-    exe.linkSystemLibrary("LLVM-20");
+    exe.linkSystemLibrary(llvm_lib);
     exe.step.dependOn(&flex_cmd.step);
     exe.step.dependOn(&bison_cmd.step);
 
@@ -231,7 +269,7 @@ pub fn build(b: *std.Build) void {
     });
 
     appimage_exe.linkLibC();
-    appimage_exe.linkSystemLibrary("LLVM-20");
+    appimage_exe.linkSystemLibrary(llvm_lib);
     appimage_exe.step.dependOn(&flex_cmd.step);
     appimage_exe.step.dependOn(&bison_cmd.step);
 
