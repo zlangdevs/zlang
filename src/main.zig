@@ -41,6 +41,8 @@ const ModuleInfo = struct {
 };
 
 pub const CompilationStats = struct {
+    const LinkBackend = codegen.CodeGenerator.BackendTiming.LinkBackend;
+
     parse_time_ns: u64,
     codegen_time_ns: u64,
     backend_time_ns: u64,
@@ -48,6 +50,11 @@ pub const CompilationStats = struct {
     total_time_ns: u64,
     lines_of_code: usize,
     memory_peak_kb: usize,
+    llc_version_major: i16,
+    opt_version_major: i16,
+    clang_version_major: i16,
+    lld_version_major: i16,
+    link_backend: LinkBackend,
 };
 
 fn printStats(stats: CompilationStats) void {
@@ -57,12 +64,21 @@ fn printStats(stats: CompilationStats) void {
     const link_ms = @as(f64, @floatFromInt(stats.link_time_ns)) / 1_000_000.0;
     const total_ms = @as(f64, @floatFromInt(stats.total_time_ns)) / 1_000_000.0;
 
+    const link_backend_text = switch (stats.link_backend) {
+        .unknown => "unknown",
+        .zig_cc => "zig cc",
+        .lld => "ld.lld (pure LLVM toolkit)",
+        .clang => "clang driver",
+    };
+
     std.debug.print("Compilation Statistics:\n", .{});
     std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
     std.debug.print("  Parse time:      {d:.2} ms\n", .{parse_ms});
     std.debug.print("  Codegen time:    {d:.2} ms\n", .{codegen_ms});
     std.debug.print("  Backend time:    {d:.2} ms\n", .{backend_ms});
     std.debug.print("  Link time:       {d:.2} ms\n", .{link_ms});
+    std.debug.print("  Link backend:    {s}\n", .{link_backend_text});
+    std.debug.print("  LLVM versions:   llc={d} opt={d} lld={d} clang={d}\n", .{ stats.llc_version_major, stats.opt_version_major, stats.lld_version_major, stats.clang_version_major });
     std.debug.print("  Total time:      {d:.2} ms\n", .{total_ms});
     std.debug.print("  Lines of code:   {d}\n", .{stats.lines_of_code});
     std.debug.print("  Memory peak:     {d} KB\n", .{stats.memory_peak_kb});
@@ -2834,6 +2850,11 @@ pub fn main() !u8 {
         .total_time_ns = 0,
         .lines_of_code = 0,
         .memory_peak_kb = 0,
+        .llc_version_major = 0,
+        .opt_version_major = 0,
+        .clang_version_major = 0,
+        .lld_version_major = 0,
+        .link_backend = .unknown,
     };
 
     if (ctx.brainfuck_mode) {
@@ -2983,6 +3004,11 @@ pub fn main() !u8 {
         };
         stats.backend_time_ns = backend_timing.opt_time_ns + backend_timing.llc_time_ns;
         stats.link_time_ns = backend_timing.link_time_ns;
+        stats.llc_version_major = backend_timing.llc_version_major;
+        stats.opt_version_major = backend_timing.opt_version_major;
+        stats.clang_version_major = backend_timing.clang_version_major;
+        stats.lld_version_major = backend_timing.lld_version_major;
+        stats.link_backend = backend_timing.link_backend;
         stats.total_time_ns = @intCast(std.time.nanoTimestamp() - total_start);
 
         if (ctx.verbose and !ctx.quiet) {
