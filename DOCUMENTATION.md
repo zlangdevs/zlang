@@ -96,6 +96,23 @@ Compiles a ZLang source file to an executable named `output` (default).
   ```
   Note: `-arch` uses `zig` for sysroot-compatible linking. Ensure `zig` is installed and available in `PATH`.
 
+**LLVM Toolchain Resolution**
+
+- ZLang now prefers LLVM 21 tools (`llc-21`/`llc21`, `opt-21`/`opt21`, `clang-21`/`clang21`, `lli-21`/`lli21`) and falls back to older versions (`20..14`) and unversioned tool names.
+- It also checks common absolute install paths (for distro and Homebrew-style layouts).
+- You can force a specific LLVM bin directory with:
+  ```bash
+  ZLANG_LLVM_BIN=/opt/llvm-21/bin zlang main.zl -optimize
+  ```
+
+**Build-time LLVM Library Selection**
+
+- `zig build` auto-detects `llvm-config` and prefers linking against `LLVM-21` when available.
+- Override explicitly if your distro package exposes another SONAME:
+  ```bash
+  zig build -Dllvm-lib=LLVM-20
+  ```
+
 **Brainfuck Mode**
 
 - `-b` - Compile pure Brainfuck files (.b/.bf) with 8-bit cells (default)

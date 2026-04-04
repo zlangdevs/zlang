@@ -90,9 +90,21 @@ pub const CodeGenerator = struct {
     };
 
     pub const BackendTiming = struct {
+        pub const LinkBackend = enum {
+            unknown,
+            zig_cc,
+            lld,
+            clang,
+        };
+
         opt_time_ns: u64 = 0,
         llc_time_ns: u64 = 0,
         link_time_ns: u64 = 0,
+        llc_version_major: i16 = 0,
+        opt_version_major: i16 = 0,
+        clang_version_major: i16 = 0,
+        lld_version_major: i16 = 0,
+        link_backend: LinkBackend = .unknown,
     };
 
     fn normalizeClangTarget(alloc: std.mem.Allocator, arch: []const u8) ![]const u8 {
@@ -5330,7 +5342,23 @@ pub const CodeGenerator = struct {
         const opt_tool = if (optimize) try llvm_tools.getLLVMToolPath(arena_alloc, .opt) else null;
         const llc_tool = try llvm_tools.getLLVMToolPath(arena_alloc, .llc);
         const clang_tool = try llvm_tools.getLLVMToolPath(arena_alloc, .clang);
+        const lld_tool = try llvm_tools.getLLVMToolPath(arena_alloc, .ld_lld);
         const zig_tool = if (arch.len != 0) try llvm_tools.getLLVMToolPath(arena_alloc, .zig) else null;
+
+        if (timing) |t| {
+            if (llc_tool) |tool| {
+                t.llc_version_major = @intCast((try llvm_tools.detectToolVersionMajor(arena_alloc, tool)) orelse 0);
+            }
+            if (opt_tool) |tool| {
+                t.opt_version_major = @intCast((try llvm_tools.detectToolVersionMajor(arena_alloc, tool)) orelse 0);
+            }
+            if (clang_tool) |tool| {
+                t.clang_version_major = @intCast((try llvm_tools.detectToolVersionMajor(arena_alloc, tool)) orelse 0);
+            }
+            if (lld_tool) |tool| {
+                t.lld_version_major = @intCast((try llvm_tools.detectToolVersionMajor(arena_alloc, tool)) orelse 0);
+            }
+        }
 
         if (arch.len != 0 and zig_tool == null) {
             std.debug.print("Error: -arch requires zig in PATH for sysroot-compatible linking.\n", .{});
@@ -5340,14 +5368,14 @@ pub const CodeGenerator = struct {
 
         if (llc_tool == null) {
             std.debug.print("Error: llc not found. Please install LLVM tools.\n", .{});
-            std.debug.print("Tried: llc-20, llc-19, llc-18, ..., llc\n", .{});
+            std.debug.print("Tried: llc-21/llc21, llc-20/llc20, ..., llc (plus common absolute paths and ZLANG_LLVM_BIN)\n", .{});
             return error.CompilationFailed;
         }
 
         if (optimize) {
             if (opt_tool == null) {
                 std.debug.print("Warning: opt not found. Skipping optimization pass.\n", .{});
-                std.debug.print("Tried: opt-20, opt-19, opt-18, ..., opt\n", .{});
+                std.debug.print("Tried: opt-21/opt21, opt-20/opt20, ..., opt (plus common absolute paths and ZLANG_LLVM_BIN)\n", .{});
             } else {
                 const opt_start = std.time.nanoTimestamp();
                 var opt_args_list = std.ArrayList([]const u8){};
@@ -5435,6 +5463,7 @@ pub const CodeGenerator = struct {
             if (zig_cc_result == .Exited and zig_cc_result.Exited == 0) {
                 lld_success = true;
                 if (timing) |t| t.link_time_ns = @intCast(std.time.nanoTimestamp() - link_start);
+                if (timing) |t| t.link_backend = .zig_cc;
             } else {
                 std.debug.print("Error: zig cc failed to link target {s}.\n", .{clang_target});
                 return error.CompilationFailed;
@@ -5446,11 +5475,11 @@ pub const CodeGenerator = struct {
             break :blk true;
         };
 
-        if (crt1_exists and arch.len == 0) {
+        if (crt1_exists and arch.len == 0 and lld_tool != null) {
             const link_start = std.time.nanoTimestamp();
             var lld_args_list = std.ArrayList([]const u8){};
             try lld_args_list.appendSlice(arena_alloc, &[_][]const u8{
-                "ld.lld",
+                lld_tool.?,
                 "-o",
                 output,
                 "-dynamic-linker",
@@ -5490,6 +5519,7 @@ pub const CodeGenerator = struct {
             if (lld_result == .Exited and lld_result.Exited == 0) {
                 lld_success = true;
                 if (timing) |t| t.link_time_ns = @intCast(std.time.nanoTimestamp() - link_start);
+                if (timing) |t| t.link_backend = .lld;
             }
         }
 
@@ -5497,7 +5527,7 @@ pub const CodeGenerator = struct {
             const link_start = std.time.nanoTimestamp();
             if (clang_tool == null) {
                 std.debug.print("Error: clang not found for linking. Please install clang.\n", .{});
-                std.debug.print("Tried: clang-20, clang-19, clang-18, ..., clang\n", .{});
+                std.debug.print("Tried: clang-21/clang21, clang-20/clang20, ..., clang (plus common absolute paths and ZLANG_LLVM_BIN)\n", .{});
                 return error.CompilationFailed;
             }
 
@@ -5532,6 +5562,7 @@ pub const CodeGenerator = struct {
                 return error.CompilationFailed;
             }
             if (timing) |t| t.link_time_ns = @intCast(std.time.nanoTimestamp() - link_start);
+            if (timing) |t| t.link_backend = .clang;
         }
 
         if (!keep_ll) {
