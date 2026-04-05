@@ -2179,22 +2179,22 @@ pub const CodeGenerator = struct {
     }
 
     fn getOrCreateStackSaveIntrinsic(self: *CodeGenerator) c.LLVMValueRef {
-        var f = c.LLVMGetNamedFunction(self.module, "llvm.stacksave");
+        var f = c.LLVMGetNamedFunction(self.module, "llvm.stacksave.p0");
         if (f == null) {
             const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
             const fn_ty = c.LLVMFunctionType(i8_ptr, null, 0, 0);
-            f = c.LLVMAddFunction(self.module, "llvm.stacksave", fn_ty);
+            f = c.LLVMAddFunction(self.module, "llvm.stacksave.p0", fn_ty);
         }
         return f;
     }
 
     fn getOrCreateStackRestoreIntrinsic(self: *CodeGenerator) c.LLVMValueRef {
-        var f = c.LLVMGetNamedFunction(self.module, "llvm.stackrestore");
+        var f = c.LLVMGetNamedFunction(self.module, "llvm.stackrestore.p0");
         if (f == null) {
             const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
             var params = [_]c.LLVMTypeRef{i8_ptr};
             const fn_ty = c.LLVMFunctionType(c.LLVMVoidTypeInContext(self.context), &params, 1, 0);
-            f = c.LLVMAddFunction(self.module, "llvm.stackrestore", fn_ty);
+            f = c.LLVMAddFunction(self.module, "llvm.stackrestore.p0", fn_ty);
         }
         return f;
     }
@@ -3269,6 +3269,14 @@ pub const CodeGenerator = struct {
             return c.LLVMBuildLoad2(self.builder, target_type, value, "struct_load");
         } else if (value_kind == c.LLVMPointerTypeKind and target_kind == c.LLVMPointerTypeKind) {
             return c.LLVMBuildBitCast(self.builder, value, target_type, "bitcast");
+        } else if (value_kind == c.LLVMIntegerTypeKind and target_kind == c.LLVMPointerTypeKind) {
+            const const_int = c.LLVMIsAConstantInt(value);
+            if (const_int != null and c.LLVMConstIntGetSExtValue(value) == 0) {
+                return c.LLVMConstNull(target_type);
+            }
+            return c.LLVMBuildIntToPtr(self.builder, value, target_type, "int_to_ptr");
+        } else if (value_kind == c.LLVMPointerTypeKind and target_kind == c.LLVMIntegerTypeKind) {
+            return c.LLVMBuildPtrToInt(self.builder, value, target_type, "ptr_to_int");
         }
 
         return value;
@@ -5292,6 +5300,28 @@ pub const CodeGenerator = struct {
         }
     }
 
+    pub fn writeBitcodeToFile(self: *CodeGenerator, filename: []const u8) !void {
+        const filename_z = utils.dupeZ(self.allocator, filename);
+        defer self.allocator.free(filename_z);
+
+        const result = c.LLVMWriteBitcodeToFile(self.module, filename_z.ptr);
+        if (result != 0) return error.WriteFailed;
+    }
+
+    pub fn verifyModule(self: *CodeGenerator) !void {
+        var error_msg: [*c]u8 = null;
+        const verify_result = c.LLVMVerifyModule(self.module, c.LLVMReturnStatusAction, &error_msg);
+        if (verify_result != 0) {
+            if (error_msg != null) {
+                defer c.LLVMDisposeMessage(error_msg);
+                std.debug.print("IR verification failed:\n{s}\n", .{std.mem.span(error_msg)});
+            } else {
+                std.debug.print("IR verification failed with unknown LLVM error\n", .{});
+            }
+            return error.VerificationFailed;
+        }
+    }
+
     pub fn emitLLVMIR(self: *CodeGenerator, base_name: []const u8, optimize: bool) ![]const u8 {
         const ir_file = try std.fmt.allocPrint(self.allocator, "{s}.ll", .{base_name});
         errdefer self.allocator.free(ir_file);
@@ -5329,9 +5359,14 @@ pub const CodeGenerator = struct {
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
-        const ir_file = try std.fmt.allocPrint(arena_alloc, "{s}.ll", .{output});
+        const ir_ext = if (keep_ll) ".ll" else ".bc";
+        const ir_file = try std.fmt.allocPrint(arena_alloc, "{s}{s}", .{ output, ir_ext });
         defer arena_alloc.free(ir_file);
-        try self.writeToFile(ir_file);
+        if (keep_ll) {
+            try self.writeToFile(ir_file);
+        } else {
+            try self.writeBitcodeToFile(ir_file);
+        }
 
         const obj_file = try std.fmt.allocPrint(arena_alloc, "{s}.o", .{output});
         defer arena_alloc.free(obj_file);
@@ -5372,19 +5407,25 @@ pub const CodeGenerator = struct {
             return error.CompilationFailed;
         }
 
+        var llc_input_file = ir_file;
+        var optimized_ir_file: ?[]const u8 = null;
+
         if (optimize) {
             if (opt_tool == null) {
                 std.debug.print("Warning: opt not found. Skipping optimization pass.\n", .{});
                 std.debug.print("Tried: opt-21/opt21, opt-20/opt20, ..., opt (plus common absolute paths and ZLANG_LLVM_BIN)\n", .{});
             } else {
                 const opt_start = std.time.nanoTimestamp();
+                const opt_ext = if (keep_ll) ".ll" else ".bc";
+                const opt_output_file = try std.fmt.allocPrint(arena_alloc, "{s}.opt{s}", .{ output, opt_ext });
+                optimized_ir_file = opt_output_file;
                 var opt_args_list = std.ArrayList([]const u8){};
                 try opt_args_list.appendSlice(arena_alloc, &[_][]const u8{
                     opt_tool.?,
                     "-O3",
                     ir_file,
                     "-o",
-                    ir_file,
+                    opt_output_file,
                 });
 
                 var opt_child_process = std.process.Child.init(opt_args_list.items, arena_alloc);
@@ -5393,9 +5434,8 @@ pub const CodeGenerator = struct {
                 try opt_child_process.spawn();
 
                 const result = try opt_child_process.wait();
-                if (result != .Exited or result.Exited != 0) {
-                    return error.CompilationFailed;
-                }
+                if (result != .Exited or result.Exited != 0) return error.CompilationFailed;
+                llc_input_file = opt_output_file;
                 if (timing) |t| t.opt_time_ns = @intCast(std.time.nanoTimestamp() - opt_start);
             }
         }
@@ -5406,7 +5446,7 @@ pub const CodeGenerator = struct {
             llc_tool.?,
             "-filetype=obj",
             "-relocation-model=pic",
-            ir_file,
+            llc_input_file,
             "-o",
             obj_file,
         });
@@ -5427,9 +5467,7 @@ pub const CodeGenerator = struct {
         try llc_child.spawn();
         const llc_result = try llc_child.wait();
 
-        if (llc_result != .Exited or llc_result.Exited != 0) {
-            return error.CompilationFailed;
-        }
+        if (llc_result != .Exited or llc_result.Exited != 0) return error.CompilationFailed;
         if (timing) |t| t.llc_time_ns = @intCast(std.time.nanoTimestamp() - llc_start);
 
         var lld_success = false;
@@ -5565,8 +5603,9 @@ pub const CodeGenerator = struct {
             if (timing) |t| t.link_backend = .clang;
         }
 
-        if (!keep_ll) {
-            std.fs.cwd().deleteFile(ir_file) catch {};
+        if (!keep_ll) std.fs.cwd().deleteFile(ir_file) catch {};
+        if (optimized_ir_file) |opt_file| {
+            std.fs.cwd().deleteFile(opt_file) catch {};
         }
         std.fs.cwd().deleteFile(obj_file) catch {};
     }
