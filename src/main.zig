@@ -2960,6 +2960,12 @@ pub fn main() !u8 {
             code_generator.template_substitutions = old_subs;
         }
     }
+
+    code_generator.verifyModule() catch {
+        std.debug.print("Error: generated LLVM IR failed verification\n", .{});
+        return 1;
+    };
+
     const codegen_end = std.time.nanoTimestamp();
     stats.codegen_time_ns = @intCast(codegen_end - codegen_start);
 

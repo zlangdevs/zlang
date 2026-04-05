@@ -601,7 +601,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
         var param_types = [_]c.LLVMTypeRef{i8_ptr_ty};
         const fn_ty = c.LLVMFunctionType(void_ty, &param_types, 1, 0);
 
-        const intrinsic_name = if (std.mem.eql(u8, call.name, "va_start")) "llvm.va_start" else "llvm.va_end";
+        const intrinsic_name = if (std.mem.eql(u8, call.name, "va_start")) "llvm.va_start.p0" else "llvm.va_end.p0";
         var intrinsic = c.LLVMGetNamedFunction(cg.module, intrinsic_name);
         if (intrinsic == null) {
             intrinsic = c.LLVMAddFunction(cg.module, intrinsic_name, fn_ty);
@@ -872,23 +872,46 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
     if (!found_overload) {
         resolved_name = call.name;
         if (call.is_libc) {
-            var found_ext = false;
-            var func_iter = c.LLVMGetFirstFunction(cg.module);
-            while (func_iter != null) : (func_iter = c.LLVMGetNextFunction(func_iter)) {
-                if (c.LLVMGetValueName(func_iter)) |name_ptr| {
-                    if (std.mem.eql(u8, std.mem.span(name_ptr), call.name)) {
-                        func = func_iter;
-                        found_ext = true;
-                        break;
+            const libc_name = if (call.name.len > 0 and call.name[0] == '@') call.name[1..] else call.name;
+            resolved_name = libc_name;
+
+            if (utils.LIBC_FUNCTIONS.get(libc_name)) |sig| {
+                var param_types = std.ArrayList(c.LLVMTypeRef){};
+                defer param_types.deinit(cg.allocator);
+                for (sig.param_types) |pt| {
+                    try param_types.append(cg.allocator, libcTypeToLLVM(cg, pt));
+                }
+                const expected_fn_type = if (param_types.items.len > 0)
+                    c.LLVMFunctionType(libcTypeToLLVM(cg, sig.return_type), param_types.items.ptr, @intCast(param_types.items.len), if (sig.is_varargs) 1 else 0)
+                else
+                    c.LLVMFunctionType(libcTypeToLLVM(cg, sig.return_type), null, 0, if (sig.is_varargs) 1 else 0);
+                func_type_set = expected_fn_type;
+
+                const libc_name_z = utils.dupeZ(cg.allocator, libc_name);
+                defer cg.allocator.free(libc_name_z);
+                const existing_named = c.LLVMGetNamedFunction(cg.module, libc_name_z.ptr);
+                if (existing_named != null) {
+                    const existing_type = c.LLVMGlobalGetValueType(existing_named);
+                    if (existing_type == expected_fn_type) {
+                        func = existing_named;
+                    } else {
+                        const expected_ptr_ty = c.LLVMPointerType(expected_fn_type, 0);
+                        func = c.LLVMBuildBitCast(cg.builder, existing_named, expected_ptr_ty, "libc_fn_cast");
                     }
-                }
-            }
-            if (!found_ext) {
-                if (utils.LIBC_FUNCTIONS.get(call.name)) |sig| {
-                    func = try createFunctionFromSignature(cg, call.name, sig);
                 } else {
-                    func = try createGenericLibcFunction(cg, call.name);
+                    func = try createFunctionFromSignature(cg, libc_name, sig);
                 }
+                if (cg.external_c_functions.get(libc_name) == null) {
+                    try cg.external_c_functions.put(utils.dupe(u8, cg.allocator, libc_name), func);
+                }
+            } else if (cg.functions.get(call.name)) |declared_libc_like| {
+                func = declared_libc_like;
+                resolved_name = call.name;
+            } else if (cg.external_c_functions.get(libc_name)) |existing| {
+                func = existing;
+            } else {
+                func = try createGenericLibcFunction(cg, libc_name);
+                try cg.external_c_functions.put(utils.dupe(u8, cg.allocator, libc_name), func);
             }
         } else {
             if (cg.functions.get(call.name)) |declared_func| {
@@ -926,6 +949,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
         }
     }
     const func_type = if (func_type_set) |ft| ft else c.LLVMGlobalGetValueType(func);
+    const is_func_varargs = c.LLVMIsFunctionVarArg(func_type) != 0;
     const param_count_llvm = c.LLVMCountParamTypes(func_type);
     var func_param_types = std.ArrayList(c.LLVMTypeRef){};
     defer func_param_types.deinit(cg.allocator);
@@ -1089,6 +1113,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
             try final_args.append(cg.allocator, final_arg);
             param_idx += 1;
         } else {
+            if (!is_func_varargs) break;
             const ty = c.LLVMTypeOf(val);
             const kind = c.LLVMGetTypeKind(ty);
             if (kind == c.LLVMFloatTypeKind) {
