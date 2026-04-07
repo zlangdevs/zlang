@@ -50,6 +50,18 @@ wrap @rewind(stream: ptr<void>) >> void;
 ?? Directory operations
 wrap @mkdir(pathname: ptr<u8>, mode: i32) >> i32;
 wrap @rmdir(pathname: ptr<u8>) >> i32;
+wrap @opendir(name: ptr<u8>) >> ptr<void>;
+
+struct DirEntry {
+    d_ino u64,
+    d_off i64,
+    d_reclen u16,
+    d_type u8,
+    d_name arr<u8, 256>,
+}
+
+wrap @readdir(dirp: ptr<void>) >> ptr<DirEntry>;
+wrap @closedir(dirp: ptr<void>) >> i32;
 
 ?? Utility functions
 wrap @remove(pathname: ptr<u8>) >> i32;
@@ -165,4 +177,17 @@ fun makeDir(path: ptr<u8>) >> bool {
 fun removeDir(path: ptr<u8>) >> bool {
     i32 result = rmdir(path);
     return result == 0;
+}
+
+fun openDir(path: ptr<u8>) >> ptr<void> {
+    return opendir(path);
+}
+
+fun readDirEntry(dir: ptr<void>) >> ptr<DirEntry> {
+    return readdir(dir);
+}
+
+fun closeDir(dir: ptr<void>) >> bool {
+    if dir == (0 as ptr<void>) {return false;}
+    return closedir(dir) == 0;
 }
