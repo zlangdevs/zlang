@@ -598,8 +598,14 @@ pub const CodeGenerator = struct {
             .identifier => {
                 const base_name = qual_id.base.data.identifier.name;
                 const var_info = CodeGenerator.getVariable(self, base_name) orelse return errors.CodegenError.UndefinedVariable;
-                base_val = var_info.value;
-                base_ty = var_info.type_ref;
+                if (std.mem.startsWith(u8, var_info.type_name, "ptr<") and std.mem.endsWith(u8, var_info.type_name, ">")) {
+                    base_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_for_field");
+                    const inner_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
+                    base_ty = try self.getLLVMType(inner_type_name);
+                } else {
+                    base_val = var_info.value;
+                    base_ty = var_info.type_ref;
+                }
             },
             .array_index => {
                 const arr_idx = qual_id.base.data.array_index;
@@ -4420,14 +4426,95 @@ pub const CodeGenerator = struct {
                             return pair.ptr;
                         } else if (un.operand.data == .array_index) {
                             const arr_idx = un.operand.data.array_index;
-                            const array_name = try self.getBaseIdentifierName(arr_idx.array);
-                            defer self.allocator.free(array_name);
-                            const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
+                            var collected_indices = std.ArrayList(c.LLVMValueRef){};
+                            defer collected_indices.deinit(self.allocator);
+
+                            const base_node = try self.collectArrayIndices(arr_idx.array, &collected_indices);
                             var index_value = try self.generateExpression(arr_idx.index);
+
+                            var base_ptr: c.LLVMValueRef = undefined;
+                            var base_type: c.LLVMTypeRef = undefined;
+                            var base_type_name: []const u8 = "";
+                            var base_ptr_is_direct_value = false;
+
+                            if (base_node.data == .qualified_identifier) {
+                                const pair = try self.getQualifiedFieldPtrAndType(base_node);
+                                base_ptr = pair.ptr;
+                                base_type = pair.ty;
+                                base_type_name = self.getTypeNameFromLLVMType(base_type);
+                            } else {
+                                if (base_node.data == .function_call) {
+                                    base_ptr = try self.generateExpression(base_node);
+                                    base_type = c.LLVMTypeOf(base_ptr);
+                                    const call = base_node.data.function_call;
+                                    base_type_name = if (self.function_return_types.get(call.name)) |rt|
+                                        rt
+                                    else if (self.function_asts.get(call.name)) |fn_ast|
+                                        fn_ast.return_type
+                                    else
+                                        try self.inferType(base_node);
+                                    base_ptr_is_direct_value = true;
+                                } else {
+                                    const array_name = try self.getBaseIdentifierName(base_node);
+                                    defer self.allocator.free(array_name);
+                                    const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
+                                    base_ptr = var_info.value;
+                                    base_type = var_info.type_ref;
+                                    base_type_name = var_info.type_name;
+                                }
+                            }
+
+                            const is_pointer_base = std.mem.startsWith(u8, base_type_name, "ptr<") or (base_ptr_is_direct_value and c.LLVMGetTypeKind(base_type) == c.LLVMPointerTypeKind);
+                            if (is_pointer_base) {
+                                if (c.LLVMTypeOf(index_value) != c.LLVMInt64TypeInContext(self.context)) {
+                                    index_value = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
+                                }
+                                try collected_indices.append(self.allocator, index_value);
+                                const ptr_val = if (base_ptr_is_direct_value)
+                                    base_ptr
+                                else
+                                    c.LLVMBuildLoad2(self.builder, base_type, base_ptr, "load_ptr_for_addr");
+                                if (!(std.mem.startsWith(u8, base_type_name, "ptr<") and std.mem.endsWith(u8, base_type_name, ">"))) {
+                                    return errors.CodegenError.TypeMismatch;
+                                }
+                                const element_type_name = base_type_name[4 .. base_type_name.len - 1];
+                                const element_type = try self.getLLVMType(element_type_name);
+                                const idx = collected_indices.items[collected_indices.items.len - 1];
+                                var ptr_indices = [_]c.LLVMValueRef{idx};
+                                return c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &ptr_indices[0], 1, "ptr_index_addr");
+                            }
+
+                            if (std.mem.startsWith(u8, base_type_name, "[]")) {
+                                index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
+                                try collected_indices.append(self.allocator, index_value);
+
+                                const element_type_name = base_type_name[2..];
+                                const element_type = try self.getLLVMType(element_type_name);
+
+                                var ptr_indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0) };
+                                const ptr_in_struct = c.LLVMBuildGEP2(self.builder, base_type, base_ptr, &ptr_indices[0], 2, "slice_ptr_in_struct_addr");
+                                const arg_ptr_type = c.LLVMPointerType(element_type, 0);
+                                const loaded_ptr = c.LLVMBuildLoad2(self.builder, arg_ptr_type, ptr_in_struct, "slice_ptr_val_addr");
+
+                                const idx = collected_indices.items[collected_indices.items.len - 1];
+                                var idx_only = [_]c.LLVMValueRef{idx};
+                                return c.LLVMBuildGEP2(self.builder, element_type, loaded_ptr, &idx_only[0], 1, "slice_element_ptr_addr");
+                            }
+
                             index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
-                            var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
-                            const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
-                            return element_ptr;
+                            try collected_indices.append(self.allocator, index_value);
+
+                            var all_indices = std.ArrayList(c.LLVMValueRef){};
+                            defer all_indices.deinit(self.allocator);
+                            try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
+
+                            var i = collected_indices.items.len;
+                            while (i > 0) {
+                                i -= 1;
+                                try all_indices.append(self.allocator, collected_indices.items[i]);
+                            }
+
+                            return c.LLVMBuildGEP2(self.builder, base_type, base_ptr, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
                         }
                         return errors.CodegenError.TypeMismatch;
                     },

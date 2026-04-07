@@ -11,6 +11,10 @@ struct Metrics {
     other i32,
 }
 
+struct DirEntry {
+    d_name arr<u8, 256>,
+}
+
 arr<i32, 4> g_values = {0};
 
 fun values() >> ptr<i32> {
@@ -219,5 +223,11 @@ fun main() >> i32 {
 
     values()[0] = 7;
     @printf("(expected 7):%d\n", values()[0]);
+
+    DirEntry dir_entry = {0};
+    ptr<DirEntry> ent = &dir_entry;
+    ptr<u8> name = &ent.d_name[0];
+    name[0] = 65;
+    @printf("(expected 65):%d\n", name[0]);
     return 0;
 }
