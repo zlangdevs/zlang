@@ -5045,6 +5045,9 @@ pub const CodeGenerator = struct {
     }
 
     fn generateBinaryOp(self: *CodeGenerator, bin_op: ast.BinaryOp) errors.CodegenError!c.LLVMValueRef {
+        if (bin_op.op == '&') return self.generateLogicalAnd(bin_op.lhs, bin_op.rhs);
+        if (bin_op.op == '|') return self.generateLogicalOr(bin_op.lhs, bin_op.rhs);
+
         const lhs_value = try self.generateExpression(bin_op.lhs);
         const lhs_type = c.LLVMTypeOf(lhs_value);
         const lhs_kind = c.LLVMGetTypeKind(lhs_type);

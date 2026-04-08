@@ -659,8 +659,33 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
     var arg_types = std.ArrayList(c.LLVMTypeRef){};
     defer arg_types.deinit(cg.allocator);
 
+    var needs_eager_context = false;
     for (call.args.items) |arg| {
-        const val = try cg.generateExpression(arg);
+        if (arg.data == .array_initializer or arg.data == .simd_initializer) {
+            needs_eager_context = true;
+            break;
+        }
+    }
+
+    var eager_param_type_names = std.ArrayList([]const u8){};
+    defer eager_param_type_names.deinit(cg.allocator);
+    if (needs_eager_context) {
+        if (cg.c_function_param_signatures.get(call.name)) |sig| {
+            var it = std.mem.tokenizeAny(u8, sig, ",");
+            while (it.next()) |tn_raw| {
+                try eager_param_type_names.append(cg.allocator, std.mem.trim(u8, tn_raw, " \t"));
+            }
+        }
+    }
+
+    for (call.args.items, 0..) |arg, i| {
+        const val = cg.generateExpression(arg) catch |err| blk: {
+            if (err != errors.CodegenError.TypeMismatch) return err;
+            if (arg.data != .array_initializer and arg.data != .simd_initializer) return err;
+            if (i >= eager_param_type_names.items.len) return err;
+            const expected_name = eager_param_type_names.items[i];
+            break :blk try cg.generateExpressionWithContext(arg, expected_name);
+        };
         try arg_values.append(cg.allocator, val);
         try arg_types.append(cg.allocator, c.LLVMTypeOf(val));
     }
