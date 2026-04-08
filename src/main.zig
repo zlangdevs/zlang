@@ -1535,6 +1535,8 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     context.stats = true;
                 } else if (std.mem.eql(u8, flag, "-optimize")) {
                     context.optimize = true;
+                } else if (std.mem.eql(u8, flag, "-optize")) {
+                    context.optimize = true;
                 } else if (std.mem.eql(u8, flag, "-o")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoOutputPath;
@@ -2911,7 +2913,6 @@ pub fn main() !u8 {
         std.debug.print("{s}\n", .{error_msg});
         return 1;
     };
-
     const codegen_start = std.time.nanoTimestamp();
     var code_generator = codegen.CodeGenerator.init(allocator) catch |err| {
         const error_msg = switch (err) {
