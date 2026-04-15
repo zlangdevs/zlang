@@ -156,10 +156,17 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
     }
 
     const return_type = try cg.getLLVMType(getActualReturnType(func.return_type));
+    const uses_sret = c.LLVMGetTypeKind(@ptrCast(return_type)) == c.LLVMStructTypeKind and
+        utils.shouldUseByVal(cg, @ptrCast(return_type)) and
+        !utils.shouldAttachByValAttr(cg, @ptrCast(return_type));
+    if (uses_sret) {
+        try param_types.insert(cg.allocator, 0, c.LLVMPointerType(@ptrCast(return_type), 0));
+    }
+    const final_return_type = if (uses_sret) c.LLVMVoidTypeInContext(@ptrCast(cg.context)) else return_type;
     const function_type = if (param_types.items.len > 0)
-        c.LLVMFunctionType(@ptrCast(return_type), param_types.items.ptr, @intCast(param_types.items.len), if (is_varargs) 1 else 0)
+        c.LLVMFunctionType(@ptrCast(final_return_type), param_types.items.ptr, @intCast(param_types.items.len), if (is_varargs) 1 else 0)
     else
-        c.LLVMFunctionType(@ptrCast(return_type), null, 0, if (is_varargs) 1 else 0);
+        c.LLVMFunctionType(@ptrCast(final_return_type), null, 0, if (is_varargs) 1 else 0);
 
     var final_func_name: []const u8 = undefined;
     var raw_param_types = std.ArrayList(c.LLVMTypeRef){};
@@ -192,6 +199,14 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
 
     const llvm_func = c.LLVMAddFunction(@ptrCast(cg.module), func_name_z.ptr, function_type);
 
+    if (uses_sret) {
+        const sret_attr = c.LLVMCreateTypeAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("sret", 4), @ptrCast(return_type));
+        c.LLVMAddAttributeAtIndex(llvm_func, 1, sret_attr);
+        const align_attr = c.LLVMCreateEnumAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("align", 5), cg.getAlignmentForType(@ptrCast(return_type)));
+        c.LLVMAddAttributeAtIndex(llvm_func, 1, align_attr);
+        try cg.sret_functions.put(utils.dupe(u8, cg.allocator, final_func_name), @ptrCast(return_type));
+    }
+
     var param_idx: usize = 0;
     for (func.parameters.items) |param| {
         if (utils.isVarArgType(param.type_name)) {
@@ -202,10 +217,12 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
         }
         const param_type = try cg.getLLVMType(param.type_name);
         if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind and utils.shouldUseByVal(cg, @ptrCast(param_type))) {
-            const byval_attr = c.LLVMCreateTypeAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("byval", 5), @ptrCast(param_type));
-            c.LLVMAddAttributeAtIndex(llvm_func, @intCast(param_idx + 1), byval_attr);
-            const align_attr = c.LLVMCreateEnumAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("align", 5), cg.getAlignmentForType(@ptrCast(param_type)));
-            c.LLVMAddAttributeAtIndex(llvm_func, @intCast(param_idx + 1), align_attr);
+            if (utils.shouldAttachByValAttr(cg, @ptrCast(param_type))) {
+                const byval_attr = c.LLVMCreateTypeAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("byval", 5), @ptrCast(param_type));
+                c.LLVMAddAttributeAtIndex(llvm_func, @intCast(param_idx + 1 + (if (uses_sret) @as(usize, 1) else @as(usize, 0))), byval_attr);
+                const align_attr = c.LLVMCreateEnumAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("align", 5), cg.getAlignmentForType(@ptrCast(param_type)));
+                c.LLVMAddAttributeAtIndex(llvm_func, @intCast(param_idx + 1 + (if (uses_sret) @as(usize, 1) else @as(usize, 0))), align_attr);
+            }
         }
         param_idx += 1;
     }
@@ -252,6 +269,7 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
     cg.setCurrentModuleByFunction(mangled_name);
     cg.current_function = llvm_func;
     cg.current_source_function_name = func.name;
+    cg.current_codegen_function_name = mangled_name;
     cg.current_function_return_type = getActualReturnType(func.return_type);
     const entry_block = c.LLVMAppendBasicBlockInContext(@ptrCast(cg.context), @ptrCast(llvm_func), "entry");
     c.LLVMPositionBuilderAtEnd(@ptrCast(cg.builder), entry_block);
@@ -265,7 +283,9 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
     cg.clearCurrentFunctionScopes();
     try cg.pushScope();
 
-    var param_idx: usize = 0;
+    const uses_sret = cg.sret_functions.get(mangled_name) != null;
+    const sret_ptr = if (uses_sret) c.LLVMGetParam(@ptrCast(llvm_func), 0) else null;
+    var param_idx: usize = if (uses_sret) 1 else 0;
     for (func.parameters.items) |param| {
         if (utils.isVarArgType(param.type_name)) {
             if (cg.typed_vararg_info.get(mangled_name)) |typed_info| {
@@ -301,12 +321,22 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
         const param_type = try cg.getLLVMType(param.type_name);
 
         if (c.LLVMGetTypeKind(@ptrCast(param_type)) == c.LLVMStructTypeKind and utils.shouldUseByVal(cg, @ptrCast(param_type))) {
-            try variables.putVariable(cg, param.name, structs.VariableInfo{
-                .value = @ptrCast(param_value),
-                .type_ref = @ptrCast(param_type),
-                .type_name = param.type_name,
-                .is_byval_param = true,
-            });
+            if (utils.shouldAttachByValAttr(cg, @ptrCast(param_type))) {
+                try variables.putVariable(cg, param.name, structs.VariableInfo{
+                    .value = @ptrCast(param_value),
+                    .type_ref = @ptrCast(param_type),
+                    .type_name = param.type_name,
+                    .is_byval_param = true,
+                });
+            } else {
+                const local_copy = cg.buildAllocaAtEntry(@ptrCast(param_type), param.name);
+                try cg.emitMemcpy(local_copy, @ptrCast(param_value), @ptrCast(param_type));
+                try variables.putVariable(cg, param.name, structs.VariableInfo{
+                    .value = @ptrCast(local_copy),
+                    .type_ref = @ptrCast(param_type),
+                    .type_name = param.type_name,
+                });
+            }
         } else {
             const alloca = c.LLVMBuildAlloca(@ptrCast(cg.builder), @ptrCast(param_type), param.name.ptr);
             _ = c.LLVMBuildStore(@ptrCast(cg.builder), @ptrCast(param_value), @ptrCast(alloca));
@@ -386,16 +416,27 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
             if (!last_is_return) {
                 const default_value = utils.getDefaultValueForType(cg, func.return_type);
                 try cg.runDeferredActions();
-                _ = c.LLVMBuildRet(@ptrCast(cg.builder), @ptrCast(default_value));
+                if (uses_sret) {
+                    _ = c.LLVMBuildStore(@ptrCast(cg.builder), @ptrCast(default_value), sret_ptr.?);
+                    _ = c.LLVMBuildRetVoid(@ptrCast(cg.builder));
+                } else {
+                    _ = c.LLVMBuildRet(@ptrCast(cg.builder), @ptrCast(default_value));
+                }
             } else {
                 if (c.LLVMGetBasicBlockTerminator(c.LLVMGetInsertBlock(@ptrCast(cg.builder))) == null) {
                     const default_value = utils.getDefaultValueForType(cg, func.return_type);
                     try cg.runDeferredActions();
-                    _ = c.LLVMBuildRet(@ptrCast(cg.builder), @ptrCast(default_value));
+                    if (uses_sret) {
+                        _ = c.LLVMBuildStore(@ptrCast(cg.builder), @ptrCast(default_value), sret_ptr.?);
+                        _ = c.LLVMBuildRetVoid(@ptrCast(cg.builder));
+                    } else {
+                        _ = c.LLVMBuildRet(@ptrCast(cg.builder), @ptrCast(default_value));
+                    }
                 }
             }
         }
     }
+    cg.current_codegen_function_name = null;
 }
 
 fn hasValidControlFlow(cg: *llvm.CodeGenerator, func: ast.Function) errors.CodegenError!bool {
@@ -1129,6 +1170,9 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                         .struct_ty = @ptrCast(struct_ty),
                         .alignment = cg.getAlignmentForType(@ptrCast(struct_ty)),
                     });
+                    if (!utils.shouldAttachByValAttr(cg, @ptrCast(struct_ty))) {
+                        _ = call_byval_attrs.pop();
+                    }
                 }
             }
 
@@ -1181,9 +1225,7 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
     }
 
     if (uses_sret and sret_alloca != null) {
-        if (cg.sret_functions.get(resolved_name)) |pt| {
-            return c.LLVMBuildLoad2(cg.builder, pt, sret_alloca.?, "sret_res");
-        }
+        return sret_alloca.?;
     }
     return call_inst;
 }

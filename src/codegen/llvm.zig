@@ -65,6 +65,7 @@ pub const CodeGenerator = struct {
     next_solicit_callback_id: usize,
     function_asts: std.HashMap([]const u8, ast.Function, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     current_source_function_name: ?[]const u8,
+    current_codegen_function_name: ?[]const u8,
     deferred_actions: std.ArrayList(DeferredAction),
     defer_scope_markers: std.ArrayList(usize),
     pending_global_inits: std.ArrayList(PendingGlobalInit),
@@ -193,6 +194,7 @@ pub const CodeGenerator = struct {
             .next_solicit_callback_id = 1,
             .function_asts = std.HashMap([]const u8, ast.Function, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .current_source_function_name = null,
+            .current_codegen_function_name = null,
             .deferred_actions = std.ArrayList(DeferredAction){},
             .defer_scope_markers = defer_scope_markers,
             .pending_global_inits = std.ArrayList(PendingGlobalInit){},
@@ -382,6 +384,19 @@ pub const CodeGenerator = struct {
         };
         defer self.allocator.free(msg);
         self.reportError(msg, hint);
+    }
+
+    pub fn emitMemcpy(self: *CodeGenerator, dst_ptr: c.LLVMValueRef, src_ptr: c.LLVMValueRef, ty: c.LLVMTypeRef) !void {
+        const memcpy_func = try self.declareLibcFunction("memcpy");
+        const i8_ty = c.LLVMInt8TypeInContext(self.context);
+        const i8_ptr_ty = c.LLVMPointerType(i8_ty, 0);
+        const size_ty = utils.libcTypeToLLVM(self, .size_t_type);
+        const dst_i8 = c.LLVMBuildBitCast(self.builder, dst_ptr, i8_ptr_ty, "memcpy_dst");
+        const src_i8 = c.LLVMBuildBitCast(self.builder, src_ptr, i8_ptr_ty, "memcpy_src");
+        const size = c.LLVMABISizeOfType(c.LLVMGetModuleDataLayout(self.module), ty);
+        const size_val = c.LLVMConstInt(size_ty, @as(c_ulonglong, @intCast(size)), 0);
+        var args = [_]c.LLVMValueRef{ dst_i8, src_i8, size_val };
+        _ = c.LLVMBuildCall2(self.builder, c.LLVMGlobalGetValueType(memcpy_func), memcpy_func, &args[0], 3, "");
     }
 
     pub fn registerFunctionModule(self: *CodeGenerator, func_name: []const u8, module_name: []const u8) !void {
@@ -745,6 +760,13 @@ pub const CodeGenerator = struct {
             }
 
             const value_raw = try self.generateExpressionWithContext(as.value, var_info.type_name);
+            if (var_type_kind == c.LLVMStructTypeKind and
+                (as.value.data == .function_call or as.value.data == .method_call) and
+                c.LLVMGetTypeKind(c.LLVMTypeOf(value_raw)) == c.LLVMPointerTypeKind)
+            {
+                try self.emitMemcpy(var_info.value, value_raw, var_info.type_ref);
+                return;
+            }
             const final_value = try self.castWithSourceRules(value_raw, @ptrCast(var_info.type_ref), as.value);
             _ = c.LLVMBuildStore(@ptrCast(self.builder), @ptrCast(final_value), @ptrCast(var_info.value));
         }
@@ -1123,6 +1145,21 @@ pub const CodeGenerator = struct {
 
                             if (is_zero_struct_init) {
                                 _ = c.LLVMBuildStore(self.builder, c.LLVMConstNull(var_type), alloca);
+                            } else if (initializer.data == .identifier) {
+                                const src_name = initializer.data.identifier.name;
+                                if (CodeGenerator.getVariable(self, src_name)) |src_var| {
+                                    if (std.mem.eql(u8, src_var.type_name, decl.type_name)) {
+                                        try self.emitMemcpy(alloca, src_var.value, var_type);
+                                    } else {
+                                        const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
+                                        const casted_value = try self.castWithSourceRules(init_value, var_type, initializer);
+                                        _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
+                                    }
+                                } else {
+                                    const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
+                                    const casted_value = try self.castWithSourceRules(init_value, var_type, initializer);
+                                    _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
+                                }
                             } else {
                                 const struct_name = std.mem.span(c.LLVMGetStructName(var_type));
                                 const struct_decl = self.getStructDecl(struct_name) orelse return errors.CodegenError.TypeMismatch;
@@ -1142,6 +1179,10 @@ pub const CodeGenerator = struct {
                                     }
                                 }
                                 const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
+                                if ((initializer.data == .function_call or initializer.data == .method_call) and c.LLVMGetTypeKind(c.LLVMTypeOf(init_value)) == c.LLVMPointerTypeKind) {
+                                    try self.emitMemcpy(alloca, init_value, var_type);
+                                    return;
+                                }
                                 const casted_value = try self.castWithSourceRules(init_value, var_type, initializer);
                                 _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                             }
@@ -1538,11 +1579,45 @@ pub const CodeGenerator = struct {
             .return_stmt => |ret| {
                 if (ret.expression) |expr| {
                     const target_ty_name = self.current_function_return_type;
-                    const ret_raw = try self.generateExpressionWithContext(expr, target_ty_name);
                     const target_ty = try self.getLLVMType(target_ty_name);
+                    var sret_ptr: ?c.LLVMValueRef = null;
+                    if (self.current_codegen_function_name) |fname| {
+                        if (self.sret_functions.get(fname) != null) {
+                            if (self.current_function) |fn_val| {
+                                sret_ptr = c.LLVMGetParam(fn_val, 0);
+                            }
+                        }
+                    }
+
+                    if (sret_ptr != null and expr.data == .identifier) {
+                        const ident_name = expr.data.identifier.name;
+                        if (CodeGenerator.getVariable(self, ident_name)) |var_info| {
+                            if (var_info.type_ref == target_ty) {
+                                try self.runDeferredActions();
+                                try self.emitMemcpy(sret_ptr.?, var_info.value, target_ty);
+                                _ = c.LLVMBuildRetVoid(self.builder);
+                                return;
+                            }
+                        }
+                    }
+
+                    const ret_raw = try self.generateExpressionWithContext(expr, target_ty_name);
+
+                    if (sret_ptr != null and c.LLVMGetTypeKind(c.LLVMTypeOf(ret_raw)) == c.LLVMPointerTypeKind and c.LLVMGetTypeKind(target_ty) == c.LLVMStructTypeKind) {
+                        try self.runDeferredActions();
+                        try self.emitMemcpy(sret_ptr.?, ret_raw, target_ty);
+                        _ = c.LLVMBuildRetVoid(self.builder);
+                        return;
+                    }
+
                     const final_ret = try self.castWithRules(ret_raw, target_ty, expr);
                     try self.runDeferredActions();
-                    _ = c.LLVMBuildRet(self.builder, final_ret);
+                    if (sret_ptr) |ptr| {
+                        _ = c.LLVMBuildStore(self.builder, final_ret, ptr);
+                        _ = c.LLVMBuildRetVoid(self.builder);
+                    } else {
+                        _ = c.LLVMBuildRet(self.builder, final_ret);
+                    }
                 } else {
                     try self.runDeferredActions();
                     _ = c.LLVMBuildRetVoid(self.builder);
@@ -3349,6 +3424,8 @@ pub const CodeGenerator = struct {
             if (value_node) |vn3| {
                 switch (vn3.data) {
                     .struct_initializer => can_load_struct = true,
+                    .function_call => can_load_struct = true,
+                    .method_call => can_load_struct = true,
                     .identifier => |ident| {
                         if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                             can_load_struct = self.pointerTypeMatchesTargetStruct(var_info.type_name, target_type);
@@ -3546,6 +3623,8 @@ pub const CodeGenerator = struct {
             if (value_node) |vn3| {
                 switch (vn3.data) {
                     .struct_initializer => can_load_struct = true,
+                    .function_call => can_load_struct = true,
+                    .method_call => can_load_struct = true,
                     .identifier => |ident| {
                         if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                             can_load_struct = self.pointerTypeMatchesTargetStruct(var_info.type_name, target_type);
