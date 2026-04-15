@@ -1535,8 +1535,6 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     context.stats = true;
                 } else if (std.mem.eql(u8, flag, "-optimize")) {
                     context.optimize = true;
-                } else if (std.mem.eql(u8, flag, "-optize")) {
-                    context.optimize = true;
                 } else if (std.mem.eql(u8, flag, "-o")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoOutputPath;
@@ -2927,17 +2925,25 @@ pub fn main() !u8 {
 
     defer code_generator.deinit();
     code_generator.generateCode(ast_root.getRoot()) catch |err| {
+        var owned_error_msg: ?[]u8 = null;
         const error_msg = switch (err) {
             error.FunctionCreationFailed => "Failed to create function.",
             error.TypeMismatch => "Type mismatch in code generation.",
             error.NullNotAllowedInNonPointerType => "Null can only be assigned to pointer types. Cannot assign null to non-pointer type.",
             error.UndefinedFunction => "Undefined function called.",
-            error.UndefinedVariable => "Undefined variable used.",
+            error.UndefinedVariable => blk: {
+                if (code_generator.current_line > 0) {
+                    owned_error_msg = std.fmt.allocPrint(allocator, "Undefined variable used at line {d}.", .{code_generator.current_line}) catch null;
+                    if (owned_error_msg) |msg| break :blk msg;
+                }
+                break :blk "Undefined variable used.";
+            },
             error.UnsupportedOperation => "Unsupported operator used",
             error.OutOfMemory => "Out of memory during code generation.",
             error.RedeclaredVariable => "Variable reinitialization",
             else => "Unknown code generation error.",
         };
+        defer if (owned_error_msg) |msg| allocator.free(msg);
         std.debug.print("Error generating code: {s}\n", .{error_msg});
         return 1;
     };

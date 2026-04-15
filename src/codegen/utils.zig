@@ -529,6 +529,10 @@ pub fn shouldUseByVal(cg: *codegen.CodeGenerator, struct_type: c.LLVMTypeRef) bo
     return getStructSizeBytes(cg, struct_type) > 16;
 }
 
+pub fn shouldAttachByValAttr(cg: *codegen.CodeGenerator, struct_type: c.LLVMTypeRef) bool {
+    return getStructSizeBytes(cg, struct_type) <= 512;
+}
+
 pub fn isByValType(cg: *codegen.CodeGenerator, type_name: []const u8) bool {
     const ty = getLLVMTypeSilent(cg, type_name) catch return false;
     return c.LLVMGetTypeKind(@ptrCast(ty)) == c.LLVMStructTypeKind and shouldUseByVal(cg, @ptrCast(ty));
