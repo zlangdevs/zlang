@@ -81,6 +81,7 @@ extern void zig_add_error_handler_number_kind(void* list, int kind, const char* 
 extern void* zig_create_handled_call_stmt(void* call, void* handlers);
 extern void zlang_set_location(int line, int col);
 extern void zig_record_parse_error(int line, int col, const char* msg);
+extern int zig_try_eval_const_int(void* expr, long long* out_value);
 
 void yyerror(const char* s);
 int zlang_lex(void* scanner);
@@ -399,10 +400,21 @@ complex_type_name:
         $$ = result;
     }
   | qualified_type_name TOKEN_LESS type_name TOKEN_COMMA TOKEN_LPAREN expression TOKEN_RPAREN TOKEN_GREATER %prec TOKEN_LESS {
-        yyerror("array size must be a literal integer; constant expressions are not supported");
-        free($1);
-        free($3);
-        YYERROR;
+        long long evaluated = 0;
+        if (zig_try_eval_const_int($6, &evaluated) && evaluated >= 0) {
+            char value_buf[64];
+            snprintf(value_buf, sizeof(value_buf), "%lld", evaluated);
+            char* result = malloc(strlen($1) + strlen($3) + strlen(value_buf) + 6);
+            sprintf(result, "%s<%s, %s>", $1, $3, value_buf);
+            free($1);
+            free($3);
+            $$ = result;
+        } else {
+            yyerror("array size expression must be a non-negative integer constant");
+            free($1);
+            free($3);
+            YYERROR;
+        }
     }
   | qualified_type_name TOKEN_LESS TOKEN_UNDERSCORE TOKEN_GREATER %prec TOKEN_LESS {
         char* result = malloc(strlen($1) + 4);
