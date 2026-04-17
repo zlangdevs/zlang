@@ -60,6 +60,68 @@ fn parseErrorCodeLiteral(raw: []const u8) i32 {
     }
     return std.fmt.parseInt(i32, lit, 10) catch 0;
 }
+
+fn parseIntegerLiteralI64(raw: []const u8) ?i64 {
+    var cleaned = std.ArrayList(u8){};
+    defer cleaned.deinit(global_allocator);
+    for (raw) |ch| {
+        if (ch != '\'') cleaned.append(global_allocator, ch) catch return null;
+    }
+    const lit = cleaned.items;
+    if (std.mem.startsWith(u8, lit, "0x") or std.mem.startsWith(u8, lit, "0X")) {
+        return std.fmt.parseInt(i64, lit[2..], 16) catch null;
+    }
+    if (std.mem.startsWith(u8, lit, "0b") or std.mem.startsWith(u8, lit, "0B")) {
+        return std.fmt.parseInt(i64, lit[2..], 2) catch null;
+    }
+    if (lit.len > 1 and lit[0] == '0') {
+        return std.fmt.parseInt(i64, lit[1..], 8) catch null;
+    }
+    return std.fmt.parseInt(i64, lit, 10) catch null;
+}
+
+fn evalConstIntExpr(node: *ast.Node) ?i64 {
+    return switch (node.data) {
+        .number_literal => |n| parseIntegerLiteralI64(n.value),
+        .char_literal => |c| @as(i64, c.value),
+        .unary_op => |u| blk: {
+            const inner = evalConstIntExpr(u.operand) orelse break :blk null;
+            break :blk switch (u.op) {
+                '+' => inner,
+                '-' => -inner,
+                '~' => ~inner,
+                else => null,
+            };
+        },
+        .binary_op => |b| blk: {
+            const lhs = evalConstIntExpr(b.lhs) orelse break :blk null;
+            const rhs = evalConstIntExpr(b.rhs) orelse break :blk null;
+            break :blk switch (b.op) {
+                '+' => lhs + rhs,
+                '-' => lhs - rhs,
+                '*' => lhs * rhs,
+                '/' => if (rhs == 0) null else @divTrunc(lhs, rhs),
+                '%' => if (rhs == 0) null else @rem(lhs, rhs),
+                '<' => if (rhs < 0 or rhs > 62) null else lhs << @intCast(rhs),
+                '>' => if (rhs < 0 or rhs > 62) null else lhs >> @intCast(rhs),
+                '&' => lhs & rhs,
+                '|' => lhs | rhs,
+                '^' => lhs ^ rhs,
+                else => null,
+            };
+        },
+        .cast => |cst| evalConstIntExpr(cst.expr),
+        else => null,
+    };
+}
+
+export fn zig_try_eval_const_int(expr_ptr: ?*anyopaque, out_value: ?*c_longlong) c_int {
+    if (expr_ptr == null or out_value == null) return 0;
+    const expr = @as(*ast.Node, @ptrFromInt(@intFromPtr(expr_ptr.?)));
+    const value = evalConstIntExpr(expr) orelse return 0;
+    out_value.?.* = @intCast(value);
+    return 1;
+}
 const ParameterList = struct {
     items: std.ArrayList(ast.Parameter),
 

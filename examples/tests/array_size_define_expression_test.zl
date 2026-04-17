@@ -1,4 +1,4 @@
-module test_array_size_define_expression_fail;
+module test_array_size_define_expression;
 
 #define COUNT 3
 #define HISTORY_SLOTS (COUNT - 1)
