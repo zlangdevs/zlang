@@ -5123,6 +5123,23 @@ pub const CodeGenerator = struct {
         };
     }
 
+    fn getPointerElementTypeFromExpr(self: *CodeGenerator, expr: *ast.Node, ptr_type: c.LLVMTypeRef) errors.CodegenError!c.LLVMTypeRef {
+        _ = ptr_type;
+        const inferred = try self.inferType(expr);
+        if (std.mem.startsWith(u8, inferred, "ptr<") and std.mem.endsWith(u8, inferred, ">")) {
+            return try self.getLLVMType(inferred[4 .. inferred.len - 1]);
+        }
+        if (expr.data == .identifier) {
+            const name = expr.data.identifier.name;
+            if (CodeGenerator.getVariable(self, name)) |var_info| {
+                if (std.mem.startsWith(u8, var_info.type_name, "ptr<") and std.mem.endsWith(u8, var_info.type_name, ">")) {
+                    return try self.getLLVMType(var_info.type_name[4 .. var_info.type_name.len - 1]);
+                }
+            }
+        }
+        return c.LLVMInt8TypeInContext(self.context);
+    }
+
     fn generateBinaryOp(self: *CodeGenerator, bin_op: ast.BinaryOp) errors.CodegenError!c.LLVMValueRef {
         if (bin_op.op == '&') return self.generateLogicalAnd(bin_op.lhs, bin_op.rhs);
         if (bin_op.op == '|') return self.generateLogicalOr(bin_op.lhs, bin_op.rhs);
@@ -5144,27 +5161,7 @@ pub const CodeGenerator = struct {
             const rhs_kind = c.LLVMGetTypeKind(rhs_type);
 
             if (rhs_kind == c.LLVMIntegerTypeKind) {
-                var element_type: c.LLVMTypeRef = undefined;
-                if (bin_op.lhs.data == .identifier) {
-                    const var_info = CodeGenerator.getVariable(self, bin_op.lhs.data.identifier.name) orelse return errors.CodegenError.UndefinedVariable;
-                    if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
-                        const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                        element_type = try self.getLLVMType(element_type_name);
-                    } else {
-                        return errors.CodegenError.TypeMismatch;
-                    }
-                } else {
-                    element_type = c.LLVMGetElementType(lhs_type);
-                    if (element_type == null or c.LLVMGetTypeKind(element_type) == c.LLVMVoidTypeKind) {
-                        const inferred_type = try self.inferType(bin_op.lhs);
-                        if (std.mem.startsWith(u8, inferred_type, "ptr<") and std.mem.endsWith(u8, inferred_type, ">")) {
-                            const element_type_name = inferred_type[4 .. inferred_type.len - 1];
-                            element_type = try self.getLLVMType(element_type_name);
-                        } else {
-                            element_type = c.LLVMInt8TypeInContext(self.context);
-                        }
-                    }
-                }
+                const element_type = try self.getPointerElementTypeFromExpr(bin_op.lhs, lhs_type);
                 var idx_val = rhs_value;
                 if (c.LLVMTypeOf(rhs_value) != c.LLVMInt64TypeInContext(self.context)) {
                     idx_val = self.castToType(rhs_value, c.LLVMInt64TypeInContext(self.context));
@@ -5173,27 +5170,7 @@ pub const CodeGenerator = struct {
                 var indices = [_]c.LLVMValueRef{index};
                 return c.LLVMBuildGEP2(self.builder, element_type, lhs_value, &indices[0], 1, "ptr_arith");
             } else if (rhs_kind == c.LLVMPointerTypeKind and bin_op.op == '-') {
-                var element_type: c.LLVMTypeRef = undefined;
-                if (bin_op.lhs.data == .identifier) {
-                    const var_info = CodeGenerator.getVariable(self, bin_op.lhs.data.identifier.name) orelse return errors.CodegenError.UndefinedVariable;
-                    if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
-                        const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                        element_type = try self.getLLVMType(element_type_name);
-                    } else {
-                        return errors.CodegenError.TypeMismatch;
-                    }
-                } else {
-                    element_type = c.LLVMGetElementType(lhs_type);
-                    if (element_type == null or c.LLVMGetTypeKind(element_type) == c.LLVMVoidTypeKind) {
-                        const inferred_type = try self.inferType(bin_op.lhs);
-                        if (std.mem.startsWith(u8, inferred_type, "ptr<") and std.mem.endsWith(u8, inferred_type, ">")) {
-                            const element_type_name = inferred_type[4 .. inferred_type.len - 1];
-                            element_type = try self.getLLVMType(element_type_name);
-                        } else {
-                            element_type = c.LLVMInt8TypeInContext(self.context);
-                        }
-                    }
-                }
+                const element_type = try self.getPointerElementTypeFromExpr(bin_op.lhs, lhs_type);
                 const lhs_int = c.LLVMBuildPtrToInt(self.builder, lhs_value, c.LLVMInt64TypeInContext(self.context), "ptr_to_int_lhs");
                 const rhs_int = c.LLVMBuildPtrToInt(self.builder, rhs_value, c.LLVMInt64TypeInContext(self.context), "ptr_to_int_rhs");
                 const byte_diff = c.LLVMBuildSub(self.builder, lhs_int, rhs_int, "byte_diff");
@@ -5212,11 +5189,10 @@ pub const CodeGenerator = struct {
         const rhs_kind = c.LLVMGetTypeKind(rhs_type);
 
         if (lhs_kind == c.LLVMIntegerTypeKind and rhs_kind == c.LLVMPointerTypeKind and bin_op.op == '+') {
+            const element_type = try self.getPointerElementTypeFromExpr(bin_op.rhs, rhs_type);
             if (bin_op.rhs.data == .identifier) {
                 const var_info = CodeGenerator.getVariable(self, bin_op.rhs.data.identifier.name) orelse return errors.CodegenError.UndefinedVariable;
                 if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
-                    const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                    const element_type = try self.getLLVMType(element_type_name);
                     var idx_val = lhs_value;
                     if (c.LLVMTypeOf(lhs_value) != c.LLVMInt64TypeInContext(self.context)) {
                         idx_val = self.castToType(lhs_value, c.LLVMInt64TypeInContext(self.context));
@@ -5224,7 +5200,6 @@ pub const CodeGenerator = struct {
                     var indices = [_]c.LLVMValueRef{idx_val};
                     return c.LLVMBuildGEP2(self.builder, element_type, rhs_value, &indices[0], 1, "ptr_arith");
                 }
-                const element_type = c.LLVMGetElementType(rhs_type);
                 var idx_val = lhs_value;
                 if (c.LLVMTypeOf(lhs_value) != c.LLVMInt64TypeInContext(self.context)) {
                     idx_val = self.castToType(lhs_value, c.LLVMInt64TypeInContext(self.context));
@@ -5232,7 +5207,12 @@ pub const CodeGenerator = struct {
                 var indices = [_]c.LLVMValueRef{idx_val};
                 return c.LLVMBuildGEP2(self.builder, element_type, rhs_value, &indices[0], 1, "ptr_arith");
             }
-            return errors.CodegenError.TypeMismatch;
+            var idx_val = lhs_value;
+            if (c.LLVMTypeOf(lhs_value) != c.LLVMInt64TypeInContext(self.context)) {
+                idx_val = self.castToType(lhs_value, c.LLVMInt64TypeInContext(self.context));
+            }
+            var indices = [_]c.LLVMValueRef{idx_val};
+            return c.LLVMBuildGEP2(self.builder, element_type, rhs_value, &indices[0], 1, "ptr_arith");
         }
 
         if (lhs_kind == c.LLVMPointerTypeKind or rhs_kind == c.LLVMPointerTypeKind) {
