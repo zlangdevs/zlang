@@ -84,6 +84,7 @@ pub const CodeGenerator = struct {
     };
 
     const PendingGlobalInit = struct {
+        global_name: []const u8,
         global_var: c.LLVMValueRef,
         initializer: *ast.Node,
         type_ref: c.LLVMTypeRef,
@@ -403,8 +404,20 @@ pub const CodeGenerator = struct {
         try self.module_manager.registerFunctionModule(func_name, module_name);
     }
 
+    pub fn registerGlobalModule(self: *CodeGenerator, global_name: []const u8, module_name: []const u8) !void {
+        try self.module_manager.registerGlobalModule(global_name, module_name);
+    }
+
+    pub fn setCurrentModule(self: *CodeGenerator, module_name: []const u8) void {
+        self.module_manager.setCurrentModule(module_name);
+    }
+
     pub fn setCurrentModuleByFunction(self: *CodeGenerator, func_name: []const u8) void {
         self.module_manager.setCurrentModuleByFunction(func_name);
+    }
+
+    pub fn setCurrentModuleByGlobal(self: *CodeGenerator, global_name: []const u8) void {
+        self.module_manager.setCurrentModuleByGlobal(global_name);
     }
 
     pub fn canAccess(self: *CodeGenerator, from_module: []const u8, target_module: []const u8) bool {
@@ -812,6 +825,7 @@ pub const CodeGenerator = struct {
             .program => |prog| {
                 try self.registerBuiltinErrorGuard();
                 for (prog.functions.items) |func| {
+                    self.setCurrentNodeContext(func);
                     if (func.data == .error_decl) {
                         const error_decl = func.data.error_decl;
                         if (error_decl.code_kind != .alias) {
@@ -820,6 +834,7 @@ pub const CodeGenerator = struct {
                     }
                 }
                 for (prog.functions.items) |func| {
+                    self.setCurrentNodeContext(func);
                     if (func.data == .error_decl) {
                         const error_decl = func.data.error_decl;
                         if (error_decl.code_kind == .alias) {
@@ -828,6 +843,7 @@ pub const CodeGenerator = struct {
                     }
                 }
                 for (prog.functions.items) |func| {
+                    self.setCurrentNodeContext(func);
                     if (func.data == .struct_decl) {
                         const struct_decl = func.data.struct_decl;
                         if (self.struct_types.get(struct_decl.name) == null) {
@@ -839,6 +855,7 @@ pub const CodeGenerator = struct {
                     }
                 }
                 for (prog.functions.items) |func| {
+                    self.setCurrentNodeContext(func);
                     if (func.data == .enum_decl) {
                         try enums.generateEnumDeclaration(self, func.data.enum_decl);
                     } else if (func.data == .struct_decl) {
@@ -850,13 +867,18 @@ pub const CodeGenerator = struct {
                     }
                 }
                 for (prog.functions.items) |func| {
+                    self.setCurrentNodeContext(func);
                     if (func.data == .function) {
                         try self.declareFunction(func.data.function);
                     }
                 }
-                for (prog.globals.items) |glob| try self.generateGlobalDeclaration(glob);
+                for (prog.globals.items) |glob| {
+                    self.setCurrentNodeContext(glob);
+                    try self.generateGlobalDeclaration(glob);
+                }
                 try self.generatePendingGlobalInitializers();
                 for (prog.functions.items) |func| {
+                    self.setCurrentNodeContext(func);
                     if (func.data == .function) try self.generateFunctionBody(func.data.function);
                 }
             },
@@ -884,6 +906,8 @@ pub const CodeGenerator = struct {
         }
 
         for (self.pending_global_inits.items) |pending| {
+            self.setCurrentNodeContext(pending.initializer);
+            self.setCurrentModuleByGlobal(pending.global_name);
             const value_raw = try self.generateExpressionWithContext(pending.initializer, pending.type_name);
             const final_value = try self.castWithSourceRules(value_raw, pending.type_ref, pending.initializer);
             _ = c.LLVMBuildStore(self.builder, final_value, pending.global_var);
@@ -3202,8 +3226,10 @@ pub const CodeGenerator = struct {
     }
 
     fn generateGlobalDeclaration(self: *CodeGenerator, global_node: *ast.Node) errors.CodegenError!void {
+        self.setCurrentNodeContext(global_node);
         switch (global_node.data) {
             .var_decl => |decl| {
+                self.setCurrentModuleByGlobal(decl.name);
                 if (utils.isVarArgType(decl.type_name)) {
                     if (self.current_line > 0) {
                         self.reportErrorFmt("Invalid type 'vararg' for variable '{s}'", .{decl.name}, "Variadic arguments can only be used as the last parameter of a function");
@@ -3253,6 +3279,7 @@ pub const CodeGenerator = struct {
 
                     if (allow_runtime_init and !decl.is_const) {
                         try self.pending_global_inits.append(self.allocator, .{
+                            .global_name = decl.name,
                             .global_var = global_var,
                             .initializer = initializer,
                             .type_ref = var_type,

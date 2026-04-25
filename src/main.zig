@@ -40,6 +40,29 @@ const ModuleInfo = struct {
     }
 };
 
+const ModuleRegistration = struct {
+    module_name: []const u8,
+    module_path: []const u8,
+    dependencies: std.ArrayList([]const u8),
+
+    pub fn deinit(self: *ModuleRegistration, alloc: std.mem.Allocator) void {
+        alloc.free(self.module_name);
+        alloc.free(self.module_path);
+        for (self.dependencies.items) |dep| alloc.free(dep);
+        self.dependencies.deinit(alloc);
+    }
+};
+
+const SymbolModuleBinding = struct {
+    symbol_name: []const u8,
+    module_name: []const u8,
+
+    pub fn deinit(self: *SymbolModuleBinding, alloc: std.mem.Allocator) void {
+        alloc.free(self.symbol_name);
+        alloc.free(self.module_name);
+    }
+};
+
 pub const CompilationStats = struct {
     const LinkBackend = codegen.CodeGenerator.BackendTiming.LinkBackend;
 
@@ -103,6 +126,9 @@ pub const Context = struct {
     bf_cell_size: i32,
     define_overrides: std.ArrayList(preprocessor.DefineOverride),
     seen_define_names: std.ArrayList([]const u8),
+    module_registrations: std.ArrayList(ModuleRegistration),
+    function_module_bindings: std.ArrayList(SymbolModuleBinding),
+    global_module_bindings: std.ArrayList(SymbolModuleBinding),
 
     pub fn init() Context {
         return Context{
@@ -123,6 +149,9 @@ pub const Context = struct {
             .bf_cell_size = 8,
             .define_overrides = std.ArrayList(preprocessor.DefineOverride){},
             .seen_define_names = std.ArrayList([]const u8){},
+            .module_registrations = std.ArrayList(ModuleRegistration){},
+            .function_module_bindings = std.ArrayList(SymbolModuleBinding){},
+            .global_module_bindings = std.ArrayList(SymbolModuleBinding){},
         };
     }
 
@@ -140,6 +169,12 @@ pub const Context = struct {
             alloc.free(name);
         }
         self.seen_define_names.deinit(alloc);
+        for (self.module_registrations.items) |*entry| entry.deinit(alloc);
+        self.module_registrations.deinit(alloc);
+        for (self.function_module_bindings.items) |*entry| entry.deinit(alloc);
+        self.function_module_bindings.deinit(alloc);
+        for (self.global_module_bindings.items) |*entry| entry.deinit(alloc);
+        self.global_module_bindings.deinit(alloc);
     }
 
     pub fn print(self: *const Context) void {
@@ -1306,9 +1341,26 @@ fn loadStdModulesForDep(dep: []const u8, modules: *std.ArrayList(ModuleInfo), lo
     try modules.append(alloc, std_module);
 }
 
+fn clearModuleBindings(ctx: *Context, alloc: std.mem.Allocator) void {
+    for (ctx.module_registrations.items) |*entry| entry.deinit(alloc);
+    ctx.module_registrations.clearRetainingCapacity();
+    for (ctx.function_module_bindings.items) |*entry| entry.deinit(alloc);
+    ctx.function_module_bindings.clearRetainingCapacity();
+    for (ctx.global_module_bindings.items) |*entry| entry.deinit(alloc);
+    ctx.global_module_bindings.clearRetainingCapacity();
+}
+
+fn modulePathByName(module_registrations: []const ModuleRegistration, module_name: []const u8) ?[]const u8 {
+    for (module_registrations) |entry| {
+        if (std.mem.eql(u8, entry.module_name, module_name)) return entry.module_path;
+    }
+    return null;
+}
+
 fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
     var arena_ast = ast.ArenaAST.init(alloc);
     const arena = arena_ast.allocator();
+    clearModuleBindings(ctx, alloc);
 
     var modules = std.ArrayList(ModuleInfo){};
     defer {
@@ -1431,14 +1483,36 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
     for (modules.items) |module| {
         if (!reachable_modules.contains(module.name)) continue;
 
+        var module_registration = ModuleRegistration{
+            .module_name = utils.dupe(u8, alloc, module.name),
+            .module_path = utils.dupe(u8, alloc, module.path),
+            .dependencies = std.ArrayList([]const u8){},
+        };
+        for (module.dependencies.items) |dep| {
+            try module_registration.dependencies.append(alloc, utils.dupe(u8, alloc, dep));
+        }
+        try ctx.module_registrations.append(alloc, module_registration);
+
         switch (module.ast.data) {
             .program => |prog| {
                 for (prog.functions.items) |func| {
                     if (func.data != .use_stmt) {
+                        if (func.data == .function) {
+                            try ctx.function_module_bindings.append(alloc, .{
+                                .symbol_name = utils.dupe(u8, alloc, func.data.function.name),
+                                .module_name = utils.dupe(u8, alloc, module.name),
+                            });
+                        }
                         try merged_program.data.program.functions.append(arena, func);
                     }
                 }
                 for (prog.globals.items) |glob| {
+                    if (glob.data == .var_decl) {
+                        try ctx.global_module_bindings.append(alloc, .{
+                            .symbol_name = utils.dupe(u8, alloc, glob.data.var_decl.name),
+                            .module_name = utils.dupe(u8, alloc, module.name),
+                        });
+                    }
                     try merged_program.data.program.globals.append(arena, glob);
                 }
             },
@@ -2903,7 +2977,23 @@ pub fn main() !u8 {
     }
 
     const semantic_file_path = if (ctx.input_files.items.len > 0) ctx.input_files.items[0] else "<input>";
-    semantic.analyzeProgram(allocator, ast_root.getRoot(), semantic_file_path) catch |err| {
+    var semantic_function_file_paths = std.StringHashMap([]const u8).init(allocator);
+    defer semantic_function_file_paths.deinit();
+    var semantic_global_file_paths = std.StringHashMap([]const u8).init(allocator);
+    defer semantic_global_file_paths.deinit();
+
+    for (ctx.function_module_bindings.items) |binding| {
+        if (modulePathByName(ctx.module_registrations.items, binding.module_name)) |module_path| {
+            try semantic_function_file_paths.put(binding.symbol_name, module_path);
+        }
+    }
+    for (ctx.global_module_bindings.items) |binding| {
+        if (modulePathByName(ctx.module_registrations.items, binding.module_name)) |module_path| {
+            try semantic_global_file_paths.put(binding.symbol_name, module_path);
+        }
+    }
+
+    semantic.analyzeProgramWithSourceMaps(allocator, ast_root.getRoot(), semantic_file_path, &semantic_function_file_paths, &semantic_global_file_paths) catch |err| {
         const error_msg = switch (err) {
             error.SemanticFailed => "Semantic analysis failed.",
             error.OutOfMemory => "Out of memory during semantic analysis.",
@@ -2924,6 +3014,17 @@ pub fn main() !u8 {
     };
 
     defer code_generator.deinit();
+
+    for (ctx.module_registrations.items) |entry| {
+        try code_generator.registerModule(entry.module_name, entry.module_path, entry.dependencies.items);
+    }
+    for (ctx.function_module_bindings.items) |entry| {
+        try code_generator.registerFunctionModule(entry.symbol_name, entry.module_name);
+    }
+    for (ctx.global_module_bindings.items) |entry| {
+        try code_generator.registerGlobalModule(entry.symbol_name, entry.module_name);
+    }
+
     code_generator.generateCode(ast_root.getRoot()) catch |err| {
         var owned_error_msg: ?[]u8 = null;
         const error_msg = switch (err) {
