@@ -4,6 +4,7 @@ const utils = @import("utils.zig");
 pub const ModuleManager = struct {
     allocator: std.mem.Allocator,
     function_to_module: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    global_to_module: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     module_dependencies: std.HashMap([]const u8, std.ArrayList([]const u8), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     module_paths: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     current_module_name: []const u8,
@@ -11,6 +12,7 @@ pub const ModuleManager = struct {
         return .{
             .allocator = allocator,
             .function_to_module = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .global_to_module = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .module_dependencies = std.HashMap([]const u8, std.ArrayList([]const u8), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .module_paths = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .current_module_name = "",
@@ -29,6 +31,7 @@ pub const ModuleManager = struct {
         }
         self.module_paths.deinit();
         self.function_to_module.deinit();
+        self.global_to_module.deinit();
     }
     pub fn registerModule(self: *ModuleManager, module_name: []const u8, full_path: []const u8, deps: []const []const u8) !void {
         var list = std.ArrayList([]const u8){};
@@ -41,8 +44,21 @@ pub const ModuleManager = struct {
     pub fn registerFunctionModule(self: *ModuleManager, func_name: []const u8, module_name: []const u8) !void {
         try self.function_to_module.put(utils.dupe(u8, self.allocator, func_name), utils.dupe(u8, self.allocator, module_name));
     }
+    pub fn registerGlobalModule(self: *ModuleManager, global_name: []const u8, module_name: []const u8) !void {
+        try self.global_to_module.put(utils.dupe(u8, self.allocator, global_name), utils.dupe(u8, self.allocator, module_name));
+    }
+    pub fn setCurrentModule(self: *ModuleManager, module_name: []const u8) void {
+        self.current_module_name = module_name;
+    }
     pub fn setCurrentModuleByFunction(self: *ModuleManager, func_name: []const u8) void {
         if (self.function_to_module.get(func_name)) |m| {
+            self.current_module_name = m;
+        } else {
+            self.current_module_name = "";
+        }
+    }
+    pub fn setCurrentModuleByGlobal(self: *ModuleManager, global_name: []const u8) void {
+        if (self.global_to_module.get(global_name)) |m| {
             self.current_module_name = m;
         } else {
             self.current_module_name = "";

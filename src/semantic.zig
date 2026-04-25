@@ -29,6 +29,8 @@ const unresolved_error_code: i32 = std.math.minInt(i32);
 pub const Analyzer = struct {
     allocator: std.mem.Allocator,
     fallback_file_path: []const u8,
+    function_file_paths: ?*const std.StringHashMap([]const u8),
+    global_file_paths: ?*const std.StringHashMap([]const u8),
     has_errors: bool,
     functions: std.StringHashMap(void),
     enum_types: std.StringHashMap(void),
@@ -40,6 +42,7 @@ pub const Analyzer = struct {
     scopes: std.ArrayList(std.StringHashMap(VarInfo)),
     loop_depth: usize,
     current_function_name: ?[]const u8,
+    current_global_name: ?[]const u8,
     allow_unknown_identifiers: bool,
     solicit_allowed_identifiers: ?*const std.StringHashMap(void),
 
@@ -47,6 +50,8 @@ pub const Analyzer = struct {
         return Analyzer{
             .allocator = allocator,
             .fallback_file_path = fallback_file_path,
+            .function_file_paths = null,
+            .global_file_paths = null,
             .has_errors = false,
             .functions = std.StringHashMap(void).init(allocator),
             .enum_types = std.StringHashMap(void).init(allocator),
@@ -58,9 +63,15 @@ pub const Analyzer = struct {
             .scopes = std.ArrayList(std.StringHashMap(VarInfo)){},
             .loop_depth = 0,
             .current_function_name = null,
+            .current_global_name = null,
             .allow_unknown_identifiers = false,
             .solicit_allowed_identifiers = null,
         };
+    }
+
+    pub fn setSourceMaps(self: *Analyzer, function_file_paths: *const std.StringHashMap([]const u8), global_file_paths: *const std.StringHashMap([]const u8)) void {
+        self.function_file_paths = function_file_paths;
+        self.global_file_paths = global_file_paths;
     }
 
     pub fn deinit(self: *Analyzer) void {
@@ -249,6 +260,8 @@ pub const Analyzer = struct {
         for (program.globals.items) |node| {
             if (node.data == .var_decl) {
                 const decl = node.data.var_decl;
+                self.current_global_name = decl.name;
+                defer self.current_global_name = null;
                 if (decl.initializer) |initializer_node| {
                     try self.analyzeExpression(initializer_node);
                 }
@@ -956,8 +969,9 @@ pub const Analyzer = struct {
 
     fn reportNodeError(self: *Analyzer, node: *ast.Node, message: []const u8, hint: ?[]const u8) void {
         self.has_errors = true;
+        const file_path = self.resolveNodeFilePath(node);
         diagnostics.printDiagnostic(self.allocator, .{
-            .file_path = self.fallback_file_path,
+            .file_path = file_path,
             .line = if (node.line == 0) 1 else node.line,
             .column = if (node.column == 0) 1 else node.column,
             .message = message,
@@ -977,8 +991,9 @@ pub const Analyzer = struct {
     }
 
     fn reportNodeWarning(self: *Analyzer, node: *ast.Node, message: []const u8, hint: ?[]const u8) void {
+        const file_path = self.resolveNodeFilePath(node);
         diagnostics.printDiagnostic(self.allocator, .{
-            .file_path = self.fallback_file_path,
+            .file_path = file_path,
             .line = if (node.line == 0) 1 else node.line,
             .column = if (node.column == 0) 1 else node.column,
             .message = message,
@@ -995,6 +1010,38 @@ pub const Analyzer = struct {
         };
         defer self.allocator.free(msg);
         self.reportNodeWarning(node, msg, hint);
+    }
+
+    fn resolveNodeFilePath(self: *Analyzer, node: *ast.Node) []const u8 {
+        if (self.current_function_name) |fn_name| {
+            if (self.function_file_paths) |map| {
+                if (map.get(fn_name)) |path| return path;
+            }
+        }
+        if (self.current_global_name) |global_name| {
+            if (self.global_file_paths) |map| {
+                if (map.get(global_name)) |path| return path;
+            }
+        }
+        switch (node.data) {
+            .function => |func| {
+                if (self.function_file_paths) |map| {
+                    if (map.get(func.name)) |path| return path;
+                }
+            },
+            .var_decl => |decl| {
+                if (self.global_file_paths) |map| {
+                    if (map.get(decl.name)) |path| return path;
+                }
+            },
+            .function_call => |call| {
+                if (self.function_file_paths) |map| {
+                    if (map.get(call.name)) |path| return path;
+                }
+            },
+            else => {},
+        }
+        return self.fallback_file_path;
     }
 };
 
@@ -1039,5 +1086,18 @@ fn tokenTextForNode(node: *ast.Node) ?[]const u8 {
 pub fn analyzeProgram(allocator: std.mem.Allocator, root: *ast.Node, fallback_file_path: []const u8) errors.SemanticError!void {
     var analyzer = Analyzer.init(allocator, fallback_file_path);
     defer analyzer.deinit();
+    try analyzer.analyze(root);
+}
+
+pub fn analyzeProgramWithSourceMaps(
+    allocator: std.mem.Allocator,
+    root: *ast.Node,
+    fallback_file_path: []const u8,
+    function_file_paths: *const std.StringHashMap([]const u8),
+    global_file_paths: *const std.StringHashMap([]const u8),
+) errors.SemanticError!void {
+    var analyzer = Analyzer.init(allocator, fallback_file_path);
+    defer analyzer.deinit();
+    analyzer.setSourceMaps(function_file_paths, global_file_paths);
     try analyzer.analyze(root);
 }

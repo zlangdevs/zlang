@@ -266,7 +266,7 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
     const mangled_name = try getMangledName(cg.allocator, func.name, type_names.items, cg);
     defer if (!std.mem.eql(u8, func.name, "main")) cg.allocator.free(mangled_name);
     const llvm_func = cg.functions.get(mangled_name) orelse return errors.CodegenError.UndefinedFunction;
-    cg.setCurrentModuleByFunction(mangled_name);
+    cg.setCurrentModuleByFunction(func.name);
     cg.current_function = llvm_func;
     cg.current_source_function_name = func.name;
     cg.current_codegen_function_name = mangled_name;
