@@ -51,6 +51,7 @@ pub const CodeGenerator = struct {
     current_line: usize,
     current_column: usize,
     current_token_text: ?[]const u8,
+    emitted_error: bool,
     enable_comptime_bf_opt: bool,
     template_substitutions: ?std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     function_overloads: std.HashMap([]const u8, std.ArrayList(structs.FunctionOverload), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
@@ -181,6 +182,7 @@ pub const CodeGenerator = struct {
             .current_line = 0,
             .current_column = 0,
             .current_token_text = null,
+            .emitted_error = false,
             .enable_comptime_bf_opt = false,
             .template_substitutions = null,
             .function_overloads = std.HashMap([]const u8, std.ArrayList(structs.FunctionOverload), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
@@ -252,6 +254,7 @@ pub const CodeGenerator = struct {
     }
 
     fn reportError(self: *CodeGenerator, message: []const u8, hint: ?[]const u8) void {
+        self.emitted_error = true;
         const file_path = self.module_manager.getCurrentModulePath();
         diagnostics.printDiagnostic(self.allocator, .{
             .file_path = file_path,
@@ -821,6 +824,7 @@ pub const CodeGenerator = struct {
     pub const getStructDecl = structs.getStructDecl;
 
     pub fn generateCode(self: *CodeGenerator, program: *ast.Node) errors.CodegenError!void {
+        self.emitted_error = false;
         switch (program.data) {
             .program => |prog| {
                 try self.registerBuiltinErrorGuard();
