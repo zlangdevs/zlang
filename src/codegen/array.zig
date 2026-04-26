@@ -435,6 +435,7 @@ pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayInde
         else
             c.LLVMBuildLoad2(self.builder, base_type, base_ptr, "load_ptr");
         if (!(std.mem.startsWith(u8, base_type_name, "ptr<") and std.mem.endsWith(u8, base_type_name, ">")) and pointer_element_type_name == null) {
+            self.reportErrorFmt("Cannot index value of type '{s}' as pointer", .{base_type_name}, "Expected pointer type before indexing");
             return errors.CodegenError.TypeMismatch;
         }
         const element_type_name = if (pointer_element_type_name) |n| n else base_type_name[4 .. base_type_name.len - 1];

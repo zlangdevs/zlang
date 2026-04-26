@@ -3026,10 +3026,35 @@ pub fn main() !u8 {
     }
 
     code_generator.generateCode(ast_root.getRoot()) catch |err| {
+        if (err == error.TypeMismatch and code_generator.emitted_error) {
+            return 1;
+        }
         var owned_error_msg: ?[]u8 = null;
         const error_msg = switch (err) {
             error.FunctionCreationFailed => "Failed to create function.",
-            error.TypeMismatch => "Type mismatch in code generation.",
+            error.TypeMismatch => blk: {
+                if (code_generator.current_line > 0) {
+                    const file_path = code_generator.module_manager.getCurrentModulePath();
+                    const diag_msg = if (code_generator.current_token_text) |tok|
+                        std.fmt.allocPrint(allocator, "Type mismatch near '{s}'", .{tok}) catch null
+                    else
+                        std.fmt.allocPrint(allocator, "Type mismatch in code generation", .{}) catch null;
+                    if (diag_msg) |msg| {
+                        defer allocator.free(msg);
+                        diagnostics.printDiagnostic(allocator, .{
+                            .file_path = file_path,
+                            .line = code_generator.current_line,
+                            .column = if (code_generator.current_column > 0) code_generator.current_column else 1,
+                            .message = msg,
+                            .severity = .Error,
+                            .hint = "Check operand and assignment types",
+                            .token_text = code_generator.current_token_text,
+                        });
+                        break :blk "Type mismatch in code generation.";
+                    }
+                }
+                break :blk "Type mismatch in code generation.";
+            },
             error.NullNotAllowedInNonPointerType => "Null can only be assigned to pointer types. Cannot assign null to non-pointer type.",
             error.UndefinedFunction => "Undefined function called.",
             error.UndefinedVariable => blk: {
