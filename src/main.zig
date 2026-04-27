@@ -431,6 +431,7 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
         std.debug.print("Error reading file {s}: {}\n", .{ file_path, err });
         return err;
     };
+    defer allocator.free(input);
 
     var preprocessed = preprocessor.preprocessWithFlagsAndDefines(arena, input, ctx.define_overrides.items) catch |err| {
         const msg = switch (err) {
@@ -1541,7 +1542,10 @@ pub fn read_file(file_name: []const u8) anyerror![]const u8 {
             return errors.ReadFileError.AccessDenied;
         };
         defer file.close();
-        const buffer = utils.alloc(u8, allocator, consts.MAX_BUFF_SIZE);
+        if (file_stat.size == 0) {
+            return utils.dupe(u8, allocator, "");
+        }
+        const buffer = utils.alloc(u8, allocator, @intCast(file_stat.size));
         const bytes_read = try file.readAll(buffer);
         return buffer[0..bytes_read];
     }
@@ -2443,6 +2447,7 @@ fn compileBrainfuck(ctx: *Context, alloc: std.mem.Allocator) !u8 {
         std.debug.print("Error reading file {s}: {}\n", .{ input_file, err });
         return 1;
     };
+    defer allocator.free(bf_code);
 
     var code_generator = codegen.CodeGenerator.init(alloc) catch |err| {
         const error_msg = switch (err) {
@@ -2803,6 +2808,7 @@ fn generateWrapperFromHeader(alloc: std.mem.Allocator, header_path: []const u8, 
     defer arena.deinit();
     const a = arena.allocator();
     const header_src = try read_file(header_path);
+    defer allocator.free(header_src);
     const cleaned = try stripCommentsAndPreproc(a, header_src);
     var stmts = try collectStatements(a, cleaned);
     defer stmts.deinit(a);
@@ -2967,6 +2973,7 @@ pub fn main() !u8 {
     if (ctx.stats) {
         for (ctx.input_files.items) |input_file| {
             const input = read_file(input_file) catch continue;
+            defer allocator.free(input);
             var line_count: usize = 0;
             var it = std.mem.splitScalar(u8, input, '\n');
             while (it.next()) |_| {
