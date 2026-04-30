@@ -18,14 +18,16 @@ const allocator = std.heap.page_allocator;
 const ModuleInfo = struct {
     name: []const u8,
     path: []const u8,
+    line_count: usize,
     ast: *ast.Node,
     dependencies: std.ArrayList([]const u8),
     linker_flags: std.ArrayList([]const u8),
 
-    pub fn init(alloc: std.mem.Allocator, name: []const u8, path: []const u8, ast_node: *ast.Node) ModuleInfo {
+    pub fn init(alloc: std.mem.Allocator, name: []const u8, path: []const u8, line_count: usize, ast_node: *ast.Node) ModuleInfo {
         return ModuleInfo{
             .name = utils.dupe(u8, alloc, name),
             .path = utils.dupe(u8, alloc, path),
+            .line_count = line_count,
             .ast = ast_node,
             .dependencies = std.ArrayList([]const u8){},
             .linker_flags = std.ArrayList([]const u8){},
@@ -43,6 +45,7 @@ const ModuleInfo = struct {
 const ModuleRegistration = struct {
     module_name: []const u8,
     module_path: []const u8,
+    line_count: usize,
     dependencies: std.ArrayList([]const u8),
 
     pub fn deinit(self: *ModuleRegistration, alloc: std.mem.Allocator) void {
@@ -426,6 +429,15 @@ fn parseErrorHint(message: []const u8) ?[]const u8 {
     return null;
 }
 
+fn countLinesInText(text: []const u8) usize {
+    if (text.len == 0) return 0;
+    var count: usize = 1;
+    for (text) |ch| {
+        if (ch == '\n') count += 1;
+    }
+    return count;
+}
+
 fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_alloc: std.mem.Allocator, ctx: *Context) !ModuleInfo {
     const input = read_file(file_path) catch |err| {
         std.debug.print("Error reading file {s}: {}\n", .{ file_path, err });
@@ -477,6 +489,7 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
         name
     else
         defaultModuleNameFromPath(file_path);
+    const line_count = countLinesInText(input);
 
     const ast_root = parser.parse(arena, parsed_header.text_for_parser) catch |err| {
         const parse_errors = parser.getParseErrors();
@@ -510,7 +523,7 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
         return err;
     };
     if (ast_root) |root| {
-        var module = ModuleInfo.init(backing_alloc, module_name, file_path, root);
+        var module = ModuleInfo.init(backing_alloc, module_name, file_path, line_count, root);
         collectUseStatements(root, &module.dependencies);
         for (preprocessed.flags.items) |flag| {
             try module.linker_flags.append(backing_alloc, utils.dupe(u8, backing_alloc, flag));
@@ -1487,6 +1500,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
         var module_registration = ModuleRegistration{
             .module_name = utils.dupe(u8, alloc, module.name),
             .module_path = utils.dupe(u8, alloc, module.path),
+            .line_count = module.line_count,
             .dependencies = std.ArrayList([]const u8){},
         };
         for (module.dependencies.items) |dep| {
@@ -2971,15 +2985,16 @@ pub fn main() !u8 {
     }
 
     if (ctx.stats) {
-        for (ctx.input_files.items) |input_file| {
-            const input = read_file(input_file) catch continue;
-            defer allocator.free(input);
-            var line_count: usize = 0;
-            var it = std.mem.splitScalar(u8, input, '\n');
-            while (it.next()) |_| {
-                line_count += 1;
+        if (ctx.module_registrations.items.len > 0) {
+            for (ctx.module_registrations.items) |entry| {
+                stats.lines_of_code += entry.line_count;
             }
-            stats.lines_of_code += line_count;
+        } else {
+            for (ctx.input_files.items) |input_file| {
+                const input = read_file(input_file) catch continue;
+                defer allocator.free(input);
+                stats.lines_of_code += countLinesInText(input);
+            }
         }
     }
 
@@ -3020,6 +3035,7 @@ pub fn main() !u8 {
         return 1;
     };
 
+    code_generator.optimize_enabled = ctx.optimize;
     defer code_generator.deinit();
 
     for (ctx.module_registrations.items) |entry| {

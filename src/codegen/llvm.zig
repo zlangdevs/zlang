@@ -52,6 +52,7 @@ pub const CodeGenerator = struct {
     current_column: usize,
     current_token_text: ?[]const u8,
     emitted_error: bool,
+    optimize_enabled: bool,
     enable_comptime_bf_opt: bool,
     template_substitutions: ?std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     function_overloads: std.HashMap([]const u8, std.ArrayList(structs.FunctionOverload), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
@@ -133,6 +134,21 @@ pub const CodeGenerator = struct {
         return std.mem.indexOf(u8, target, "-gnu.") != null;
     }
 
+    fn toolVersionHintFromPath(tool_path: []const u8) i16 {
+        const base = std.fs.path.basename(tool_path);
+        var i: usize = base.len;
+        while (i > 0 and base[i - 1] >= '0' and base[i - 1] <= '9') : (i -= 1) {}
+        if (i == base.len) return 0;
+        const digits = base[i..];
+        return std.fmt.parseInt(i16, digits, 10) catch 0;
+    }
+
+    fn sameParentDir(a: []const u8, b: []const u8) bool {
+        const da = std.fs.path.dirname(a) orelse "";
+        const db = std.fs.path.dirname(b) orelse "";
+        return std.mem.eql(u8, da, db);
+    }
+
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
         _ = c.LLVMInitializeNativeTarget();
         _ = c.LLVMInitializeNativeAsmPrinter();
@@ -183,6 +199,7 @@ pub const CodeGenerator = struct {
             .current_column = 0,
             .current_token_text = null,
             .emitted_error = false,
+            .optimize_enabled = false,
             .enable_comptime_bf_opt = false,
             .template_substitutions = null,
             .function_overloads = std.HashMap([]const u8, std.ArrayList(structs.FunctionOverload), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
@@ -772,6 +789,16 @@ pub const CodeGenerator = struct {
                 if (arr.elements.items.len == 1 and arr.elements.items[0].data == .number_literal and std.mem.eql(u8, arr.elements.items[0].data.number_literal.value, "0")) {
                     _ = c.LLVMBuildStore(self.builder, c.LLVMConstNull(var_info.type_ref), var_info.value);
                     return;
+                }
+            }
+
+            if (var_type_kind == c.LLVMStructTypeKind and as.value.data == .identifier) {
+                const src_name = as.value.data.identifier.name;
+                if (CodeGenerator.getVariable(self, src_name)) |src_var| {
+                    if (std.mem.eql(u8, src_var.type_name, var_info.type_name)) {
+                        try self.emitMemcpy(var_info.value, src_var.value, var_info.type_ref);
+                        return;
+                    }
                 }
             }
 
@@ -5561,17 +5588,28 @@ pub const CodeGenerator = struct {
         const zig_tool = if (arch.len != 0) try llvm_tools.getLLVMToolPath(arena_alloc, .zig) else null;
 
         if (timing) |t| {
+            var llc_major: i16 = 0;
             if (llc_tool) |tool| {
-                t.llc_version_major = @intCast((try llvm_tools.detectToolVersionMajor(arena_alloc, tool)) orelse 0);
+                llc_major = toolVersionHintFromPath(tool);
+                if (llc_major == 0) {
+                    llc_major = @intCast((try llvm_tools.detectToolVersionMajor(arena_alloc, tool)) orelse 0);
+                }
+                t.llc_version_major = llc_major;
             }
             if (opt_tool) |tool| {
-                t.opt_version_major = @intCast((try llvm_tools.detectToolVersionMajor(arena_alloc, tool)) orelse 0);
-            }
-            if (clang_tool) |tool| {
-                t.clang_version_major = @intCast((try llvm_tools.detectToolVersionMajor(arena_alloc, tool)) orelse 0);
+                var major = toolVersionHintFromPath(tool);
+                if (major == 0 and llc_tool != null and llc_major > 0 and sameParentDir(tool, llc_tool.?)) major = llc_major;
+                t.opt_version_major = major;
             }
             if (lld_tool) |tool| {
-                t.lld_version_major = @intCast((try llvm_tools.detectToolVersionMajor(arena_alloc, tool)) orelse 0);
+                var major = toolVersionHintFromPath(tool);
+                if (major == 0 and llc_tool != null and llc_major > 0 and sameParentDir(tool, llc_tool.?)) major = llc_major;
+                t.lld_version_major = major;
+            }
+            if (clang_tool) |tool| {
+                var major = toolVersionHintFromPath(tool);
+                if (major == 0 and llc_tool != null and llc_major > 0 and sameParentDir(tool, llc_tool.?)) major = llc_major;
+                t.clang_version_major = major;
             }
         }
 
