@@ -199,6 +199,20 @@ pub fn declareFunction(cg: *llvm.CodeGenerator, func: ast.Function) errors.Codeg
 
     const llvm_func = c.LLVMAddFunction(@ptrCast(cg.module), func_name_z.ptr, function_type);
 
+    if (!cg.optimize_enabled) {
+        const attr_fn_index: c_uint = ~@as(c_uint, 0);
+        const noinline_kind = c.LLVMGetEnumAttributeKindForName("noinline", 8);
+        if (noinline_kind != 0) {
+            const noinline_attr = c.LLVMCreateEnumAttribute(cg.context, noinline_kind, 0);
+            c.LLVMAddAttributeAtIndex(llvm_func, attr_fn_index, noinline_attr);
+        }
+        const optnone_kind = c.LLVMGetEnumAttributeKindForName("optnone", 7);
+        if (optnone_kind != 0) {
+            const optnone_attr = c.LLVMCreateEnumAttribute(cg.context, optnone_kind, 0);
+            c.LLVMAddAttributeAtIndex(llvm_func, attr_fn_index, optnone_attr);
+        }
+    }
+
     if (uses_sret) {
         const sret_attr = c.LLVMCreateTypeAttribute(cg.context, c.LLVMGetEnumAttributeKindForName("sret", 4), @ptrCast(return_type));
         c.LLVMAddAttributeAtIndex(llvm_func, 1, sret_attr);
@@ -1150,7 +1164,10 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
                 if (utils.isByValType(cg, tn)) {
                     processed_byval = true;
                     const struct_ty = try cg.getLLVMType(tn);
-                    if (call.args.items[arg_idx].data == .identifier) {
+                    const val_ty = c.LLVMTypeOf(val);
+                    if (c.LLVMGetTypeKind(val_ty) == c.LLVMPointerTypeKind and c.LLVMGetElementType(val_ty) == struct_ty) {
+                        final_arg = val;
+                    } else if (call.args.items[arg_idx].data == .identifier) {
                         const ident_name = call.args.items[arg_idx].data.identifier.name;
                         if (llvm.CodeGenerator.getVariable(cg, ident_name)) |var_info| {
                             final_arg = @ptrCast(var_info.value);
