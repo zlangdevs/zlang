@@ -1378,8 +1378,8 @@ pub const CodeGenerator = struct {
                                 else
                                     c.LLVMBuildSRem(self.builder, current_value, rhs_casted, "srem_compound");
                             },
-                            'A' => c.LLVMBuildAnd(self.builder, current_value, rhs_casted, "and_compound"),
-                            '$' => c.LLVMBuildOr(self.builder, current_value, rhs_casted, "or_compound"),
+                            'A', '&' => c.LLVMBuildAnd(self.builder, current_value, rhs_casted, "and_compound"),
+                            '$', '|' => c.LLVMBuildOr(self.builder, current_value, rhs_casted, "or_compound"),
                             '^' => c.LLVMBuildXor(self.builder, current_value, rhs_casted, "xor_compound"),
                             '<' => c.LLVMBuildShl(self.builder, current_value, rhs_casted, "shl_compound"),
                             '>' => c.LLVMBuildAShr(self.builder, current_value, rhs_casted, "ashr_compound"),
@@ -1388,89 +1388,11 @@ pub const CodeGenerator = struct {
                         _ = c.LLVMBuildStore(self.builder, new_value, var_info.value);
                     },
                     .array_index => |arr_idx| {
-                        var collected_indices = std.ArrayList(c.LLVMValueRef){};
-                        defer collected_indices.deinit(self.allocator);
-                        const base_node = try self.collectArrayIndices(arr_idx.array, &collected_indices);
-                        var index_value = try self.generateExpression(arr_idx.index);
-                        const array_name = try self.getBaseIdentifierName(base_node);
-                        defer self.allocator.free(array_name);
-                        const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
-
-                        if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
-                            if (c.LLVMTypeOf(index_value) != c.LLVMInt64TypeInContext(self.context)) {
-                                index_value = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
-                            }
-                            try collected_indices.append(self.allocator, index_value);
-                            const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_compound");
-                            const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                            const element_type = try self.getLLVMType(element_type_name);
-                            const idx = collected_indices.items[collected_indices.items.len - 1];
-                            var indices = [_]c.LLVMValueRef{idx};
-                            const element_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_index_compound");
-                            const current_val = c.LLVMBuildLoad2(self.builder, element_type, element_ptr, "load_elem");
-                            const expected_ty_name = self.getTypeNameFromLLVMType(element_type);
-                            const rhs_raw = try self.generateExpressionWithContext(cas.value, expected_ty_name);
-                            const rhs_val = try self.castWithRules(rhs_raw, element_type, cas.value);
-
-                            const is_float = std.mem.eql(u8, expected_ty_name, "f16") or
-                                std.mem.eql(u8, expected_ty_name, "f32") or
-                                std.mem.eql(u8, expected_ty_name, "f64");
-
-                            const new_value = switch (cas.op) {
-                                '+' => if (is_float)
-                                    c.LLVMBuildFAdd(self.builder, current_val, rhs_val, "fadd_ptr_compound")
-                                else
-                                    c.LLVMBuildAdd(self.builder, current_val, rhs_val, "add_ptr_compound"),
-                                '-' => if (is_float)
-                                    c.LLVMBuildFSub(self.builder, current_val, rhs_val, "fsub_ptr_compound")
-                                else
-                                    c.LLVMBuildSub(self.builder, current_val, rhs_val, "sub_ptr_compound"),
-                                '*' => if (is_float)
-                                    c.LLVMBuildFMul(self.builder, current_val, rhs_val, "fmul_ptr_compound")
-                                else
-                                    c.LLVMBuildMul(self.builder, current_val, rhs_val, "mul_ptr_compound"),
-                                '/' => if (is_float)
-                                    c.LLVMBuildFDiv(self.builder, current_val, rhs_val, "fdiv_ptr_compound")
-                                else
-                                    c.LLVMBuildSDiv(self.builder, current_val, rhs_val, "sdiv_ptr_compound"),
-                                '%' => if (is_float) blk: {
-                                    self.uses_float_modulo = true;
-                                    break :blk c.LLVMBuildFRem(self.builder, current_val, rhs_val, "frem_ptr_compound");
-                                } else blk: {
-                                    const is_unsigned = isUnsignedType(expected_ty_name);
-                                    break :blk if (is_unsigned)
-                                        c.LLVMBuildURem(self.builder, current_val, rhs_val, "urem_ptr_compound")
-                                    else
-                                        c.LLVMBuildSRem(self.builder, current_val, rhs_val, "srem_ptr_compound");
-                                },
-                                'A' => c.LLVMBuildAnd(self.builder, current_val, rhs_val, "and_ptr_compound"),
-                                '$' => c.LLVMBuildOr(self.builder, current_val, rhs_val, "or_ptr_compound"),
-                                '^' => c.LLVMBuildXor(self.builder, current_val, rhs_val, "xor_ptr_compound"),
-                                '<' => c.LLVMBuildShl(self.builder, current_val, rhs_val, "shl_ptr_compound"),
-                                '>' => c.LLVMBuildAShr(self.builder, current_val, rhs_val, "ashr_ptr_compound"),
-                                else => return errors.CodegenError.UnsupportedOperation,
-                            };
-                            _ = c.LLVMBuildStore(self.builder, new_value, element_ptr);
-                            return;
-                        }
-
-                        index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
-                        try collected_indices.append(self.allocator, index_value);
-                        var final_type = var_info.type_ref;
-                        for (0..collected_indices.items.len) |_| final_type = c.LLVMGetElementType(final_type);
-                        var all_indices = std.ArrayList(c.LLVMValueRef){};
-                        defer all_indices.deinit(self.allocator);
-                        try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
-                        var i = collected_indices.items.len;
-                        while (i > 0) {
-                            i -= 1;
-                            try all_indices.append(self.allocator, collected_indices.items[i]);
-                        }
-                        const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
-                        const current_val = c.LLVMBuildLoad2(self.builder, final_type, element_ptr, "load_elem");
-                        const expected_ty_name = self.getTypeNameFromLLVMType(final_type);
+                        const access = try array.getArrayElementPtrAndType(self, arr_idx);
+                        const current_val = c.LLVMBuildLoad2(self.builder, access.element_type, access.ptr, "load_elem");
+                        const expected_ty_name = access.element_type_name;
                         const rhs_raw = try self.generateExpressionWithContext(cas.value, expected_ty_name);
-                        const rhs_val = try self.castWithRules(rhs_raw, final_type, cas.value);
+                        const rhs_val = try self.castWithRules(rhs_raw, access.element_type, cas.value);
 
                         const is_float = std.mem.eql(u8, expected_ty_name, "f16") or
                             std.mem.eql(u8, expected_ty_name, "f32") or
@@ -1503,14 +1425,14 @@ pub const CodeGenerator = struct {
                                 else
                                     c.LLVMBuildSRem(self.builder, current_val, rhs_val, "srem_array_compound");
                             },
-                            'A' => c.LLVMBuildAnd(self.builder, current_val, rhs_val, "and_array_compound"),
-                            '$' => c.LLVMBuildOr(self.builder, current_val, rhs_val, "or_array_compound"),
+                            'A', '&' => c.LLVMBuildAnd(self.builder, current_val, rhs_val, "and_array_compound"),
+                            '$', '|' => c.LLVMBuildOr(self.builder, current_val, rhs_val, "or_array_compound"),
                             '^' => c.LLVMBuildXor(self.builder, current_val, rhs_val, "xor_array_compound"),
                             '<' => c.LLVMBuildShl(self.builder, current_val, rhs_val, "shl_array_compound"),
                             '>' => c.LLVMBuildAShr(self.builder, current_val, rhs_val, "ashr_array_compound"),
                             else => return errors.CodegenError.UnsupportedOperation,
                         };
-                        _ = c.LLVMBuildStore(self.builder, new_value, element_ptr);
+                        _ = c.LLVMBuildStore(self.builder, new_value, access.ptr);
                     },
                     .qualified_identifier => |qident| {
                         const base_name = try self.getBaseIdentifierName(cas.target);
@@ -1560,8 +1482,8 @@ pub const CodeGenerator = struct {
                                 else
                                     c.LLVMBuildSRem(self.builder, current_value, rhs_casted, "srem_field_compound");
                             },
-                            'A' => c.LLVMBuildAnd(self.builder, current_value, rhs_casted, "and_field_compound"),
-                            '$' => c.LLVMBuildOr(self.builder, current_value, rhs_casted, "or_field_compound"),
+                            'A', '&' => c.LLVMBuildAnd(self.builder, current_value, rhs_casted, "and_field_compound"),
+                            '$', '|' => c.LLVMBuildOr(self.builder, current_value, rhs_casted, "or_field_compound"),
                             '^' => c.LLVMBuildXor(self.builder, current_value, rhs_casted, "xor_field_compound"),
                             '<' => c.LLVMBuildShl(self.builder, current_value, rhs_casted, "shl_field_compound"),
                             '>' => c.LLVMBuildAShr(self.builder, current_value, rhs_casted, "ashr_field_compound"),
@@ -4177,6 +4099,36 @@ pub const CodeGenerator = struct {
         return t1;
     }
 
+    fn resolveStructTypeName(self: *CodeGenerator, struct_type_name: []const u8) ?[]const u8 {
+        if (self.struct_declarations.get(struct_type_name) != null) {
+            return struct_type_name;
+        }
+
+        var it = self.struct_declarations.iterator();
+        while (it.next()) |entry| {
+            const candidate = entry.key_ptr.*;
+            if (std.mem.endsWith(u8, candidate, struct_type_name)) {
+                if (candidate.len == struct_type_name.len) {
+                    return candidate;
+                }
+                const sep_idx = candidate.len - struct_type_name.len - 1;
+                if (candidate[sep_idx] == '.') {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    fn getStructFieldTypeName(self: *CodeGenerator, struct_type_name: []const u8, field_name: []const u8) ?[]const u8 {
+        const resolved_name = self.resolveStructTypeName(struct_type_name) orelse return null;
+        const struct_decl = self.struct_declarations.get(resolved_name) orelse return null;
+        const field_map = self.struct_fields.get(resolved_name) orelse return null;
+        const field_index = field_map.get(field_name) orelse return null;
+        return struct_decl.fields.items[field_index].type_name;
+    }
+
     pub fn inferType(self: *CodeGenerator, node: *ast.Node) errors.CodegenError![]const u8 {
         switch (node.data) {
             .identifier => |ident| {
@@ -4210,6 +4162,23 @@ pub const CodeGenerator = struct {
                     return rhs_type;
                 }
                 return self.mergeTypes(lhs_type, rhs_type);
+            },
+            .qualified_identifier => |qual_id| {
+                const base_type = try self.inferType(qual_id.base);
+                var struct_type_name = base_type;
+                if (std.mem.startsWith(u8, struct_type_name, "ptr<") and std.mem.endsWith(u8, struct_type_name, ">")) {
+                    struct_type_name = struct_type_name[4 .. struct_type_name.len - 1];
+                }
+
+                if (self.getStructFieldTypeName(struct_type_name, qual_id.field)) |field_type| {
+                    return field_type;
+                }
+
+                if (self.getQualifiedFieldPtrAndType(node)) |pair| {
+                    return self.getTypeNameFromLLVMType(pair.ty);
+                } else |_| {}
+
+                return "void";
             },
             .function_call => |call| {
                 if (self.function_return_types.get(call.name)) |ret_type| {
@@ -5240,7 +5209,13 @@ pub const CodeGenerator = struct {
         }
 
         const lhs_type_name_inferred = try self.inferType(bin_op.lhs);
-        const rhs_value = try self.generateExpressionWithContext(bin_op.rhs, lhs_type_name_inferred);
+        const has_concrete_lhs_context = !std.mem.eql(u8, lhs_type_name_inferred, "void") and
+            !std.mem.eql(u8, lhs_type_name_inferred, "ptr") and
+            !std.mem.eql(u8, lhs_type_name_inferred, "unknown");
+        const rhs_value = if (has_concrete_lhs_context)
+            try self.generateExpressionWithContext(bin_op.rhs, lhs_type_name_inferred)
+        else
+            try self.generateExpression(bin_op.rhs);
         const rhs_type_name_inferred = try self.inferType(bin_op.rhs);
 
         const rhs_type = c.LLVMTypeOf(rhs_value);
@@ -5539,13 +5514,25 @@ pub const CodeGenerator = struct {
             var opt_args_list = std.ArrayList([]const u8){};
             defer opt_args_list.deinit(self.allocator);
 
-            try opt_args_list.appendSlice(self.allocator, &[_][]const u8{
-                "opt",
-                "-O3",
-                ir_file,
-                "-o",
-                ir_file,
-            });
+            const use_fast_pipeline = self.shouldUseFastOptimizePipeline();
+
+            if (use_fast_pipeline) {
+                try opt_args_list.appendSlice(self.allocator, &[_][]const u8{
+                    "opt",
+                    "-passes=sroa,mem2reg,instcombine,simplifycfg,gvn,dse,instcombine,simplifycfg",
+                    ir_file,
+                    "-o",
+                    ir_file,
+                });
+            } else {
+                try opt_args_list.appendSlice(self.allocator, &[_][]const u8{
+                    "opt",
+                    "-O3",
+                    ir_file,
+                    "-o",
+                    ir_file,
+                });
+            }
 
             var opt_child_process = std.process.Child.init(opt_args_list.items, self.allocator);
             opt_child_process.stdout_behavior = .Pipe;
@@ -5559,6 +5546,27 @@ pub const CodeGenerator = struct {
         }
 
         return ir_file;
+    }
+
+    fn shouldUseFastOptimizePipeline(self: *CodeGenerator) bool {
+        var defined_functions: usize = 0;
+        var instruction_count: usize = 0;
+
+        var func = c.LLVMGetFirstFunction(self.module);
+        while (func != null) : (func = c.LLVMGetNextFunction(func)) {
+            var bb = c.LLVMGetFirstBasicBlock(func);
+            if (bb == null) continue;
+
+            defined_functions += 1;
+            while (bb != null) : (bb = c.LLVMGetNextBasicBlock(bb)) {
+                var inst = c.LLVMGetFirstInstruction(bb);
+                while (inst != null) : (inst = c.LLVMGetNextInstruction(inst)) {
+                    instruction_count += 1;
+                }
+            }
+        }
+
+        return defined_functions >= 700 or instruction_count >= 90000;
     }
 
     pub fn compileToExecutable(self: *CodeGenerator, output: []const u8, arch: []const u8, link_objects: []const []const u8, keep_ll: bool, optimize: bool, extra_flags: []const []const u8, timing: ?*BackendTiming) !void {
@@ -5638,13 +5646,24 @@ pub const CodeGenerator = struct {
                 const opt_output_file = try std.fmt.allocPrint(arena_alloc, "{s}.opt{s}", .{ output, opt_ext });
                 optimized_ir_file = opt_output_file;
                 var opt_args_list = std.ArrayList([]const u8){};
-                try opt_args_list.appendSlice(arena_alloc, &[_][]const u8{
-                    opt_tool.?,
-                    "-O3",
-                    ir_file,
-                    "-o",
-                    opt_output_file,
-                });
+
+                if (self.shouldUseFastOptimizePipeline()) {
+                    try opt_args_list.appendSlice(arena_alloc, &[_][]const u8{
+                        opt_tool.?,
+                        "-passes=sroa,mem2reg,instcombine,simplifycfg,gvn,dse,instcombine,simplifycfg",
+                        ir_file,
+                        "-o",
+                        opt_output_file,
+                    });
+                } else {
+                    try opt_args_list.appendSlice(arena_alloc, &[_][]const u8{
+                        opt_tool.?,
+                        "-O3",
+                        ir_file,
+                        "-o",
+                        opt_output_file,
+                    });
+                }
 
                 var opt_child_process = std.process.Child.init(opt_args_list.items, arena_alloc);
                 opt_child_process.stdout_behavior = .Pipe;

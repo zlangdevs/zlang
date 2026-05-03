@@ -3087,7 +3087,29 @@ pub fn main() !u8 {
                 }
                 break :blk "Undefined variable used.";
             },
-            error.UnsupportedOperation => "Unsupported operator used",
+            error.UnsupportedOperation => blk: {
+                if (code_generator.current_line > 0) {
+                    const file_path = code_generator.module_manager.getCurrentModulePath();
+                    const diag_msg = if (code_generator.current_token_text) |tok|
+                        std.fmt.allocPrint(allocator, "Unsupported operator near '{s}'", .{tok}) catch null
+                    else
+                        std.fmt.allocPrint(allocator, "Unsupported operator used", .{}) catch null;
+                    if (diag_msg) |msg| {
+                        defer allocator.free(msg);
+                        diagnostics.printDiagnostic(allocator, .{
+                            .file_path = file_path,
+                            .line = code_generator.current_line,
+                            .column = if (code_generator.current_column > 0) code_generator.current_column else 1,
+                            .message = msg,
+                            .severity = .Error,
+                            .hint = "Operator is not supported for these operand types",
+                            .token_text = code_generator.current_token_text,
+                        });
+                        break :blk "Unsupported operator used";
+                    }
+                }
+                break :blk "Unsupported operator used";
+            },
             error.OutOfMemory => "Out of memory during code generation.",
             error.RedeclaredVariable => "Variable reinitialization",
             else => "Unknown code generation error.",
