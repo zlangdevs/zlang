@@ -450,7 +450,51 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
             }
         }
     }
+
+    maybeMarkFunctionNoInlineForOptimizer(cg, llvm_func);
     cg.current_codegen_function_name = null;
+}
+
+fn maybeMarkFunctionNoInlineForOptimizer(cg: *llvm.CodeGenerator, llvm_func: c.LLVMValueRef) void {
+    if (!cg.optimize_enabled) return;
+
+    var instruction_count: usize = 0;
+    var has_large_stack_allocation = false;
+
+    var bb = c.LLVMGetFirstBasicBlock(llvm_func);
+    while (bb != null) : (bb = c.LLVMGetNextBasicBlock(bb)) {
+        var inst = c.LLVMGetFirstInstruction(bb);
+        while (inst != null) : (inst = c.LLVMGetNextInstruction(inst)) {
+            instruction_count += 1;
+            if (!has_large_stack_allocation and c.LLVMGetInstructionOpcode(inst) == c.LLVMAlloca) {
+                const allocated_type = c.LLVMGetAllocatedType(inst);
+                if (allocated_type != null) {
+                    const type_size = c.LLVMABISizeOfType(c.LLVMGetModuleDataLayout(cg.module), allocated_type);
+                    if (type_size >= 32768) {
+                        has_large_stack_allocation = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if (!has_large_stack_allocation and instruction_count < 1200) return;
+
+    const attr_fn_index: c_uint = ~@as(c_uint, 0);
+
+    const noinline_kind = c.LLVMGetEnumAttributeKindForName("noinline", 8);
+    if (noinline_kind != 0) {
+        const noinline_attr = c.LLVMCreateEnumAttribute(cg.context, noinline_kind, 0);
+        c.LLVMAddAttributeAtIndex(llvm_func, attr_fn_index, noinline_attr);
+    }
+
+    if (has_large_stack_allocation) {
+        const optnone_kind = c.LLVMGetEnumAttributeKindForName("optnone", 7);
+        if (optnone_kind != 0) {
+            const optnone_attr = c.LLVMCreateEnumAttribute(cg.context, optnone_kind, 0);
+            c.LLVMAddAttributeAtIndex(llvm_func, attr_fn_index, optnone_attr);
+        }
+    }
 }
 
 fn hasValidControlFlow(cg: *llvm.CodeGenerator, func: ast.Function) errors.CodegenError!bool {
@@ -714,29 +758,27 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
     var arg_types = std.ArrayList(c.LLVMTypeRef){};
     defer arg_types.deinit(cg.allocator);
 
-    var needs_eager_context = false;
-    for (call.args.items) |arg| {
-        if (arg.data == .array_initializer or arg.data == .simd_initializer) {
-            needs_eager_context = true;
-            break;
-        }
-    }
-
     var eager_param_type_names = std.ArrayList([]const u8){};
     defer eager_param_type_names.deinit(cg.allocator);
-    if (needs_eager_context) {
-        if (cg.c_function_param_signatures.get(call.name)) |sig| {
-            var it = std.mem.tokenizeAny(u8, sig, ",");
-            while (it.next()) |tn_raw| {
-                try eager_param_type_names.append(cg.allocator, std.mem.trim(u8, tn_raw, " \t"));
+    if (cg.c_function_param_signatures.get(call.name)) |sig| {
+        var it = std.mem.tokenizeAny(u8, sig, ",");
+        while (it.next()) |tn_raw| {
+            try eager_param_type_names.append(cg.allocator, std.mem.trim(u8, tn_raw, " \t"));
+        }
+    } else if (!call.is_libc) {
+        if (cg.function_overloads.get(call.name)) |overloads| {
+            if (overloads.items.len == 1 and !overloads.items[0].is_template) {
+                for (overloads.items[0].func_node.parameters.items) |p| {
+                    if (utils.isVarArgType(p.type_name)) break;
+                    try eager_param_type_names.append(cg.allocator, p.type_name);
+                }
             }
         }
     }
 
     for (call.args.items, 0..) |arg, i| {
         const val = cg.generateExpression(arg) catch |err| blk: {
-            if (err != errors.CodegenError.TypeMismatch) return err;
-            if (arg.data != .array_initializer and arg.data != .simd_initializer) return err;
+            if (err != errors.CodegenError.TypeMismatch and err != errors.CodegenError.UnsupportedOperation) return err;
             if (i >= eager_param_type_names.items.len) return err;
             const expected_name = eager_param_type_names.items[i];
             break :blk try cg.generateExpressionWithContext(arg, expected_name);
