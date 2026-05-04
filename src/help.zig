@@ -72,6 +72,7 @@ pub fn printHelp() void {
         \\  {s}-verbose{s}     Enable verbose output
         \\  {s}-stats{s}       Show compilation statistics
         \\  {s}-optimize{s}    Enable optimizations
+        \\  {s}-verify-ir{s}   Verify generated LLVM IR even with -optimize
         \\  {s}-c{s}           Compile to object file only
         \\  {s}-DNAME=VALUE{s} Override #define value in source
         \\  {s}-l<lib>{s}      Link with library
@@ -79,6 +80,7 @@ pub fn printHelp() void {
         \\
     , .{
         bold,   reset,
+        yellow, reset,
         yellow, reset,
         yellow, reset,
         yellow, reset,

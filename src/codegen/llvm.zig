@@ -5589,11 +5589,14 @@ pub const CodeGenerator = struct {
         const clang_target = try normalizeClangTarget(arena_alloc, arch);
         const llc_triple = try normalizeLlcTriple(arena_alloc, clang_target);
 
-        const opt_tool = if (optimize) try llvm_tools.getLLVMToolPath(arena_alloc, .opt) else null;
-        const llc_tool = try llvm_tools.getLLVMToolPath(arena_alloc, .llc);
-        const clang_tool = try llvm_tools.getLLVMToolPath(arena_alloc, .clang);
-        const lld_tool = try llvm_tools.getLLVMToolPath(arena_alloc, .ld_lld);
-        const zig_tool = if (arch.len != 0) try llvm_tools.getLLVMToolPath(arena_alloc, .zig) else null;
+        var tool_cache = llvm_tools.ToolCache.init(arena_alloc);
+        defer tool_cache.deinit();
+
+        const opt_tool = if (optimize) try tool_cache.get(.opt) else null;
+        const llc_tool = try tool_cache.get(.llc);
+        const lld_tool = try tool_cache.get(.ld_lld);
+        var clang_tool: ?[]const u8 = null;
+        const zig_tool = if (arch.len != 0) try tool_cache.get(.zig) else null;
 
         if (timing) |t| {
             var llc_major: i16 = 0;
@@ -5614,6 +5617,7 @@ pub const CodeGenerator = struct {
                 if (major == 0 and llc_tool != null and llc_major > 0 and sameParentDir(tool, llc_tool.?)) major = llc_major;
                 t.lld_version_major = major;
             }
+            clang_tool = try tool_cache.get(.clang);
             if (clang_tool) |tool| {
                 var major = toolVersionHintFromPath(tool);
                 if (major == 0 and llc_tool != null and llc_major > 0 and sameParentDir(tool, llc_tool.?)) major = llc_major;
@@ -5800,6 +5804,9 @@ pub const CodeGenerator = struct {
 
         if (!lld_success) {
             const link_start = std.time.nanoTimestamp();
+            if (clang_tool == null) {
+                clang_tool = try tool_cache.get(.clang);
+            }
             if (clang_tool == null) {
                 std.debug.print("Error: clang not found for linking. Please install clang.\n", .{});
                 std.debug.print("Tried: clang-21/clang21, clang-20/clang20, ..., clang (plus common absolute paths and ZLANG_LLVM_BIN)\n", .{});

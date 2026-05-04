@@ -25,6 +25,7 @@ CLEAR_BEFORE_SUMMARY="${CLEAR_BEFORE_SUMMARY:-1}"
 USE_APPIMAGE="${USE_APPIMAGE:-0}"
 APPIMAGE_PATH="${ZLANG_APPIMAGE_PATH:-./zig-out/zlang-$(uname -m).AppImage}"
 APPIMAGE_FORCE_EXTRACT_AND_RUN="${APPIMAGE_FORCE_EXTRACT_AND_RUN:-1}"
+ZLANG_TEST_JOBS="${ZLANG_TEST_JOBS:-$(nproc 2>/dev/null || printf '1')}"
 TEST_SELECTOR=""
 STDLIB_TOTAL_TESTS=0
 STDLIB_PASSED_TESTS=0
@@ -46,7 +47,7 @@ compiler_label() {
 run_compiler() {
     local test_file="$1"
     shift
-    local forced_output="$(pwd)/output"
+    local forced_output="${ZLANG_TEST_OUTPUT:-$(pwd)/output}"
     if [ "$USE_APPIMAGE" = "1" ]; then
         if [ "$APPIMAGE_FORCE_EXTRACT_AND_RUN" = "1" ]; then
             APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE_PATH" "$test_file" -o "$forced_output" "$@"
@@ -58,6 +59,10 @@ run_compiler() {
     else
         zig build run -- "$test_file" -o "$forced_output" "$@"
     fi
+}
+
+current_output_bin() {
+    printf "%s" "${ZLANG_TEST_OUTPUT:-$(pwd)/output}"
 }
 
 collect_sidecar_args() {
@@ -176,10 +181,12 @@ test_single_file() {
 
     echo "Compiling with $(compiler_label):"
     if run_compiler "$test_file" "${compile_args[@]}"; then
+        local expected_output
+        expected_output="$(current_output_bin)"
         if [ -f "a.out" ]; then
             BINARY="a.out"
-        elif [ -f "output" ]; then
-            BINARY="output"
+        elif [ -f "$expected_output" ]; then
+            BINARY="$expected_output"
         else
             echo "❌ $filename - FAILED (Binary not found)"
             return 1
@@ -191,9 +198,9 @@ test_single_file() {
             return 0
         else
             echo ""
-            echo "Running ./$BINARY:"
+            echo "Running $BINARY:"
             chmod +x "$BINARY"
-            OUTPUT=$("./$BINARY" 2>&1)
+            OUTPUT=$("$BINARY" 2>&1)
             EXIT_CODE=$?
             
             echo "$OUTPUT"
@@ -256,7 +263,7 @@ test_compile_fail_file() {
     output=$(run_compiler "$test_file" "${SIDE_ARGS[@]}" 2>&1)
     local compile_exit=$?
 
-    rm -f "output" "a.out"
+    rm -f "$(current_output_bin)" "output" "a.out"
 
     if [ $compile_exit -eq 0 ]; then
         echo "❌ $filename - FAILED (Compilation unexpectedly succeeded)"
@@ -335,7 +342,7 @@ test_warning_file() {
     output=$(run_compiler "$test_file" "${compile_args[@]}" 2>&1)
     local compile_exit=$?
 
-    rm -f "output" "a.out"
+    rm -f "$(current_output_bin)" "output" "a.out"
 
     if [ $compile_exit -ne 0 ]; then
         echo "❌ $filename - FAILED (Compilation failed, warning test expects success)"
@@ -390,6 +397,132 @@ test_warning_file() {
     return 1
 }
 
+run_parallel_suite() {
+    local jobs_count="$ZLANG_TEST_JOBS"
+    if ! [[ "$jobs_count" =~ ^[0-9]+$ ]] || [ "$jobs_count" -le 1 ]; then
+        return 1
+    fi
+
+    local tmpdir
+    tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/zlang-tests.XXXXXX") || return 1
+
+    local -a files=()
+    local -a kinds=()
+    local test_file
+
+    for test_file in "$TEST_DIR"/*.zl; do
+        [ -f "$test_file" ] || continue
+        files+=("$test_file")
+        kinds+=("normal")
+    done
+
+    if [ -d "$STDLIB_TEST_DIR" ]; then
+        for test_file in "$STDLIB_TEST_DIR"/*.zl; do
+            [ -f "$test_file" ] || continue
+            files+=("$test_file")
+            kinds+=("stdlib")
+        done
+    fi
+
+    if [ -d "$COMPILE_FAIL_DIR" ]; then
+        for test_file in "$COMPILE_FAIL_DIR"/*.zl; do
+            [ -f "$test_file" ] || continue
+            files+=("$test_file")
+            kinds+=("compile_fail")
+        done
+    fi
+
+    if [ -d "$WARNING_DIR" ]; then
+        for test_file in "$WARNING_DIR"/*.zl; do
+            [ -f "$test_file" ] || continue
+            files+=("$test_file")
+            kinds+=("warning")
+        done
+    fi
+
+    TOTAL_TESTS=${#files[@]}
+    for kind in "${kinds[@]}"; do
+        if [ "$kind" = "stdlib" ]; then
+            STDLIB_TOTAL_TESTS=$((STDLIB_TOTAL_TESTS + 1))
+        fi
+    done
+
+    echo "Running tests in parallel ($jobs_count jobs)"
+    echo "====================================================="
+
+    local i
+    for i in "${!files[@]}"; do
+        (
+            local out="$tmpdir/output_$i"
+            ZLANG_TEST_OUTPUT="$out" CLEAR_EACH_TEST=0 CLEAR_BEFORE_SUMMARY=0 "$0" "${files[$i]}" > "$tmpdir/log_$i" 2>&1
+            local status=$?
+            rm -f "$out" "$out.o" "$out.bc" "$out.ll" "$out.opt.bc" "$out.opt.ll" "$out.opt.o"
+            printf "%s" "$status" > "$tmpdir/status_$i"
+        ) &
+
+        while [ "$(jobs -pr | wc -l)" -ge "$jobs_count" ]; do
+            wait -n
+        done
+    done
+
+    wait
+
+    for i in "${!files[@]}"; do
+        local filename
+        filename=$(basename "${files[$i]}")
+        local kind="${kinds[$i]}"
+        local status=1
+        if [ -f "$tmpdir/status_$i" ]; then
+            status=$(<"$tmpdir/status_$i")
+        fi
+
+        cat "$tmpdir/log_$i"
+
+        if [ "$status" -eq 0 ]; then
+            PASSED_TESTS=$((PASSED_TESTS + 1))
+            if [ "$kind" = "stdlib" ]; then
+                STDLIB_PASSED_TESTS=$((STDLIB_PASSED_TESTS + 1))
+            else
+                PASSED_FILES+=("$filename")
+            fi
+            continue
+        fi
+
+        case "$kind" in
+            normal)
+                if grep -q "Compilation error" "$tmpdir/log_$i"; then
+                    FAILED_COMPILE=$((FAILED_COMPILE + 1))
+                    FAILED_COMPILE_FILES+=("$filename")
+                else
+                    FAILED_EXPECTED=$((FAILED_EXPECTED + 1))
+                    FAILED_EXPECTED_FILES+=("$filename")
+                fi
+                ;;
+            stdlib)
+                FAILED_STDLIB=$((FAILED_STDLIB + 1))
+                if grep -q "Compilation error" "$tmpdir/log_$i"; then
+                    FAILED_COMPILE=$((FAILED_COMPILE + 1))
+                    FAILED_STDLIB_FILES+=("$filename (COMPILE)")
+                else
+                    FAILED_EXPECTED=$((FAILED_EXPECTED + 1))
+                    FAILED_STDLIB_FILES+=("$filename (EXPECTED)")
+                fi
+                ;;
+            compile_fail)
+                FAILED_COMPILE_FAIL=$((FAILED_COMPILE_FAIL + 1))
+                FAILED_COMPILE_FAIL_FILES+=("$filename")
+                ;;
+            warning)
+                FAILED_WARNING=$((FAILED_WARNING + 1))
+                FAILED_WARNING_FILES+=("$filename")
+                ;;
+        esac
+    done
+
+    rm -rf "$tmpdir"
+    return 0
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --appimage)
@@ -404,17 +537,27 @@ while [ $# -gt 0 ]; do
             USE_APPIMAGE=1
             APPIMAGE_PATH="$1"
             ;;
+        --jobs|-j)
+            shift
+            if [ $# -eq 0 ]; then
+                echo "Error: --jobs requires a value"
+                exit 1
+            fi
+            ZLANG_TEST_JOBS="$1"
+            ;;
         --help|-h)
             echo "Usage: $0 [options] [test-file-or-pattern]"
             echo ""
             echo "Options:"
             echo "  --appimage                Run tests with AppImage compiler"
             echo "  --appimage-path <path>    Override AppImage path"
+            echo "  -j, --jobs <count>        Run full suite in parallel (default: nproc)"
             echo ""
             echo "Environment variables:"
             echo "  USE_APPIMAGE=1                    Same as --appimage"
             echo "  ZLANG_APPIMAGE_PATH=<path>        Same as --appimage-path"
             echo "  APPIMAGE_FORCE_EXTRACT_AND_RUN=1  Force no-FUSE mode (default: 1)"
+            echo "  ZLANG_TEST_JOBS=<count>           Parallel jobs for full suite"
             exit 0
             ;;
         --)
@@ -502,6 +645,64 @@ else
 fi
 
 echo ""
+if run_parallel_suite; then
+    if [ "$CLEAR_BEFORE_SUMMARY" = "1" ] && [ -t 1 ]; then
+        clear
+    fi
+    echo "====================================================="
+    echo "TEST SUMMARY"
+    echo "====================================================="
+    echo "Total tests: $TOTAL_TESTS"
+    echo "Passed: $PASSED_TESTS"
+    echo "Failed compilation: $FAILED_COMPILE"
+    echo "Failed expected values: $FAILED_EXPECTED"
+    echo "Failed compile-fail checks: $FAILED_COMPILE_FAIL"
+    echo "Failed warning checks: $FAILED_WARNING"
+    echo "Failed stdlib tests: $FAILED_STDLIB"
+    echo ""
+    echo "┌──────────────────────────────┬──────────────┐"
+    echo "│           FILENAME           │   STATUS     │"
+    echo "├──────────────────────────────┼──────────────┤"
+
+    if [ $STDLIB_TOTAL_TESTS -gt 0 ]; then
+        if [ $FAILED_STDLIB -eq 0 ]; then
+            printf "│ %-28s │ \033[32mPASSED\033[0m       │\n" "stdlib_tests"
+        else
+            printf "│ %-28s │ \033[31mSTDLIB\033[0m       │\n" "stdlib_tests"
+        fi
+    fi
+
+    for file in "${PASSED_FILES[@]}"; do
+        printf "│ %-28s │ \033[32mPASSED\033[0m       │\n" "$(format_table_name "$file")"
+    done
+    for file in "${FAILED_COMPILE_FILES[@]}"; do
+        printf "│ %-28s │ \033[31mCOMPILE\033[0m      │\n" "$(format_table_name "$file")"
+    done
+    for file in "${FAILED_EXPECTED_FILES[@]}"; do
+        printf "│ %-28s │ \033[31mEXPECTED\033[0m     │\n" "$(format_table_name "$file")"
+    done
+    for file in "${FAILED_COMPILE_FAIL_FILES[@]}"; do
+        printf "│ %-28s │ \033[31mCFAIL\033[0m        │\n" "$(format_table_name "$file")"
+    done
+    for file in "${FAILED_WARNING_FILES[@]}"; do
+        printf "│ %-28s │ \033[31mWARNING\033[0m      │\n" "$(format_table_name "$file")"
+    done
+
+    echo "├──────────────────────────────┼──────────────┤"
+    printf "│ TOTAL: %-21d │ \033[32m%3d\033[0m \033[31m%3d\033[0m      │\n" \
+       $TOTAL_TESTS $PASSED_TESTS $((FAILED_COMPILE + FAILED_EXPECTED + FAILED_COMPILE_FAIL + FAILED_WARNING))
+    echo "└──────────────────────────────┴──────────────┘"
+    echo ""
+
+    if [ $FAILED_COMPILE -eq 0 ] && [ $FAILED_EXPECTED -eq 0 ] && [ $FAILED_COMPILE_FAIL -eq 0 ] && [ $FAILED_WARNING -eq 0 ]; then
+        echo "🎉 All tests passed!"
+        exit 0
+    else
+        echo "❌ Some tests failed."
+        exit 1
+    fi
+fi
+
 echo "Running tests"
 echo "====================================================="
 
@@ -533,10 +734,11 @@ for test_file in "$TEST_DIR"/*.zl; do
     fi
 
     if run_compiler "$test_file" "${compile_args[@]}" 2>/dev/null; then
+        expected_output="$(current_output_bin)"
         if [ -f "a.out" ]; then
             BINARY="a.out"
-        elif [ -f "output" ]; then
-            BINARY="output"
+        elif [ -f "$expected_output" ]; then
+            BINARY="$expected_output"
         else
             echo "❌ $filename - FAILED (Binary not found)"
             FAILED_COMPILE_FILES+=("$filename")
@@ -556,7 +758,7 @@ for test_file in "$TEST_DIR"/*.zl; do
             rm -f "$BINARY"
         else
             chmod +x "$BINARY"
-            OUTPUT=$("./$BINARY" 2>&1)
+            OUTPUT=$("$BINARY" 2>&1)
             EXIT_CODE=$?
             EXPECTED_ERRORS=0
             
@@ -638,10 +840,11 @@ if [ -d "$STDLIB_TEST_DIR" ]; then
         fi
 
         if run_compiler "$test_file" "${compile_args[@]}" 2>/dev/null; then
+            expected_output="$(current_output_bin)"
             if [ -f "a.out" ]; then
                 BINARY="a.out"
-            elif [ -f "output" ]; then
-                BINARY="output"
+            elif [ -f "$expected_output" ]; then
+                BINARY="$expected_output"
             else
                 echo "❌ stdlib/$filename - FAILED (Binary not found)"
                 FAILED_COMPILE=$((FAILED_COMPILE + 1))
@@ -657,7 +860,7 @@ if [ -d "$STDLIB_TEST_DIR" ]; then
                 rm -f "$BINARY"
             else
                 chmod +x "$BINARY"
-                OUTPUT=$("./$BINARY" 2>&1)
+                OUTPUT=$("$BINARY" 2>&1)
                 EXIT_CODE=$?
                 EXPECTED_ERRORS=0
 

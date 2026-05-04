@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const utils = @import("codegen/utils.zig");
 
 pub const LLVMTool = enum {
@@ -49,51 +50,48 @@ pub fn findLLVMTool(allocator: std.mem.Allocator, tool: LLVMTool) !?ToolPath {
         }
     } else |_| {}
 
-    const version_suffixes = [_][]const u8{
-        "-21", "21",
-        "-20", "20",
-        "-19", "19",
-        "-18", "18",
-        "-17", "17",
-        "-16", "16",
-        "-15", "15",
-        "-14", "14",
-        "",
-    };
-    for (version_suffixes) |suffix| {
-        const tool_name = if (suffix.len > 0)
-            try std.fmt.allocPrint(allocator, "{s}{s}", .{ base_name, suffix })
-        else
-            base_name;
-        defer if (suffix.len > 0) allocator.free(tool_name);
-        if (try isToolAvailable(allocator, tool_name)) {
-            if (suffix.len > 0) {
-                return ToolPath{
-                    .path = utils.dupe(u8, allocator, tool_name),
-                    .owned = true,
-                };
-            } else {
-                return ToolPath{
-                    .path = base_name,
-                    .owned = false,
-                };
+    if (build_options.llvm_version_major != 0) {
+        if (try findVersionedTool(allocator, base_name, build_options.llvm_version_major)) |tool_path| {
+            return tool_path;
+        }
+    }
+
+    if (try isToolAvailable(allocator, base_name)) {
+        return ToolPath{
+            .path = base_name,
+            .owned = false,
+        };
+    }
+
+    var version: u32 = 40;
+    while (version >= 14) : (version -= 1) {
+        if (version == build_options.llvm_version_major) continue;
+        if (try findVersionedTool(allocator, base_name, version)) |tool_path| {
+            return tool_path;
+        }
+    }
+
+    version = 40;
+    while (version >= 14) : (version -= 1) {
+        const suffixes = [_][]const u8{
+            try std.fmt.allocPrint(allocator, "/usr/lib/llvm-{d}/bin", .{version}),
+            try std.fmt.allocPrint(allocator, "/usr/lib64/llvm{d}/bin", .{version}),
+            try std.fmt.allocPrint(allocator, "/opt/homebrew/opt/llvm@{d}/bin", .{version}),
+        };
+        defer allocator.free(suffixes[0]);
+        defer allocator.free(suffixes[1]);
+        defer allocator.free(suffixes[2]);
+        for (suffixes) |prefix| {
+            const full = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ prefix, base_name });
+            defer allocator.free(full);
+            if (try isToolAvailable(allocator, full)) {
+                return ToolPath{ .path = utils.dupe(u8, allocator, full), .owned = true };
             }
         }
     }
 
-    const absolute_prefixes = [_][]const u8{
-        "/usr/lib/llvm-21/bin",
-        "/usr/lib/llvm-20/bin",
-        "/usr/lib/llvm-19/bin",
-        "/usr/lib/llvm-18/bin",
-        "/usr/lib64/llvm21/bin",
-        "/usr/lib64/llvm20/bin",
-        "/opt/homebrew/opt/llvm@21/bin",
-        "/opt/homebrew/opt/llvm@20/bin",
-        "/opt/llvm/bin",
-    };
-
-    for (absolute_prefixes) |prefix| {
+    const generic_prefixes = [_][]const u8{"/opt/llvm/bin"};
+    for (generic_prefixes) |prefix| {
         const full = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ prefix, base_name });
         defer allocator.free(full);
         if (try isToolAvailable(allocator, full)) {
@@ -101,6 +99,26 @@ pub fn findLLVMTool(allocator: std.mem.Allocator, tool: LLVMTool) !?ToolPath {
         }
     }
 
+    return null;
+}
+
+fn findVersionedTool(allocator: std.mem.Allocator, base_name: []const u8, version: u32) !?ToolPath {
+    const suffixes = [_][]const u8{
+        try std.fmt.allocPrint(allocator, "-{d}", .{version}),
+        try std.fmt.allocPrint(allocator, "{d}", .{version}),
+    };
+    defer allocator.free(suffixes[0]);
+    defer allocator.free(suffixes[1]);
+    for (suffixes) |suffix| {
+        const tool_name = try std.fmt.allocPrint(allocator, "{s}{s}", .{ base_name, suffix });
+        defer allocator.free(tool_name);
+        if (try isToolAvailable(allocator, tool_name)) {
+            return ToolPath{
+                .path = utils.dupe(u8, allocator, tool_name),
+                .owned = true,
+            };
+        }
+    }
     return null;
 }
 
