@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const consts = @import("consts.zig");
 const errors = @import("errors.zig");
 const parser = @import("parser/parser.zig");
@@ -76,6 +77,7 @@ pub const CompilationStats = struct {
     total_time_ns: u64,
     lines_of_code: usize,
     memory_peak_kb: usize,
+    llvm_link_version_major: u32,
     llc_version_major: i16,
     opt_version_major: i16,
     clang_version_major: i16,
@@ -104,6 +106,7 @@ fn printStats(stats: CompilationStats) void {
     std.debug.print("  Backend time:    {d:.2} ms\n", .{backend_ms});
     std.debug.print("  Link time:       {d:.2} ms\n", .{link_ms});
     std.debug.print("  Link backend:    {s}\n", .{link_backend_text});
+    std.debug.print("  LLVM linked:     {d}\n", .{stats.llvm_link_version_major});
     std.debug.print("  LLVM versions:   llc={d} opt={d} lld={d} clang={d}\n", .{ stats.llc_version_major, stats.opt_version_major, stats.lld_version_major, stats.clang_version_major });
     std.debug.print("  Total time:      {d:.2} ms\n", .{total_ms});
     std.debug.print("  Lines of code:   {d}\n", .{stats.lines_of_code});
@@ -121,6 +124,7 @@ pub const Context = struct {
     keepll: bool,
     show_ast: bool,
     optimize: bool,
+    verify_ir: bool,
     verbose: bool,
     quiet: bool,
     stats: bool,
@@ -144,6 +148,7 @@ pub const Context = struct {
             .keepll = false,
             .show_ast = false,
             .optimize = false,
+            .verify_ir = false,
             .verbose = false,
             .quiet = false,
             .stats = false,
@@ -1627,6 +1632,8 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     context.stats = true;
                 } else if (std.mem.eql(u8, flag, "-optimize")) {
                     context.optimize = true;
+                } else if (std.mem.eql(u8, flag, "-verify-ir")) {
+                    context.verify_ir = true;
                 } else if (std.mem.eql(u8, flag, "-o")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoOutputPath;
@@ -2944,6 +2951,7 @@ pub fn main() !u8 {
         .total_time_ns = 0,
         .lines_of_code = 0,
         .memory_peak_kb = 0,
+        .llvm_link_version_major = build_options.llvm_version_major,
         .llc_version_major = 0,
         .opt_version_major = 0,
         .clang_version_major = 0,
@@ -3139,10 +3147,12 @@ pub fn main() !u8 {
         }
     }
 
-    code_generator.verifyModule() catch {
-        std.debug.print("Error: generated LLVM IR failed verification\n", .{});
-        return 1;
-    };
+    if (!ctx.optimize or ctx.verify_ir) {
+        code_generator.verifyModule() catch {
+            std.debug.print("Error: generated LLVM IR failed verification\n", .{});
+            return 1;
+        };
+    }
 
     const codegen_end = std.time.nanoTimestamp();
     stats.codegen_time_ns = @intCast(codegen_end - codegen_start);

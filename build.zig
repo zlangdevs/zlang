@@ -1,57 +1,159 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 fn makeNoOp(_: *std.Build.Step, _: std.Build.Step.MakeOptions) anyerror!void {}
 
-fn detectLlvmLibName(allocator: std.mem.Allocator) []const u8 {
-    const candidates = [_][]const u8{
-        "llvm-config-21",
-        "llvm-config21",
-        "llvm-config-20",
-        "llvm-config-19",
-        "llvm-config-18",
-        "llvm-config",
-    };
+const LlvmLinkInfo = struct {
+    lib_name: []const u8,
+    version_major: u32,
+};
 
-    for (candidates) |exe| {
+fn parseLlvmMajor(version: []const u8) ?u32 {
+    const trimmed = std.mem.trim(u8, version, " \t\r\n");
+    const dot = std.mem.indexOfScalar(u8, trimmed, '.') orelse trimmed.len;
+    if (dot == 0) return null;
+    return std.fmt.parseInt(u32, trimmed[0..dot], 10) catch null;
+}
+
+fn llvmLibNameFromArg(allocator: std.mem.Allocator, arg: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, arg, " \t\r\n");
+    if (!std.mem.startsWith(u8, trimmed, "-l")) return null;
+    if (!std.mem.startsWith(u8, trimmed[2..], "LLVM")) return null;
+    return allocator.dupe(u8, trimmed[2..]) catch null;
+}
+
+fn llvmLibNameFromFile(allocator: std.mem.Allocator, name: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, name, "libLLVM")) return null;
+    const without_prefix = name[3..];
+    const suffixes = [_][]const u8{ ".so", ".a", ".dylib" };
+    for (suffixes) |suffix| {
+        if (std.mem.endsWith(u8, without_prefix, suffix)) {
+            return allocator.dupe(u8, without_prefix[0 .. without_prefix.len - suffix.len]) catch null;
+        }
+    }
+    if (std.mem.indexOf(u8, without_prefix, ".so.")) |idx| {
+        return allocator.dupe(u8, without_prefix[0..idx]) catch null;
+    }
+    return null;
+}
+
+fn majorFromLlvmLibName(lib_name: []const u8) u32 {
+    const dash = std.mem.lastIndexOfScalar(u8, lib_name, '-') orelse return 0;
+    return std.fmt.parseInt(u32, lib_name[dash + 1 ..], 10) catch 0;
+}
+
+fn detectLlvmLinkInfo(allocator: std.mem.Allocator) LlvmLinkInfo {
+    var candidates = std.ArrayList([]const u8){};
+    defer candidates.deinit(allocator);
+
+    candidates.append(allocator, "llvm-config") catch {};
+    var version: u32 = 40;
+    while (version >= 14) : (version -= 1) {
+        candidates.append(allocator, std.fmt.allocPrint(allocator, "llvm-config-{d}", .{version}) catch continue) catch {};
+        candidates.append(allocator, std.fmt.allocPrint(allocator, "llvm-config{d}", .{version}) catch continue) catch {};
+    }
+
+    for (candidates.items) |exe| {
         const run = std.process.Child.run(.{
             .allocator = allocator,
-            .argv = &[_][]const u8{ exe, "--version" },
+            .argv = &[_][]const u8{ exe, "--libs" },
         }) catch continue;
         defer allocator.free(run.stdout);
         defer allocator.free(run.stderr);
         if (run.term != .Exited or run.term.Exited != 0) continue;
 
-        const out = std.mem.trim(u8, run.stdout, " \t\r\n");
-        if (out.len == 0) continue;
-        const dot = std.mem.indexOfScalar(u8, out, '.') orelse out.len;
-        const major_str = out[0..dot];
-        const major = std.fmt.parseInt(u8, major_str, 10) catch continue;
-        return switch (major) {
-            21 => "LLVM-21",
-            20 => "LLVM-20",
-            19 => "LLVM-19",
-            18 => "LLVM-18",
-            17 => "LLVM-17",
-            else => "LLVM-21",
-        };
+        var lib_name: ?[]const u8 = null;
+        var it = std.mem.tokenizeAny(u8, run.stdout, " \t\r\n");
+        while (it.next()) |arg| {
+            lib_name = llvmLibNameFromArg(allocator, arg);
+            if (lib_name != null) break;
+        }
+        if (lib_name == null) continue;
+
+        var detected_major = majorFromLlvmLibName(lib_name.?);
+        if (detected_major == 0) {
+            const version_run = std.process.Child.run(.{
+                .allocator = allocator,
+                .argv = &[_][]const u8{ exe, "--version" },
+            }) catch return .{ .lib_name = lib_name.?, .version_major = 0 };
+            defer allocator.free(version_run.stdout);
+            defer allocator.free(version_run.stderr);
+            if (version_run.term == .Exited and version_run.term.Exited == 0) {
+                detected_major = parseLlvmMajor(version_run.stdout) orelse 0;
+            }
+        }
+
+        return .{ .lib_name = lib_name.?, .version_major = detected_major };
     }
 
-    return "LLVM-21";
+    const lib_dirs = [_][]const u8{ "/usr/local/lib", "/lib64", "/lib", "/usr/lib64", "/usr/lib" };
+    var best_name: ?[]const u8 = null;
+    var best_major: u32 = 0;
+    for (lib_dirs) |dir_path| {
+        var dir = std.fs.openDirAbsolute(dir_path, .{ .iterate = true }) catch continue;
+        defer dir.close();
+        var it = dir.iterate();
+        while (it.next() catch null) |entry| {
+            const lib_name = llvmLibNameFromFile(allocator, entry.name) orelse continue;
+            const major = majorFromLlvmLibName(lib_name);
+            if (major >= best_major) {
+                best_name = lib_name;
+                best_major = major;
+            }
+        }
+    }
+    if (best_name) |lib_name| return .{ .lib_name = lib_name, .version_major = best_major };
+
+    return .{ .lib_name = "LLVM", .version_major = 0 };
+}
+
+fn addCommonSystemLibraryPaths(exe: *std.Build.Step.Compile) void {
+    const paths = [_][]const u8{ "/usr/local/lib", "/lib64", "/lib", "/usr/lib64", "/usr/lib" };
+    for (paths) |path| {
+        exe.addLibraryPath(.{ .cwd_relative = path });
+    }
+}
+
+fn addCommonSystemIncludePaths(exe: *std.Build.Step.Compile) void {
+    const paths = [_][]const u8{ "/usr/local/include", "/usr/include" };
+    for (paths) |path| {
+        exe.addIncludePath(.{ .cwd_relative = path });
+    }
 }
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+    const default_target: std.Target.Query = if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64)
+        .{
+            .cpu_arch = .x86_64,
+            .os_tag = .linux,
+            .abi = .gnu,
+            .glibc_version = .{ .major = 2, .minor = 17, .patch = 0 },
+        }
+    else
+        .{};
+    const target = b.standardTargetOptions(.{ .default_target = default_target });
     const optimize = b.standardOptimizeOption(.{});
     const appimage_optimize: std.builtin.OptimizeMode = .ReleaseFast;
     const system_prefix = b.option([]const u8, "system-prefix", "Install root for zlang binary and stdlib") orelse "/usr/local/lib/zlang";
     const system_symlink = b.option([]const u8, "system-symlink", "Symlink path for zlang executable") orelse "/usr/bin/zlang";
-    const llvm_lib = b.option([]const u8, "llvm-lib", "LLVM library name to link against (e.g. LLVM-21, LLVM-20)") orelse detectLlvmLibName(b.allocator);
+    const llvm_lib_option = b.option([]const u8, "llvm-lib", "LLVM library name to link against (e.g. LLVM-22, LLVM)");
+    const llvm_version_option = b.option(u32, "llvm-version-major", "LLVM major version to show in -stats");
+    const detected_llvm = if (llvm_lib_option == null or llvm_version_option == null) detectLlvmLinkInfo(b.allocator) else LlvmLinkInfo{ .lib_name = llvm_lib_option.?, .version_major = llvm_version_option.? };
+    const llvm_lib = llvm_lib_option orelse detected_llvm.lib_name;
+    const llvm_version_major = llvm_version_option orelse blk: {
+        const major = majorFromLlvmLibName(llvm_lib);
+        break :blk if (major != 0) major else detected_llvm.version_major;
+    };
+
+    const build_options = b.addOptions();
+    build_options.addOption(u32, "llvm_version_major", llvm_version_major);
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    exe_mod.addOptions("build_options", build_options);
 
     const exe = b.addExecutable(.{
         .name = "zlang",
@@ -63,6 +165,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = appimage_optimize,
     });
+    appimage_exe_mod.addOptions("build_options", build_options);
 
     const appimage_exe = b.addExecutable(.{
         .name = "zlang-appimage",
@@ -119,11 +222,11 @@ pub fn build(b: *std.Build) void {
         \\    chmod 755 "$APPDIR/usr/bin/$tool_target"
         \\  fi
         \\}
-        \\copy_tool "llc" llc-21 llc21 llc-20 llc20 llc-19 llc19 llc-18 llc18 llc
-        \\copy_tool "opt" opt-21 opt21 opt-20 opt20 opt-19 opt19 opt-18 opt18 opt
-        \\copy_tool "clang" clang-21 clang21 clang-20 clang20 clang-19 clang19 clang-18 clang18 clang
-        \\copy_tool "lli" lli-21 lli21 lli-20 lli20 lli-19 lli19 lli-18 lli18 lli
-        \\copy_tool "ld.lld" ld.lld-21 ld.lld21 ld.lld-20 ld.lld20 ld.lld-19 ld.lld19 ld.lld-18 ld.lld18 ld.lld
+        \\copy_tool "llc" llc-22 llc22 llc-21 llc21 llc-20 llc20 llc-19 llc19 llc-18 llc18 llc
+        \\copy_tool "opt" opt-22 opt22 opt-21 opt21 opt-20 opt20 opt-19 opt19 opt-18 opt18 opt
+        \\copy_tool "clang" clang-22 clang22 clang-21 clang21 clang-20 clang20 clang-19 clang19 clang-18 clang18 clang
+        \\copy_tool "lli" lli-22 lli22 lli-21 lli21 lli-20 lli20 lli-19 lli19 lli-18 lli18 lli
+        \\copy_tool "ld.lld" ld.lld-22 ld.lld22 ld.lld-21 ld.lld21 ld.lld-20 ld.lld20 ld.lld-19 ld.lld19 ld.lld-18 ld.lld18 ld.lld
         \\collect_libs() {
         \\  bin_path="$1"
         \\  [ -x "$bin_path" ] || return 0
@@ -240,6 +343,8 @@ pub fn build(b: *std.Build) void {
 
     //exe.linkSystemLibrary("fl");
     exe.linkLibC();
+    addCommonSystemIncludePaths(exe);
+    addCommonSystemLibraryPaths(exe);
     exe.linkSystemLibrary(llvm_lib);
     exe.step.dependOn(&flex_cmd.step);
     exe.step.dependOn(&bison_cmd.step);
@@ -269,6 +374,8 @@ pub fn build(b: *std.Build) void {
     });
 
     appimage_exe.linkLibC();
+    addCommonSystemIncludePaths(appimage_exe);
+    addCommonSystemLibraryPaths(appimage_exe);
     appimage_exe.linkSystemLibrary(llvm_lib);
     appimage_exe.step.dependOn(&flex_cmd.step);
     appimage_exe.step.dependOn(&bison_cmd.step);
