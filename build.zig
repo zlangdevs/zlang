@@ -173,6 +173,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const install_exe = b.addInstallArtifact(exe, .{});
+    b.getInstallStep().dependOn(&install_exe.step);
 
     const build_step = b.step("build", "Build zlang compiler");
     b.default_step = build_step;
@@ -384,7 +385,7 @@ pub fn build(b: *std.Build) void {
         "sh",
         "-c",
         b.fmt(
-            "set -e; install -d \"{0s}\"; rm -f \"{0s}/zlang\"; rm -rf \"{0s}/stdlib\"; install -m 755 \"$1\" \"{0s}/zlang\"; cp -a \"stdlib\" \"{0s}/stdlib\"; ln -sfn \"{0s}/zlang\" \"{1s}\"",
+            "set -e; install -d \"{0s}\" \"$(dirname \"{1s}\")\"; rm -f \"{0s}/zlang\"; rm -rf \"{0s}/stdlib\"; install -m 755 \"$1\" \"{0s}/zlang\"; cp -a \"stdlib\" \"{0s}/stdlib\"; ln -sfn \"{0s}/zlang\" \"{1s}\"",
             .{ system_prefix, system_symlink },
         ),
         "zlang-install",
@@ -393,6 +394,9 @@ pub fn build(b: *std.Build) void {
     install_system_cmd.step.dependOn(&exe.step);
 
     b.getInstallStep().dependOn(&install_system_cmd.step);
+
+    const system_install_step = b.step("system-install", "Install zlang and stdlib into system paths");
+    system_install_step.dependOn(&install_system_cmd.step);
 
     const uninstall_system_cmd = b.addSystemCommand(&[_][]const u8{
         "sh",
@@ -405,6 +409,9 @@ pub fn build(b: *std.Build) void {
     const uninstall_step = b.getUninstallStep();
     uninstall_step.makeFn = makeNoOp;
     uninstall_step.dependOn(&uninstall_system_cmd.step);
+
+    const system_uninstall_step = b.step("system-uninstall", "Remove zlang from system paths");
+    system_uninstall_step.dependOn(&uninstall_system_cmd.step);
 
     const run_cmd = b.addRunArtifact(exe);
     if (b.args) |args| {
