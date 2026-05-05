@@ -70,6 +70,7 @@ pub fn printHelp() void {
         \\  {s}-dast{s}        Dump Abstract Syntax Tree
         \\  {s}-q, -quiet{s}   Suppress non-error output
         \\  {s}-verbose{s}     Enable verbose output
+        \\  {s}-version{s}     Show compiler and LLVM toolchain version info
         \\  {s}-stats{s}       Show compilation statistics
         \\  {s}-optimize{s}    Enable optimizations
         \\  {s}-verify-ir{s}   Verify generated LLVM IR even with -optimize
@@ -80,6 +81,7 @@ pub fn printHelp() void {
         \\
     , .{
         bold,   reset,
+        yellow, reset,
         yellow, reset,
         yellow, reset,
         yellow, reset,

@@ -13,6 +13,7 @@ const diagnostics = @import("diagnostics.zig");
 const help = @import("help.zig");
 const interpreter = @import("interpreter.zig");
 const preprocessor = @import("preprocessor/preprocessor.zig");
+const llvm_tools = @import("llvm_tools.zig");
 
 const allocator = std.heap.page_allocator;
 
@@ -579,6 +580,36 @@ fn readMemoryPeakKb() usize {
 
     return parseProcStatusKbValue(content, "VmHWM") orelse
         parseProcStatusKbValue(content, "VmPeak") orelse 0;
+}
+
+fn printToolVersion(alloc: std.mem.Allocator, label: []const u8, tool: llvm_tools.LLVMTool) void {
+    const maybe_path = llvm_tools.getLLVMToolPath(alloc, tool) catch null;
+    if (maybe_path) |path| {
+        const major = llvm_tools.detectToolVersionMajor(alloc, path) catch null;
+        if (major) |version| {
+            std.debug.print("  {s}: {s} ({d})\n", .{ label, path, version });
+        } else {
+            std.debug.print("  {s}: {s}\n", .{ label, path });
+        }
+    } else {
+        std.debug.print("  {s}: not found\n", .{label});
+    }
+}
+
+fn printVersionInfo() void {
+    std.debug.print("zlang compiler\n", .{});
+    std.debug.print("  Zig: {s}\n", .{@import("builtin").zig_version_string});
+    if (build_options.llvm_version_major != 0) {
+        std.debug.print("  LLVM linked: {d}\n", .{build_options.llvm_version_major});
+    } else {
+        std.debug.print("  LLVM linked: unknown\n", .{});
+    }
+    std.debug.print("LLVM tools:\n", .{});
+    printToolVersion(allocator, "llc", .llc);
+    printToolVersion(allocator, "opt", .opt);
+    printToolVersion(allocator, "ld.lld", .ld_lld);
+    printToolVersion(allocator, "clang", .clang);
+    printToolVersion(allocator, "lli", .lli);
 }
 
 fn resolvePathRelativeToModule(alloc: std.mem.Allocator, module_path: []const u8, raw_path: []const u8) ![]const u8 {
@@ -2862,6 +2893,10 @@ pub fn main() !u8 {
         } else {
             help.printHelp();
         }
+        return 0;
+    }
+    if (std.mem.eql(u8, args[1], "-version")) {
+        printVersionInfo();
         return 0;
     }
     if (std.mem.eql(u8, args[1], "zli")) {
