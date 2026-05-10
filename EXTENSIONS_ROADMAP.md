@@ -26,6 +26,8 @@ Done on branch `zlx`:
 - Added current-target compatibility detection; incompatible packages are indexed as `incompatible`.
 - Added dependency recording in `index.zon`; missing dependencies mark packages as `incompatible` with a reason.
 - Added dependency cycle detection and `module-load-order` for future plugin initialization order.
+- Added `src/zlx/package.zig` package layout abstraction; current `single_manifest` layout reads the whole `.zlx` as a ZON manifest, with archive layouts reserved for v2.
+- `module-info` now reports the detected `layout`.
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
 
 Not done yet:
@@ -37,8 +39,8 @@ Not done yet:
 - Link flag activation by feature usage.
 
 Next planned increments:
-- Add package layout abstraction so the current single-file MVP can evolve into real container extraction.
 - Add host/plugin ABI type definitions without loading native code yet.
+- Extend the package layout abstraction with a real container layout (archive extraction) alongside the existing `single_manifest` layout.
 
 ---
 

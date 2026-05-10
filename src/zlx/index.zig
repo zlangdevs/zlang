@@ -1,9 +1,9 @@
 const std = @import("std");
 const manifest_mod = @import("manifest.zig");
+const package_mod = @import("package.zig");
 const store_mod = @import("store.zig");
 
 const max_index_size = 1024 * 1024;
-const max_package_size = 16 * 1024 * 1024;
 
 pub const Status = enum {
     installed,
@@ -105,16 +105,12 @@ pub fn rebuild(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store) !st
         if (dir_entry.kind != .file or !std.mem.endsWith(u8, dir_entry.name, ".zlx")) continue;
         const package_path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ store.root, dir_entry.name });
         errdefer alloc.free(package_path);
-        const package = std.Io.Dir.cwd().readFileAlloc(io, package_path, alloc, .limited(max_package_size)) catch {
+        var pkg = package_mod.open(alloc, io, package_path) catch {
             alloc.free(package_path);
             continue;
         };
-        defer alloc.free(package);
-        const parsed = manifest_mod.parse(alloc, package) catch {
-            alloc.free(package_path);
-            continue;
-        };
-        defer manifest_mod.free(alloc, parsed);
+        defer pkg.deinit(alloc);
+        const parsed = pkg.manifest;
         try entries.append(alloc, .{
             .name = try alloc.dupe(u8, parsed.name),
             .version = try alloc.dupe(u8, parsed.version),
