@@ -3597,6 +3597,14 @@ pub fn main(init: std.process.Init) !u8 {
             if (flag.owner) |o| _ = used_owners.put(o, {}) catch {};
         }
     }
+    if (zlx_runtime.scanUseImports(allocator, process_io, ctx.input_files.items)) |imports_const| {
+        var imports = imports_const;
+        defer zlx_runtime.freeUseImports(allocator, &imports);
+        for (plugin_host.modules.items) |mod| {
+            if (!imports.contains(mod.name)) continue;
+            if (mod.owner) |o| _ = used_owners.put(o, {}) catch {};
+        }
+    } else |_| {}
     var injected_link_flags: usize = 0;
     for (plugin_host.link_flags.items) |entry| {
         const owner = entry.owner orelse continue;

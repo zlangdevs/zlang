@@ -49,6 +49,43 @@ pub fn loadAllInstalled(alloc: std.mem.Allocator, io: std.Io, host: *host_mod.Ho
     return report;
 }
 
+pub fn scanUseImports(alloc: std.mem.Allocator, io: std.Io, paths: []const []const u8) !std.StringHashMap(void) {
+    var result: std.StringHashMap(void) = .init(alloc);
+    errdefer {
+        var it = result.keyIterator();
+        while (it.next()) |k| alloc.free(k.*);
+        result.deinit();
+    }
+
+    for (paths) |path| {
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, alloc, .limited(16 * 1024 * 1024)) catch continue;
+        defer alloc.free(bytes);
+
+        var line_it = std.mem.splitScalar(u8, bytes, '\n');
+        while (line_it.next()) |raw_line| {
+            const line = std.mem.trim(u8, raw_line, " \t\r");
+            if (!std.mem.startsWith(u8, line, "use ") and !std.mem.startsWith(u8, line, "use\t")) continue;
+            var rest = std.mem.trim(u8, line[3..], " \t");
+            if (std.mem.indexOfAny(u8, rest, "/*")) |c| rest = rest[0..c];
+            rest = std.mem.trim(u8, rest, " \t;");
+            if (rest.len == 0) continue;
+            const dot = std.mem.indexOfScalar(u8, rest, '.') orelse rest.len;
+            const head = rest[0..dot];
+            if (head.len == 0) continue;
+            if (result.contains(head)) continue;
+            const owned = try alloc.dupe(u8, head);
+            try result.put(owned, {});
+        }
+    }
+    return result;
+}
+
+pub fn freeUseImports(alloc: std.mem.Allocator, set: *std.StringHashMap(void)) void {
+    var it = set.keyIterator();
+    while (it.next()) |k| alloc.free(k.*);
+    set.deinit();
+}
+
 pub fn printPluginExtensions(host: *const host_mod.Host) void {
     const has_any = host.cli_flags.items.len != 0 or
         host.syntax_blocks.items.len != 0 or
