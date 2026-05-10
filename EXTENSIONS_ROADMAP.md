@@ -33,6 +33,9 @@ Done on branch `zlx`:
 - Added `zlang module-abi` to print the host's supported ABI range and entry symbols for plugin authors.
 - Added `src/zlx/host.zig`: a concrete `HostApi` instance with C-callable stubs that record syntax-block, module, CLI-flag, link-flag, help-section registrations and diagnostics, with duplicate detection.
 - Added `zlang module-dryrun <file.zlx>`: simulates plugin-side registrations from manifest data through the host stubs and reports counts/duplicates. Validates `api_min/api_max` against the host's supported range before simulating.
+- Added `src/zlx/loader.zig`: `std.DynLib`-backed loader that opens a `.so`, resolves `zlang_plugin_probe` and `zlang_plugin_init`, validates the probe API range, calls init, checks the desc/probe metadata agree, and invokes `register_plugin` against the host stubs.
+- Added `zlang module-load <file.so>`: loads a plugin and prints registration counts/diagnostics.
+- Added `tests/plugins/dummy_plugin.zig`: reference plugin exercising every host stub (compile with `zig build-lib -dynamic -fPIC tests/plugins/dummy_plugin.zig`).
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
 
 Not done yet:
@@ -44,7 +47,8 @@ Not done yet:
 - Link flag activation by feature usage.
 
 Next planned increments:
-- Add a `.so` loader using `std.DynLib` that resolves `zlang_plugin_probe`/`zlang_plugin_init` and feeds the existing host stubs (Phase 2 entry).
+- Auto-load installed plugins for compilation: walk the index in load-order, dlopen each package's `entry`, and accumulate host registrations for the current build.
+- Wire host registrations into the real compiler state (parser block dispatch table, CLI flag table, link-flag list) instead of the in-memory stub tables.
 - Extend the package layout abstraction with a real container layout (archive extraction) alongside the existing `single_manifest` layout.
 
 ---
@@ -151,6 +155,7 @@ zlang module-load-order
 zlang module-info ./brainfuck.zlx
 zlang module-abi
 zlang module-dryrun ./brainfuck.zlx
+zlang module-load ./libbrainfuck.so
 zlang validate-module ./brainfuck.zlx
 zlang del-module brainfuck
 ```

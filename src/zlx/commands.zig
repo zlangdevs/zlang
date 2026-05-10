@@ -1,6 +1,7 @@
 const std = @import("std");
 const abi = @import("abi.zig");
 const host_mod = @import("host.zig");
+const loader_mod = @import("loader.zig");
 const index_mod = @import("index.zig");
 const manifest = @import("manifest.zig");
 const package_mod = @import("package.zig");
@@ -17,7 +18,31 @@ pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     if (std.mem.eql(u8, args[1], "module-info")) return try moduleInfo(args, alloc, io);
     if (std.mem.eql(u8, args[1], "module-abi")) return try moduleAbi(args);
     if (std.mem.eql(u8, args[1], "module-dryrun")) return try moduleDryrun(args, alloc, io);
+    if (std.mem.eql(u8, args[1], "module-load")) return try moduleLoad(args, alloc);
     return null;
+}
+
+fn moduleLoad(args: []const [:0]u8, alloc: std.mem.Allocator) !u8 {
+    if (args.len != 3) {
+        std.debug.print("Usage: zlang module-load <file.so>\n", .{});
+        return 1;
+    }
+    var host = host_mod.Host.init(alloc);
+    defer host.deinit();
+    const info = loader_mod.loadAndRegister(alloc, &host, args[2]) catch |err| {
+        std.debug.print("zlx: module-load failed: {s}\n", .{@errorName(err)});
+        return 1;
+    };
+    defer info.deinit(alloc);
+    const c = host.counts;
+    std.debug.print("loaded {s} {s} (api {d}-{d})\n", .{ info.name, info.version, info.api_min, info.api_max });
+    std.debug.print("  syntax_blocks: {d} (duplicates {d})\n", .{ c.syntax_blocks, c.duplicate_syntax_blocks });
+    std.debug.print("  modules:       {d} (duplicates {d})\n", .{ c.modules, c.duplicate_modules });
+    std.debug.print("  cli_flags:     {d} (duplicates {d})\n", .{ c.cli_flags, c.duplicate_cli_flags });
+    std.debug.print("  link_flags:    {d} (duplicates {d})\n", .{ c.link_flags, c.duplicate_link_flags });
+    std.debug.print("  help_sections: {d}\n", .{c.help_sections});
+    std.debug.print("  diagnostics:   {d}\n", .{c.diagnostics});
+    return 0;
 }
 
 fn moduleDryrun(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
