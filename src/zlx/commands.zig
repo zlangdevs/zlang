@@ -85,6 +85,7 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     };
     defer alloc.free(dest_path);
     const status: index_mod.Status = if (manifest.supportsCurrentTarget(parsed)) .installed else .incompatible;
+    const status_reason: ?[]const u8 = if (status == .incompatible) "unsupported target" else null;
 
     var out_file = std.Io.Dir.cwd().createFile(io, dest_path, .{ .truncate = true }) catch |err| {
         std.debug.print("zlx: could not write {s}: {}\n", .{ dest_path, err });
@@ -112,7 +113,9 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
                 .path = dest_path,
                 .api_min = parsed.api_min,
                 .api_max = parsed.api_max,
+                .dependencies = parsed.dependencies,
                 .status = status,
+                .status_reason = status_reason,
             });
             replaced = true;
         } else {
@@ -126,9 +129,12 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
             .path = dest_path,
             .api_min = parsed.api_min,
             .api_max = parsed.api_max,
+            .dependencies = parsed.dependencies,
             .status = status,
+            .status_reason = status_reason,
         });
     }
+    index_mod.applyDependencyStatuses(next_entries.items);
     index_mod.write(alloc, io, store, next_entries.items) catch |err| {
         std.debug.print("zlx: could not update module index: {}\n", .{err});
         return 1;
@@ -171,7 +177,11 @@ fn listModules(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     } else loaded_index.value.modules;
 
     for (modules) |entry| {
-        std.debug.print("{s} {s} (api {d}-{d}, {s})\n", .{ entry.name, entry.version, entry.api_min, entry.api_max, @tagName(entry.status) });
+        if (entry.status_reason) |reason| {
+            std.debug.print("{s} {s} (api {d}-{d}, {s}: {s})\n", .{ entry.name, entry.version, entry.api_min, entry.api_max, @tagName(entry.status), reason });
+        } else {
+            std.debug.print("{s} {s} (api {d}-{d}, {s})\n", .{ entry.name, entry.version, entry.api_min, entry.api_max, @tagName(entry.status) });
+        }
     }
 
     if (modules.len == 0) std.debug.print("No modules installed\n", .{});
@@ -221,6 +231,7 @@ fn delModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     for (loaded_index.value.modules) |entry| {
         if (!std.mem.eql(u8, entry.name, args[2])) try next_entries.append(alloc, entry);
     }
+    index_mod.applyDependencyStatuses(next_entries.items);
     index_mod.write(alloc, io, store, next_entries.items) catch |err| {
         std.debug.print("zlx: could not update module index: {}\n", .{err});
         return 1;
