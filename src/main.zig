@@ -72,6 +72,11 @@ pub const CompilationStats = struct {
     const LinkBackend = codegen.CodeGenerator.BackendTiming.LinkBackend;
 
     parse_time_ns: u64,
+    parse_load_time_ns: u64,
+    parse_std_time_ns: u64,
+    parse_resolve_time_ns: u64,
+    parse_rewrite_time_ns: u64,
+    parse_merge_time_ns: u64,
     codegen_time_ns: u64,
     backend_time_ns: u64,
     link_time_ns: u64,
@@ -84,6 +89,14 @@ pub const CompilationStats = struct {
     clang_version_major: i16,
     lld_version_major: i16,
     link_backend: LinkBackend,
+};
+
+const ParseTiming = struct {
+    load_time_ns: u64 = 0,
+    std_time_ns: u64 = 0,
+    resolve_time_ns: u64 = 0,
+    rewrite_time_ns: u64 = 0,
+    merge_time_ns: u64 = 0,
 };
 
 fn printStats(stats: CompilationStats) void {
@@ -103,6 +116,13 @@ fn printStats(stats: CompilationStats) void {
     std.debug.print("Compilation Statistics:\n", .{});
     std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
     std.debug.print("  Parse time:      {d:.2} ms\n", .{parse_ms});
+    std.debug.print("  Parse breakdown: load={d:.2} std={d:.2} resolve={d:.2} rewrite={d:.2} merge={d:.2} ms\n", .{
+        @as(f64, @floatFromInt(stats.parse_load_time_ns)) / 1_000_000.0,
+        @as(f64, @floatFromInt(stats.parse_std_time_ns)) / 1_000_000.0,
+        @as(f64, @floatFromInt(stats.parse_resolve_time_ns)) / 1_000_000.0,
+        @as(f64, @floatFromInt(stats.parse_rewrite_time_ns)) / 1_000_000.0,
+        @as(f64, @floatFromInt(stats.parse_merge_time_ns)) / 1_000_000.0,
+    });
     std.debug.print("  Codegen time:    {d:.2} ms\n", .{codegen_ms});
     std.debug.print("  Backend time:    {d:.2} ms\n", .{backend_ms});
     std.debug.print("  Link time:       {d:.2} ms\n", .{link_ms});
@@ -971,21 +991,21 @@ fn isBuiltinTypeToken(token: []const u8) bool {
         std.mem.eql(u8, token, "_");
 }
 
-fn resolveNamespacedTypeToken(type_path: []const u8, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), owner_alloc: std.mem.Allocator) ?[]const u8 {
+fn resolveNamespacedTypeToken(type_path: []const u8, rewrite_ctx: *RewriteContext, owner_alloc: std.mem.Allocator) ?[]const u8 {
     const dot = std.mem.lastIndexOfScalar(u8, type_path, '.') orelse return null;
     if (dot == 0 or dot + 1 >= type_path.len) return null;
 
     const namespace_path = type_path[0..dot];
     const symbol_name = type_path[dot + 1 ..];
 
-    const resolved = resolveNamespacePath(namespace_path, use_specs, owner_alloc) orelse return null;
+    const resolved = resolveNamespacePath(namespace_path, rewrite_ctx.use_specs, owner_alloc) orelse return null;
     defer owner_alloc.free(resolved.import_path);
 
-    if (!hasTypeInReachableImport(modules, reachable_modules, resolved.import_path, symbol_name)) return null;
+    if (!cachedHasTypeInReachableImport(rewrite_ctx, resolved.import_path, symbol_name)) return null;
     return utils.dupe(u8, owner_alloc, symbol_name);
 }
 
-fn rewriteTypeNameForImports(type_name: []const u8, current_module: *const ModuleInfo, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), owner_alloc: std.mem.Allocator) []const u8 {
+fn rewriteTypeNameForImports(type_name: []const u8, rewrite_ctx: *RewriteContext, owner_alloc: std.mem.Allocator) []const u8 {
     var out = std.ArrayList(u8){};
     defer out.deinit(owner_alloc);
 
@@ -1007,13 +1027,13 @@ fn rewriteTypeNameForImports(type_name: []const u8, current_module: *const Modul
             }
 
             if (std.mem.indexOfScalar(u8, token, '.')) |_| {
-                if (resolveNamespacedTypeToken(token, use_specs, modules, reachable_modules, owner_alloc)) |resolved_name| {
+                if (resolveNamespacedTypeToken(token, rewrite_ctx, owner_alloc)) |resolved_name| {
                     replacement = resolved_name;
                     owned_replacement = resolved_name;
                     changed = true;
                 }
             } else if (!isAllDigits(token) and !isBuiltinTypeToken(token)) {
-                if (isTypeHiddenByImportOverrides(current_module, use_specs, modules, reachable_modules, token)) {
+                if (cachedIsTypeHidden(rewrite_ctx, token)) {
                     if (std.fmt.allocPrint(owner_alloc, "__zlang_hidden_import__.{s}", .{token}) catch null) |hidden_name| {
                         replacement = hidden_name;
                         owned_replacement = hidden_name;
@@ -1036,38 +1056,38 @@ fn rewriteTypeNameForImports(type_name: []const u8, current_module: *const Modul
     return out.toOwnedSlice(owner_alloc) catch type_name;
 }
 
-fn rewriteNodeTypeFields(current_module: *const ModuleInfo, node: *ast.Node, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void)) void {
+fn rewriteNodeTypeFields(rewrite_ctx: *RewriteContext, node: *ast.Node) void {
     switch (node.data) {
         .function => |*func| {
-            func.return_type = rewriteTypeNameForImports(func.return_type, current_module, use_specs, modules, reachable_modules, node.allocator);
+            func.return_type = rewriteTypeNameForImports(func.return_type, rewrite_ctx, node.allocator);
             for (func.parameters.items) |*param| {
-                param.type_name = rewriteTypeNameForImports(param.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+                param.type_name = rewriteTypeNameForImports(param.type_name, rewrite_ctx, node.allocator);
             }
         },
         .c_function_decl => |*decl| {
-            decl.return_type = rewriteTypeNameForImports(decl.return_type, current_module, use_specs, modules, reachable_modules, node.allocator);
+            decl.return_type = rewriteTypeNameForImports(decl.return_type, rewrite_ctx, node.allocator);
             for (decl.parameters.items) |*param| {
-                param.type_name = rewriteTypeNameForImports(param.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+                param.type_name = rewriteTypeNameForImports(param.type_name, rewrite_ctx, node.allocator);
             }
         },
         .var_decl => |*decl| {
-            decl.type_name = rewriteTypeNameForImports(decl.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+            decl.type_name = rewriteTypeNameForImports(decl.type_name, rewrite_ctx, node.allocator);
         },
         .struct_decl => |*decl| {
             for (decl.fields.items) |*field| {
-                field.type_name = rewriteTypeNameForImports(field.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+                field.type_name = rewriteTypeNameForImports(field.type_name, rewrite_ctx, node.allocator);
             }
         },
         .cast => |*cast_node| {
             if (cast_node.type_name) |type_name| {
-                cast_node.type_name = rewriteTypeNameForImports(type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+                cast_node.type_name = rewriteTypeNameForImports(type_name, rewrite_ctx, node.allocator);
             }
         },
         .expression_block => |*block| {
-            block.type_name = rewriteTypeNameForImports(block.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+            block.type_name = rewriteTypeNameForImports(block.type_name, rewrite_ctx, node.allocator);
         },
         .struct_initializer => |*struct_init| {
-            struct_init.struct_name = rewriteTypeNameForImports(struct_init.struct_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+            struct_init.struct_name = rewriteTypeNameForImports(struct_init.struct_name, rewrite_ctx, node.allocator);
         },
         else => {},
     }
@@ -1112,6 +1132,97 @@ fn extractRefPath(node: *const ast.Node, alloc: std.mem.Allocator) ?[]const u8 {
 const NamespaceResolution = struct {
     import_path: []const u8,
 };
+
+const RewriteContext = struct {
+    current_module: *const ModuleInfo,
+    use_specs: []const UseSpec,
+    modules: []const ModuleInfo,
+    reachable_modules: *const std.StringHashMap(void),
+    alloc: std.mem.Allocator,
+    hidden_functions: std.StringHashMap(bool),
+    hidden_types: std.StringHashMap(bool),
+    import_functions: std.StringHashMap(bool),
+    import_types: std.StringHashMap(bool),
+
+    fn init(current_module: *const ModuleInfo, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), alloc: std.mem.Allocator) RewriteContext {
+        return .{
+            .current_module = current_module,
+            .use_specs = use_specs,
+            .modules = modules,
+            .reachable_modules = reachable_modules,
+            .alloc = alloc,
+            .hidden_functions = std.StringHashMap(bool).init(alloc),
+            .hidden_types = std.StringHashMap(bool).init(alloc),
+            .import_functions = std.StringHashMap(bool).init(alloc),
+            .import_types = std.StringHashMap(bool).init(alloc),
+        };
+    }
+
+    fn deinit(self: *RewriteContext) void {
+        var function_it = self.import_functions.iterator();
+        while (function_it.next()) |entry| {
+            self.alloc.free(entry.key_ptr.*);
+        }
+        var type_it = self.import_types.iterator();
+        while (type_it.next()) |entry| {
+            self.alloc.free(entry.key_ptr.*);
+        }
+        self.hidden_functions.deinit();
+        self.hidden_types.deinit();
+        self.import_functions.deinit();
+        self.import_types.deinit();
+    }
+};
+
+fn cacheKey2(alloc: std.mem.Allocator, a: []const u8, b: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(alloc, "{s}\x00{s}", .{ a, b });
+}
+
+fn cachedHasFunctionInReachableImport(ctx: *RewriteContext, import_path: []const u8, function_name: []const u8) bool {
+    const key = cacheKey2(ctx.alloc, import_path, function_name) catch {
+        return hasFunctionInReachableImport(ctx.modules, ctx.reachable_modules, import_path, function_name);
+    };
+    if (ctx.import_functions.get(key)) |cached| {
+        ctx.alloc.free(key);
+        return cached;
+    }
+    const result = hasFunctionInReachableImport(ctx.modules, ctx.reachable_modules, import_path, function_name);
+    ctx.import_functions.put(key, result) catch {
+        ctx.alloc.free(key);
+    };
+    return result;
+}
+
+fn cachedHasTypeInReachableImport(ctx: *RewriteContext, import_path: []const u8, type_name: []const u8) bool {
+    const key = cacheKey2(ctx.alloc, import_path, type_name) catch {
+        return hasTypeInReachableImport(ctx.modules, ctx.reachable_modules, import_path, type_name);
+    };
+    if (ctx.import_types.get(key)) |cached| {
+        ctx.alloc.free(key);
+        return cached;
+    }
+    const result = hasTypeInReachableImport(ctx.modules, ctx.reachable_modules, import_path, type_name);
+    ctx.import_types.put(key, result) catch {
+        ctx.alloc.free(key);
+    };
+    return result;
+}
+
+fn cachedIsFunctionHidden(ctx: *RewriteContext, function_name: []const u8) bool {
+    if (moduleHasFunctionByName(ctx.current_module, function_name)) return false;
+    if (ctx.hidden_functions.get(function_name)) |cached| return cached;
+    const result = isFunctionHiddenByImportOverrides(ctx.current_module, ctx.use_specs, ctx.modules, ctx.reachable_modules, function_name);
+    ctx.hidden_functions.put(function_name, result) catch {};
+    return result;
+}
+
+fn cachedIsTypeHidden(ctx: *RewriteContext, type_name: []const u8) bool {
+    if (moduleHasTypeByName(ctx.current_module, type_name)) return false;
+    if (ctx.hidden_types.get(type_name)) |cached| return cached;
+    const result = isTypeHiddenByImportOverrides(ctx.current_module, ctx.use_specs, ctx.modules, ctx.reachable_modules, type_name);
+    ctx.hidden_types.put(type_name, result) catch {};
+    return result;
+}
 
 fn resolveNamespacePath(object_path: []const u8, use_specs: []const UseSpec, alloc: std.mem.Allocator) ?NamespaceResolution {
     var best_rank: u8 = 255;
@@ -1184,171 +1295,172 @@ fn hideFunctionCallName(call_node: *ast.Node) void {
     call.name = hidden_name;
 }
 
-fn rewriteModuleImportsInNode(current_module: *const ModuleInfo, node: *ast.Node, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), alloc: std.mem.Allocator) void {
-    rewriteNodeTypeFields(current_module, node, use_specs, modules, reachable_modules);
+fn rewriteModuleImportsInNode(rewrite_ctx: *RewriteContext, node: *ast.Node) void {
+    const alloc = rewrite_ctx.alloc;
+    rewriteNodeTypeFields(rewrite_ctx, node);
 
     switch (node.data) {
         .program => |prog| {
             for (prog.globals.items) |glob| {
-                rewriteModuleImportsInNode(current_module, glob, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, glob);
             }
             for (prog.functions.items) |func| {
-                rewriteModuleImportsInNode(current_module, func, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, func);
             }
         },
         .function => |func| {
             if (func.guard) |guard| {
-                rewriteModuleImportsInNode(current_module, guard, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, guard);
             }
             for (func.body.items) |stmt| {
-                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, stmt);
             }
         },
         .var_decl => |decl| {
             if (decl.initializer) |init| {
-                rewriteModuleImportsInNode(current_module, init, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, init);
             }
         },
         .assignment => |as| {
-            rewriteModuleImportsInNode(current_module, as.target, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, as.value, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, as.target);
+            rewriteModuleImportsInNode(rewrite_ctx, as.value);
         },
         .compound_assignment => |as| {
-            rewriteModuleImportsInNode(current_module, as.target, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, as.value, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, as.target);
+            rewriteModuleImportsInNode(rewrite_ctx, as.value);
         },
         .function_call => |*call| {
             for (call.args.items) |arg| {
-                rewriteModuleImportsInNode(current_module, arg, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, arg);
             }
 
-            if (!call.is_libc and isFunctionHiddenByImportOverrides(current_module, use_specs, modules, reachable_modules, call.name)) {
+            if (!call.is_libc and cachedIsFunctionHidden(rewrite_ctx, call.name)) {
                 hideFunctionCallName(node);
             }
         },
         .method_call => |method| {
-            rewriteModuleImportsInNode(current_module, method.object, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, method.object);
             for (method.args.items) |arg| {
-                rewriteModuleImportsInNode(current_module, arg, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, arg);
             }
 
             const object_path = extractRefPath(method.object, alloc) orelse return;
             defer alloc.free(object_path);
 
-            const resolved = resolveNamespacePath(object_path, use_specs, alloc) orelse return;
+            const resolved = resolveNamespacePath(object_path, rewrite_ctx.use_specs, alloc) orelse return;
             defer alloc.free(resolved.import_path);
 
-            if (!hasFunctionInReachableImport(modules, reachable_modules, resolved.import_path, method.method_name)) return;
+            if (!cachedHasFunctionInReachableImport(rewrite_ctx, resolved.import_path, method.method_name)) return;
             convertMethodCallToFunctionCall(node);
         },
         .return_stmt => |ret| {
             if (ret.expression) |expr| {
-                rewriteModuleImportsInNode(current_module, expr, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, expr);
             }
         },
-        .defer_stmt => |defer_stmt| rewriteModuleImportsInNode(current_module, defer_stmt.expression, use_specs, modules, reachable_modules, alloc),
+        .defer_stmt => |defer_stmt| rewriteModuleImportsInNode(rewrite_ctx, defer_stmt.expression),
         .if_stmt => |if_stmt| {
-            rewriteModuleImportsInNode(current_module, if_stmt.condition, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, if_stmt.condition);
             for (if_stmt.then_body.items) |stmt| {
-                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, stmt);
             }
             if (if_stmt.else_body) |else_body| {
                 for (else_body.items) |stmt| {
-                    rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                    rewriteModuleImportsInNode(rewrite_ctx, stmt);
                 }
             }
         },
         .for_stmt => |for_stmt| {
             if (for_stmt.condition) |cond| {
-                rewriteModuleImportsInNode(current_module, cond, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, cond);
             }
             for (for_stmt.body.items) |stmt| {
-                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, stmt);
             }
         },
         .c_for_stmt => |c_for| {
-            if (c_for.init) |init| rewriteModuleImportsInNode(current_module, init, use_specs, modules, reachable_modules, alloc);
-            if (c_for.condition) |cond| rewriteModuleImportsInNode(current_module, cond, use_specs, modules, reachable_modules, alloc);
-            if (c_for.increment) |inc| rewriteModuleImportsInNode(current_module, inc, use_specs, modules, reachable_modules, alloc);
+            if (c_for.init) |init| rewriteModuleImportsInNode(rewrite_ctx, init);
+            if (c_for.condition) |cond| rewriteModuleImportsInNode(rewrite_ctx, cond);
+            if (c_for.increment) |inc| rewriteModuleImportsInNode(rewrite_ctx, inc);
             for (c_for.body.items) |stmt| {
-                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, stmt);
             }
         },
-        .array_initializer => |arr| for (arr.elements.items) |elem| rewriteModuleImportsInNode(current_module, elem, use_specs, modules, reachable_modules, alloc),
+        .array_initializer => |arr| for (arr.elements.items) |elem| rewriteModuleImportsInNode(rewrite_ctx, elem),
         .array_index => |arr| {
-            rewriteModuleImportsInNode(current_module, arr.array, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, arr.index, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.array);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.index);
         },
         .array_assignment => |arr| {
-            rewriteModuleImportsInNode(current_module, arr.array, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, arr.index, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, arr.value, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.array);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.index);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.value);
         },
         .array_compound_assignment => |arr| {
-            rewriteModuleImportsInNode(current_module, arr.array, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, arr.index, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, arr.value, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.array);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.index);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.value);
         },
         .comparison => |cmp| {
-            rewriteModuleImportsInNode(current_module, cmp.lhs, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, cmp.rhs, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, cmp.lhs);
+            rewriteModuleImportsInNode(rewrite_ctx, cmp.rhs);
         },
         .binary_op => |bin| {
-            rewriteModuleImportsInNode(current_module, bin.lhs, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, bin.rhs, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, bin.lhs);
+            rewriteModuleImportsInNode(rewrite_ctx, bin.rhs);
         },
-        .unary_op => |un| rewriteModuleImportsInNode(current_module, un.operand, use_specs, modules, reachable_modules, alloc),
-        .cast => |cast| rewriteModuleImportsInNode(current_module, cast.expr, use_specs, modules, reachable_modules, alloc),
+        .unary_op => |un| rewriteModuleImportsInNode(rewrite_ctx, un.operand),
+        .cast => |cast| rewriteModuleImportsInNode(rewrite_ctx, cast.expr),
         .expression_block => |block| {
             for (block.statements.items) |stmt| {
-                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, stmt);
             }
-            rewriteModuleImportsInNode(current_module, block.result, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, block.result);
         },
         .handled_call_stmt => |handled| {
-            rewriteModuleImportsInNode(current_module, handled.call, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, handled.call);
             for (handled.handlers.items) |handler| {
                 for (handler.body.items) |stmt| {
-                    rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                    rewriteModuleImportsInNode(rewrite_ctx, stmt);
                 }
             }
         },
         .match_stmt => |match_stmt| {
-            rewriteModuleImportsInNode(current_module, match_stmt.condition, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, match_stmt.condition);
             for (match_stmt.cases.items) |match_case| {
                 for (match_case.values.items) |value| {
-                    rewriteModuleImportsInNode(current_module, value, use_specs, modules, reachable_modules, alloc);
+                    rewriteModuleImportsInNode(rewrite_ctx, value);
                 }
                 for (match_case.body.items) |stmt| {
-                    rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                    rewriteModuleImportsInNode(rewrite_ctx, stmt);
                 }
             }
         },
         .struct_initializer => |struct_init| {
             for (struct_init.field_values.items) |field_val| {
-                rewriteModuleImportsInNode(current_module, field_val.value, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, field_val.value);
             }
         },
-        .qualified_identifier => |qual| rewriteModuleImportsInNode(current_module, qual.base, use_specs, modules, reachable_modules, alloc),
-        .simd_initializer => |simd_init| for (simd_init.elements.items) |elem| rewriteModuleImportsInNode(current_module, elem, use_specs, modules, reachable_modules, alloc),
+        .qualified_identifier => |qual| rewriteModuleImportsInNode(rewrite_ctx, qual.base),
+        .simd_initializer => |simd_init| for (simd_init.elements.items) |elem| rewriteModuleImportsInNode(rewrite_ctx, elem),
         .simd_index => |simd_idx| {
-            rewriteModuleImportsInNode(current_module, simd_idx.simd, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, simd_idx.index, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_idx.simd);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_idx.index);
         },
         .simd_assignment => |simd_ass| {
-            rewriteModuleImportsInNode(current_module, simd_ass.simd, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, simd_ass.index, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, simd_ass.value, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_ass.simd);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_ass.index);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_ass.value);
         },
         .simd_compound_assignment => |simd_ass| {
-            rewriteModuleImportsInNode(current_module, simd_ass.simd, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, simd_ass.index, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, simd_ass.value, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_ass.simd);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_ass.index);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_ass.value);
         },
         .simd_method_call => |simd_method| {
-            rewriteModuleImportsInNode(current_module, simd_method.simd, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_method.simd);
             for (simd_method.args.items) |arg| {
-                rewriteModuleImportsInNode(current_module, arg, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, arg);
             }
         },
         else => {},
@@ -1407,7 +1519,7 @@ fn modulePathByName(module_registrations: []const ModuleRegistration, module_nam
     return null;
 }
 
-fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
+fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator, timing: ?*ParseTiming) !ast.ArenaAST {
     var arena_ast = ast.ArenaAST.init(alloc);
     const arena = arena_ast.allocator();
     clearModuleBindings(ctx, alloc);
@@ -1423,13 +1535,16 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
     var loaded_paths = std.StringHashMap(void).init(alloc);
     defer loaded_paths.deinit();
 
+    const load_start = std.time.nanoTimestamp();
     for (ctx.input_files.items) |input_file| {
         if (loaded_paths.contains(input_file)) continue;
         const module = try parseModuleFile(input_file, arena, alloc, ctx);
         try loaded_paths.put(utils.dupe(u8, alloc, input_file), {});
         try modules.append(alloc, module);
     }
+    if (timing) |t| t.load_time_ns = @intCast(std.time.nanoTimestamp() - load_start);
 
+    const std_start = std.time.nanoTimestamp();
     var scan_idx: usize = 0;
     while (scan_idx < modules.items.len) : (scan_idx += 1) {
         const module = modules.items[scan_idx];
@@ -1444,7 +1559,9 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
             };
         }
     }
+    if (timing) |t| t.std_time_ns = @intCast(std.time.nanoTimestamp() - std_start);
 
+    const resolve_start = std.time.nanoTimestamp();
     var module_names = std.StringHashMap(void).init(alloc);
     defer module_names.deinit();
     for (modules.items) |module| {
@@ -1506,15 +1623,21 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
             }
         }
     }
+    if (timing) |t| t.resolve_time_ns = @intCast(std.time.nanoTimestamp() - resolve_start);
 
+    const rewrite_start = std.time.nanoTimestamp();
     for (modules.items) |*module| {
         if (!reachable_modules.contains(module.name)) continue;
         var use_specs = std.ArrayList(UseSpec){};
         defer use_specs.deinit(alloc);
         try collectUseSpecs(module, &use_specs, alloc);
-        rewriteModuleImportsInNode(module, module.ast, use_specs.items, modules.items, &reachable_modules, alloc);
+        var rewrite_ctx = RewriteContext.init(module, use_specs.items, modules.items, &reachable_modules, alloc);
+        defer rewrite_ctx.deinit();
+        rewriteModuleImportsInNode(&rewrite_ctx, module.ast);
     }
+    if (timing) |t| t.rewrite_time_ns = @intCast(std.time.nanoTimestamp() - rewrite_start);
 
+    const merge_start = std.time.nanoTimestamp();
     for (modules.items) |*module| {
         if (reachable_modules.contains(module.name)) {
             try appendModuleFlagsToContext(ctx, module, alloc);
@@ -1572,6 +1695,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
             },
         }
     }
+    if (timing) |t| t.merge_time_ns = @intCast(std.time.nanoTimestamp() - merge_start);
 
     arena_ast.setRoot(merged_program);
     return arena_ast;
@@ -2980,6 +3104,11 @@ pub fn main() !u8 {
     const total_start = std.time.nanoTimestamp();
     var stats = CompilationStats{
         .parse_time_ns = 0,
+        .parse_load_time_ns = 0,
+        .parse_std_time_ns = 0,
+        .parse_resolve_time_ns = 0,
+        .parse_rewrite_time_ns = 0,
+        .parse_merge_time_ns = 0,
         .codegen_time_ns = 0,
         .backend_time_ns = 0,
         .link_time_ns = 0,
@@ -3015,12 +3144,18 @@ pub fn main() !u8 {
     }
 
     const parse_start = std.time.nanoTimestamp();
-    var ast_root = parseMultiFile(&ctx, allocator) catch {
+    var parse_timing = ParseTiming{};
+    var ast_root = parseMultiFile(&ctx, allocator, &parse_timing) catch {
         return 1;
     };
     emitUnknownDefineOverrideWarnings(&ctx);
     const parse_end = std.time.nanoTimestamp();
     stats.parse_time_ns = @intCast(parse_end - parse_start);
+    stats.parse_load_time_ns = parse_timing.load_time_ns;
+    stats.parse_std_time_ns = parse_timing.std_time_ns;
+    stats.parse_resolve_time_ns = parse_timing.resolve_time_ns;
+    stats.parse_rewrite_time_ns = parse_timing.rewrite_time_ns;
+    stats.parse_merge_time_ns = parse_timing.merge_time_ns;
 
     defer ast_root.deinit();
     if (ctx.show_ast) {
