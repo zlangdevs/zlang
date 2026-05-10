@@ -1,5 +1,6 @@
 const std = @import("std");
 const abi = @import("abi.zig");
+const host_mod = @import("host.zig");
 const index_mod = @import("index.zig");
 const manifest = @import("manifest.zig");
 const package_mod = @import("package.zig");
@@ -15,7 +16,44 @@ pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     if (std.mem.eql(u8, args[1], "validate-module")) return try validateModule(args, alloc, io);
     if (std.mem.eql(u8, args[1], "module-info")) return try moduleInfo(args, alloc, io);
     if (std.mem.eql(u8, args[1], "module-abi")) return try moduleAbi(args);
+    if (std.mem.eql(u8, args[1], "module-dryrun")) return try moduleDryrun(args, alloc, io);
     return null;
+}
+
+fn moduleDryrun(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
+    var pkg = (try openPackage(args, alloc, io, "zlang module-dryrun <file.zlx>")) orelse return 1;
+    defer pkg.deinit(alloc);
+
+    switch (abi.checkApiRange(pkg.manifest.api_min, pkg.manifest.api_max)) {
+        .compatible => {},
+        .api_too_old => {
+            std.debug.print("zlx: package api {d}-{d} is older than host api {d}-{d}\n", .{ pkg.manifest.api_min, pkg.manifest.api_max, abi.api_min_supported, abi.api_max_supported });
+            return 1;
+        },
+        .api_too_new => {
+            std.debug.print("zlx: package api {d}-{d} is newer than host api {d}-{d}\n", .{ pkg.manifest.api_min, pkg.manifest.api_max, abi.api_min_supported, abi.api_max_supported });
+            return 1;
+        },
+    }
+
+    var host = host_mod.Host.init(alloc);
+    defer host.deinit();
+    host_mod.simulateFromManifest(&host, pkg.manifest) catch |err| {
+        std.debug.print("zlx: dryrun failed: {}\n", .{err});
+        return 1;
+    };
+
+    const c = host.counts;
+    std.debug.print("dryrun {s} {s}:\n", .{ pkg.manifest.name, pkg.manifest.version });
+    std.debug.print("  syntax_blocks: {d} (duplicates {d})\n", .{ c.syntax_blocks, c.duplicate_syntax_blocks });
+    std.debug.print("  modules:       {d} (duplicates {d})\n", .{ c.modules, c.duplicate_modules });
+    std.debug.print("  cli_flags:     {d} (duplicates {d})\n", .{ c.cli_flags, c.duplicate_cli_flags });
+    std.debug.print("  link_flags:    {d} (duplicates {d})\n", .{ c.link_flags, c.duplicate_link_flags });
+    std.debug.print("  diagnostics:   {d}\n", .{c.diagnostics});
+
+    const dups = c.duplicate_syntax_blocks + c.duplicate_modules + c.duplicate_cli_flags + c.duplicate_link_flags + c.duplicate_help_sections;
+    if (dups != 0) return 1;
+    return 0;
 }
 
 fn moduleAbi(args: []const [:0]u8) !u8 {
