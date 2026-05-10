@@ -51,7 +51,10 @@ pub fn loadAndRegister(alloc: std.mem.Allocator, host: *host_mod.Host, so_path: 
     const desc_version = std.mem.span(desc.version);
     if (!std.mem.eql(u8, probe_version, desc_version)) return error.ProbeInitMismatch;
 
+    const desc_name_for_owner = std.mem.span(desc.name);
+    host.setCurrentOwner(desc_name_for_owner) catch return error.RegisterFailed;
     const rc = desc.register_plugin(&host.api);
+    host.clearCurrentOwner();
     if (rc != 0) return error.RegisterFailed;
 
     return .{
