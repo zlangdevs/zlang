@@ -36,6 +36,8 @@ Done on branch `zlx`:
 - Added `src/zlx/loader.zig`: `std.DynLib`-backed loader that opens a `.so`, resolves `zlang_plugin_probe` and `zlang_plugin_init`, validates the probe API range, calls init, checks the desc/probe metadata agree, and invokes `register_plugin` against the host stubs.
 - Added `zlang module-load <file.so>`: loads a plugin and prints registration counts/diagnostics.
 - Added `tests/plugins/dummy_plugin.zig`: reference plugin exercising every host stub (compile with `zig build-lib -dynamic -fPIC tests/plugins/dummy_plugin.zig`).
+- `zlang install` now also installs a sidecar `.so` next to the input `.zlx` (same stem) into `~/.zlang/modules/<name>.so`; `del-module` removes it.
+- Added `zlang module-loadall`: walks the index in topological load order, loads every plugin with a sidecar through the host stubs, and reports per-plugin status plus aggregated counts.
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
 
 Not done yet:
@@ -47,9 +49,8 @@ Not done yet:
 - Link flag activation by feature usage.
 
 Next planned increments:
-- Auto-load installed plugins for compilation: walk the index in load-order, dlopen each package's `entry`, and accumulate host registrations for the current build.
-- Wire host registrations into the real compiler state (parser block dispatch table, CLI flag table, link-flag list) instead of the in-memory stub tables.
-- Extend the package layout abstraction with a real container layout (archive extraction) alongside the existing `single_manifest` layout.
+- Wire host registrations into the real compiler state (parser block dispatch table, CLI flag table, link-flag list) instead of the in-memory stub tables, so a compile invocation can call `module-loadall` internally and act on what plugins register.
+- Extend the package layout abstraction with a real container layout (archive extraction) so `entry`/`std/*.zl` paths are extracted from the `.zlx` instead of relying on a manifest-side sidecar `.so`.
 
 ---
 
@@ -156,6 +157,7 @@ zlang module-info ./brainfuck.zlx
 zlang module-abi
 zlang module-dryrun ./brainfuck.zlx
 zlang module-load ./libbrainfuck.so
+zlang module-loadall
 zlang validate-module ./brainfuck.zlx
 zlang del-module brainfuck
 ```

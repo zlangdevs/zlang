@@ -19,7 +19,96 @@ pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     if (std.mem.eql(u8, args[1], "module-abi")) return try moduleAbi(args);
     if (std.mem.eql(u8, args[1], "module-dryrun")) return try moduleDryrun(args, alloc, io);
     if (std.mem.eql(u8, args[1], "module-load")) return try moduleLoad(args, alloc);
+    if (std.mem.eql(u8, args[1], "module-loadall")) return try moduleLoadAll(args, alloc, io);
     return null;
+}
+
+fn moduleLoadAll(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
+    if (args.len != 2) {
+        std.debug.print("Usage: zlang module-loadall\n", .{});
+        return 1;
+    }
+
+    var store = store_mod.Store.init(alloc) catch |err| {
+        std.debug.print("zlx: could not locate module store: {}\n", .{err});
+        return 1;
+    };
+    defer store.deinit(alloc);
+
+    const loaded_index = index_mod.load(alloc, io, store) catch |err| {
+        std.debug.print("zlx: could not read module index: {}\n", .{err});
+        return 1;
+    };
+    defer loaded_index.deinit(alloc);
+
+    var rebuilt: ?std.ArrayList(index_mod.Entry) = null;
+    defer if (rebuilt) |*r| index_mod.deinitEntries(r, alloc);
+    const modules = if (!loaded_index.parsed) blk: {
+        rebuilt = index_mod.rebuild(alloc, io, store) catch |err| {
+            std.debug.print("zlx: could not rebuild module index: {}\n", .{err});
+            return 1;
+        };
+        break :blk rebuilt.?.items;
+    } else loaded_index.value.modules;
+
+    var order = index_mod.loadOrder(alloc, modules) catch |err| {
+        std.debug.print("zlx: could not compute load order: {}\n", .{err});
+        return 1;
+    };
+    defer order.deinit(alloc);
+
+    if (order.items.len == 0) {
+        std.debug.print("No loadable modules\n", .{});
+        return 0;
+    }
+
+    var host = host_mod.Host.init(alloc);
+    defer host.deinit();
+
+    var loaded: usize = 0;
+    var skipped: usize = 0;
+    var failed: usize = 0;
+    for (order.items) |idx| {
+        const entry = modules[idx];
+        const sidecar = store.pluginPath(alloc, entry.name) catch |err| {
+            std.debug.print("  {s}: path error: {}\n", .{ entry.name, err });
+            failed += 1;
+            continue;
+        };
+        defer alloc.free(sidecar);
+
+        std.Io.Dir.cwd().access(io, sidecar, .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                std.debug.print("  {s}: skipped (no plugin sidecar)\n", .{entry.name});
+                skipped += 1;
+                continue;
+            },
+            else => {
+                std.debug.print("  {s}: access error: {}\n", .{ entry.name, err });
+                failed += 1;
+                continue;
+            },
+        };
+
+        const info = loader_mod.loadAndRegister(alloc, &host, sidecar) catch |err| {
+            std.debug.print("  {s}: load failed: {s}\n", .{ entry.name, @errorName(err) });
+            failed += 1;
+            continue;
+        };
+        defer info.deinit(alloc);
+        std.debug.print("  {s}: loaded {s} {s} (api {d}-{d})\n", .{ entry.name, info.name, info.version, info.api_min, info.api_max });
+        loaded += 1;
+    }
+
+    const c = host.counts;
+    std.debug.print("totals: loaded={d} skipped={d} failed={d}\n", .{ loaded, skipped, failed });
+    std.debug.print("  syntax_blocks: {d} (duplicates {d})\n", .{ c.syntax_blocks, c.duplicate_syntax_blocks });
+    std.debug.print("  modules:       {d} (duplicates {d})\n", .{ c.modules, c.duplicate_modules });
+    std.debug.print("  cli_flags:     {d} (duplicates {d})\n", .{ c.cli_flags, c.duplicate_cli_flags });
+    std.debug.print("  link_flags:    {d} (duplicates {d})\n", .{ c.link_flags, c.duplicate_link_flags });
+    std.debug.print("  diagnostics:   {d}\n", .{c.diagnostics});
+    if (failed != 0) return 1;
+    return 0;
 }
 
 fn moduleLoad(args: []const [:0]u8, alloc: std.mem.Allocator) !u8 {
@@ -166,6 +255,11 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     try out_writer.interface.writeAll(package);
     try out_writer.interface.flush();
 
+    const sidecar_installed = installSidecar(alloc, io, store, args[2], parsed.name) catch |err| {
+        std.debug.print("zlx: could not install plugin sidecar: {}\n", .{err});
+        return 1;
+    };
+
     const loaded_index = index_mod.load(alloc, io, store) catch |err| {
         std.debug.print("zlx: could not read module index: {}\n", .{err});
         return 1;
@@ -214,10 +308,35 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
 
     if (status == .incompatible) {
         std.debug.print("Installed {s} {s} as incompatible with current target {s}\n", .{ parsed.name, parsed.version, manifest.currentTargetName() });
+    } else if (sidecar_installed) {
+        std.debug.print("Installed {s} {s} (with plugin sidecar)\n", .{ parsed.name, parsed.version });
     } else {
         std.debug.print("Installed {s} {s}\n", .{ parsed.name, parsed.version });
     }
     return 0;
+}
+
+fn installSidecar(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store, source_zlx: []const u8, name: []const u8) !bool {
+    if (!std.mem.endsWith(u8, source_zlx, ".zlx")) return false;
+    const stem = source_zlx[0 .. source_zlx.len - 4];
+    const sidecar_src = try std.fmt.allocPrint(alloc, "{s}.so", .{stem});
+    defer alloc.free(sidecar_src);
+
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, sidecar_src, alloc, .limited(64 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    defer alloc.free(bytes);
+
+    const dest = try store.pluginPath(alloc, name);
+    defer alloc.free(dest);
+    var out = try std.Io.Dir.cwd().createFile(io, dest, .{ .truncate = true });
+    defer out.close(io);
+    var buf: [4096]u8 = undefined;
+    var writer = out.writer(io, &buf);
+    try writer.interface.writeAll(bytes);
+    try writer.interface.flush();
+    return true;
 }
 
 fn listModules(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
@@ -332,6 +451,19 @@ fn delModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
         },
         else => {
             std.debug.print("zlx: could not delete {s}: {}\n", .{ path, err });
+            return 1;
+        },
+    };
+
+    const sidecar = store.pluginPath(alloc, args[2]) catch |err| {
+        std.debug.print("zlx: could not build plugin path: {}\n", .{err});
+        return 1;
+    };
+    defer alloc.free(sidecar);
+    std.Io.Dir.deleteFileAbsolute(io, sidecar) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => {
+            std.debug.print("zlx: could not delete {s}: {}\n", .{ sidecar, err });
             return 1;
         },
     };
