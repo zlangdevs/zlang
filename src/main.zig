@@ -3563,6 +3563,21 @@ pub fn main(init: std.process.Init) !u8 {
     };
     defer ctx.deinit(allocator);
 
+    var plugin_host = zlx_host.Host.init(allocator);
+    defer plugin_host.deinit();
+    _ = zlx_runtime.loadAllInstalled(allocator, process_io, &plugin_host) catch {};
+    for (plugin_host.link_flags.items) |flag| {
+        const flag_copy = utils.dupe(u8, allocator, flag);
+        if (!containsString(ctx.extra_args.items, flag_copy)) {
+            try ctx.extra_args.append(allocator, flag_copy);
+        } else {
+            allocator.free(flag_copy);
+        }
+    }
+    if (ctx.verbose and !ctx.quiet and plugin_host.link_flags.items.len != 0) {
+        std.debug.print("zlx: {d} plugin link flag(s) merged\n", .{plugin_host.link_flags.items.len});
+    }
+
     const total_start = nanoTimestamp();
     var stats = CompilationStats{
         .parse_time_ns = 0,

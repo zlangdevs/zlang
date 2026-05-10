@@ -87,7 +87,7 @@ fn registerPlugin(host: *HostApi) callconv(.c) c_int {
     _ = host.register_syntax_block(host, "dummy_block", &syntax, dummyHandler);
     _ = host.register_cli_flag(host, "-dummy", "dummy flag", 0);
     _ = host.register_module(host, "dummy", "std/dummy.zl");
-    _ = host.register_link_flag(host, "-ldummy");
+    _ = host.register_link_flag(host, "-lm");
     host.diagnostic(host, 3, null, 0, 0, "dummy plugin loaded", null);
     return 0;
 }
