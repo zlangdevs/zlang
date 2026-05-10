@@ -18,6 +18,7 @@ const zlx_commands = @import("zlx/commands.zig");
 const zlx_host = @import("zlx/host.zig");
 const zlx_runtime = @import("zlx/runtime.zig");
 const zlx_store = @import("zlx/store.zig");
+const zlx_preprocess = @import("zlx/preprocess.zig");
 
 const allocator = std.heap.page_allocator;
 var process_io: std.Io = undefined;
@@ -3677,6 +3678,42 @@ pub fn main(init: std.process.Init) !u8 {
         }
         if (injected_link_flags != 0) {
             std.debug.print("zlx: activated {d} plugin link flag(s)\n", .{injected_link_flags});
+        }
+    }
+
+    if (plugin_host.syntax_blocks.items.len != 0) {
+        var total_expansions: usize = 0;
+        for (ctx.input_files.items, 0..) |path, idx| {
+            const bytes = std.Io.Dir.cwd().readFileAlloc(process_io, path, allocator, .limited(64 * 1024 * 1024)) catch continue;
+            defer allocator.free(bytes);
+            const result = zlx_preprocess.expandExtensionBlocks(allocator, &plugin_host, path, bytes) catch |err| {
+                std.debug.print("zlx: extension block expansion failed for {s}: {s}\n", .{ path, @errorName(err) });
+                return 1;
+            };
+            if (result.report.expansions == 0) {
+                allocator.free(result.source);
+                continue;
+            }
+            total_expansions += result.report.expansions;
+            const tmp_path = std.fmt.allocPrint(allocator, "/tmp/zlang-zlx-{d}-{d}-{s}", .{ @as(u64, @intCast(nanoTimestamp())), idx, std.fs.path.basename(path) }) catch {
+                allocator.free(result.source);
+                continue;
+            };
+            var tmp = std.Io.Dir.cwd().createFile(process_io, tmp_path, .{ .truncate = true }) catch {
+                allocator.free(tmp_path);
+                allocator.free(result.source);
+                continue;
+            };
+            defer tmp.close(process_io);
+            var buf: [4096]u8 = undefined;
+            var writer = tmp.writer(process_io, &buf);
+            writer.interface.writeAll(result.source) catch {};
+            writer.interface.flush() catch {};
+            allocator.free(result.source);
+            ctx.input_files.items[idx] = tmp_path;
+        }
+        if (ctx.verbose and !ctx.quiet and total_expansions != 0) {
+            std.debug.print("zlx: expanded {d} extension block(s)\n", .{total_expansions});
         }
     }
 

@@ -6,6 +6,7 @@ pub const SyntaxRegistration = struct {
     mode: abi.DelimiterMode,
     terminator: ?[]u8,
     owner: ?[]u8,
+    handler: ?abi.BlockHandler,
 };
 
 pub const ModuleRegistration = struct {
@@ -155,7 +156,6 @@ fn registerSyntaxBlock(
     syntax: *const abi.BlockSyntax,
     handler: abi.BlockHandler,
 ) callconv(.c) c_int {
-    _ = handler;
     const host = Host.fromApi(host_api);
     const name_slice = std.mem.span(name);
     for (host.syntax_blocks.items) |item| {
@@ -171,6 +171,7 @@ fn registerSyntaxBlock(
         .mode = syntax.mode,
         .terminator = term_owned,
         .owner = host.dupeOwner(),
+        .handler = handler,
     }) catch return @intFromEnum(abi.RegisterResult.invalid);
     host.counts.syntax_blocks += 1;
     return @intFromEnum(abi.RegisterResult.ok);
@@ -303,17 +304,20 @@ pub fn simulateFromManifest(host: *Host, m: manifest_mod.Manifest) !void {
 fn noopHandler(host: *abi.HostApi, input: *const abi.BlockInput, output: *abi.BlockOutput) callconv(.c) c_int {
     _ = host;
     _ = input;
-    output.* = .{ .generated_zlang_source = "", .generated_zlang_source_len = 0 };
+    const empty: []const u8 = &[_]u8{};
+    output.* = .{ .generated_zlang_source = empty.ptr, .generated_zlang_source_len = 0 };
     return 0;
 }
+
+const testHandler: abi.BlockHandler = noopHandler;
 
 test "host records registrations and detects duplicates" {
     const alloc = std.testing.allocator;
     var host = Host.init(alloc);
     defer host.deinit();
     const syntax = abi.BlockSyntax{ .mode = .brace_counting, .terminator = null };
-    const r1 = host.api.register_syntax_block(&host.api, "brainfuck", &syntax, noopHandler);
-    const r2 = host.api.register_syntax_block(&host.api, "brainfuck", &syntax, noopHandler);
+    const r1 = host.api.register_syntax_block(&host.api, "brainfuck", &syntax, testHandler);
+    const r2 = host.api.register_syntax_block(&host.api, "brainfuck", &syntax, testHandler);
     try std.testing.expectEqual(@as(c_int, @intFromEnum(abi.RegisterResult.ok)), r1);
     try std.testing.expectEqual(@as(c_int, @intFromEnum(abi.RegisterResult.duplicate)), r2);
     try std.testing.expectEqual(@as(usize, 1), host.counts.syntax_blocks);
