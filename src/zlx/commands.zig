@@ -10,7 +10,33 @@ pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     if (std.mem.eql(u8, args[1], "install")) return try install(args, alloc, io);
     if (std.mem.eql(u8, args[1], "list-modules")) return try listModules(args, alloc, io);
     if (std.mem.eql(u8, args[1], "del-module")) return try delModule(args, alloc, io);
+    if (std.mem.eql(u8, args[1], "validate-module")) return try validateModule(args, alloc, io);
+    if (std.mem.eql(u8, args[1], "module-info")) return try moduleInfo(args, alloc, io);
     return null;
+}
+
+fn loadPackageManifest(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io, usage: []const u8) !?manifest.Manifest {
+    if (args.len != 3) {
+        std.debug.print("Usage: {s}\n", .{usage});
+        return null;
+    }
+
+    const source_path = args[2];
+    if (!std.mem.endsWith(u8, source_path, ".zlx")) {
+        std.debug.print("zlx: expected a .zlx package\n", .{});
+        return null;
+    }
+
+    const package = std.Io.Dir.cwd().readFileAlloc(io, source_path, alloc, .limited(max_package_size)) catch |err| {
+        std.debug.print("zlx: could not read {s}: {}\n", .{ source_path, err });
+        return null;
+    };
+    defer alloc.free(package);
+
+    return manifest.parse(alloc, package) catch |err| {
+        std.debug.print("zlx: invalid manifest in {s}: {}\n", .{ source_path, err });
+        return null;
+    };
 }
 
 fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
@@ -18,21 +44,18 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
         std.debug.print("Usage: zlang install <file.zlx>\n", .{});
         return 1;
     }
-
-    const source_path = args[2];
-    if (!std.mem.endsWith(u8, source_path, ".zlx")) {
+    if (!std.mem.endsWith(u8, args[2], ".zlx")) {
         std.debug.print("zlx: expected a .zlx package\n", .{});
         return 1;
     }
 
-    const package = std.Io.Dir.cwd().readFileAlloc(io, source_path, alloc, .limited(max_package_size)) catch |err| {
-        std.debug.print("zlx: could not read {s}: {}\n", .{ source_path, err });
+    const package = std.Io.Dir.cwd().readFileAlloc(io, args[2], alloc, .limited(max_package_size)) catch |err| {
+        std.debug.print("zlx: could not read {s}: {}\n", .{ args[2], err });
         return 1;
     };
     defer alloc.free(package);
-
     const parsed = manifest.parse(alloc, package) catch |err| {
-        std.debug.print("zlx: invalid manifest in {s}: {}\n", .{ source_path, err });
+        std.debug.print("zlx: invalid manifest in {s}: {}\n", .{ args[2], err });
         return 1;
     };
     defer manifest.free(alloc, parsed);
@@ -191,4 +214,40 @@ fn delModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
 
     std.debug.print("Deleted {s}\n", .{args[2]});
     return 0;
+}
+
+fn validateModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
+    const parsed = (try loadPackageManifest(args, alloc, io, "zlang validate-module <file.zlx>")) orelse return 1;
+    defer manifest.free(alloc, parsed);
+    std.debug.print("Valid module: {s} {s}\n", .{ parsed.name, parsed.version });
+    return 0;
+}
+
+fn moduleInfo(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
+    const parsed = (try loadPackageManifest(args, alloc, io, "zlang module-info <file.zlx>")) orelse return 1;
+    defer manifest.free(alloc, parsed);
+
+    std.debug.print("name: {s}\n", .{parsed.name});
+    std.debug.print("version: {s}\n", .{parsed.version});
+    std.debug.print("format: {d}\n", .{parsed.format_version});
+    std.debug.print("api: {d}-{d}\n", .{ parsed.api_min, parsed.api_max });
+    printStringList("provides", parsed.provides);
+    printStringList("targets", parsed.targets);
+    printStringList("dependencies", parsed.dependencies);
+    printStringList("native_libs", parsed.native_libs);
+    printStringList("link_flags", parsed.link_flags);
+    printStringList("expose", parsed.expose);
+    return 0;
+}
+
+fn printStringList(label: []const u8, values: []const []const u8) void {
+    std.debug.print("{s}:", .{label});
+    if (values.len == 0) {
+        std.debug.print(" none\n", .{});
+        return;
+    }
+    std.debug.print("\n", .{});
+    for (values) |value| {
+        std.debug.print("  - {s}\n", .{value});
+    }
 }
