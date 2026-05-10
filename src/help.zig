@@ -102,22 +102,17 @@ pub fn printHelp() void {
         \\
 , .{
         bold,   reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
+        yellow, reset, yellow, reset, yellow, reset, yellow, reset,
+        yellow, reset, yellow, reset, yellow, reset, yellow, reset,
+        yellow, reset, yellow, reset, yellow, reset, yellow, reset,
+        yellow, reset, yellow, reset, yellow, reset,
     });
+
+    std.debug.print(
+        \\  {s}--no-extensions{s} Skip loading native .zlx plugins (keeps pure .zl modules)
+        \\  {s}--isolated{s}      Disable plugins and plugin .zl modules for reproducible builds
+        \\
+    , .{ yellow, reset, yellow, reset });
 
     std.debug.print(
         \\{s}Brainfuck Mode:{s}

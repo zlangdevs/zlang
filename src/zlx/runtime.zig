@@ -49,6 +49,39 @@ pub fn loadAllInstalled(alloc: std.mem.Allocator, io: std.Io, host: *host_mod.Ho
     return report;
 }
 
+const manifest_mod = @import("manifest.zig");
+const package_mod = @import("package.zig");
+
+pub fn loadManifestModulesOnly(alloc: std.mem.Allocator, io: std.Io, host: *host_mod.Host) !void {
+    var store = store_mod.Store.init(alloc) catch return;
+    defer store.deinit(alloc);
+
+    const loaded_index = index_mod.load(alloc, io, store) catch return;
+    defer loaded_index.deinit(alloc);
+
+    var rebuilt: ?std.ArrayList(index_mod.Entry) = null;
+    defer if (rebuilt) |*r| index_mod.deinitEntries(r, alloc);
+    const modules = if (!loaded_index.parsed) blk: {
+        rebuilt = index_mod.rebuild(alloc, io, store) catch return;
+        break :blk rebuilt.?.items;
+    } else loaded_index.value.modules;
+
+    for (modules) |entry| {
+        if (entry.status != .installed) continue;
+        var pkg = package_mod.open(alloc, io, entry.path) catch continue;
+        defer pkg.deinit(alloc);
+        host.setCurrentOwner(pkg.manifest.name) catch continue;
+        defer host.clearCurrentOwner();
+        for (pkg.manifest.modules) |mod| {
+            const name_z = alloc.dupeZ(u8, mod.name) catch continue;
+            defer alloc.free(name_z);
+            const path_z = alloc.dupeZ(u8, mod.path) catch continue;
+            defer alloc.free(path_z);
+            _ = host.api.register_module(&host.api, name_z.ptr, path_z.ptr);
+        }
+    }
+}
+
 pub fn scanUseImports(alloc: std.mem.Allocator, io: std.Io, paths: []const []const u8) !std.StringHashMap(void) {
     var result: std.StringHashMap(void) = .init(alloc);
     errdefer {

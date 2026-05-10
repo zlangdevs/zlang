@@ -413,6 +413,8 @@ pub const Context = struct {
     function_module_bindings: std.ArrayList(SymbolModuleBinding),
     global_module_bindings: std.ArrayList(SymbolModuleBinding),
     plugin_flags: std.ArrayList([]const u8),
+    no_extensions: bool = false,
+    isolated: bool = false,
 
     pub fn init() Context {
         return Context{
@@ -2394,6 +2396,11 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     try context.extra_args.append(allocator, combined);
                 } else if (std.mem.startsWith(u8, flag, "-Wl,")) {
                     try context.extra_args.append(allocator, flag);
+                } else if (std.mem.eql(u8, flag, "--no-extensions")) {
+                    context.no_extensions = true;
+                } else if (std.mem.eql(u8, flag, "--isolated")) {
+                    context.isolated = true;
+                    context.no_extensions = true;
                 } else if (std.mem.eql(u8, flag, "-help") or std.mem.eql(u8, flag, "--help")) {
                     return errors.CLIError.NoHelp;
                 } else {
@@ -3626,9 +3633,21 @@ pub fn main(init: std.process.Init) !u8 {
 
     var plugin_host = zlx_host.Host.init(allocator);
     defer plugin_host.deinit();
-    _ = zlx_runtime.loadAllInstalled(allocator, process_io, &plugin_host) catch {};
-    plugin_host_ptr = &plugin_host;
+    if (!ctx.no_extensions) {
+        _ = zlx_runtime.loadAllInstalled(allocator, process_io, &plugin_host) catch {};
+        plugin_host_ptr = &plugin_host;
+    } else if (!ctx.isolated) {
+        zlx_runtime.loadManifestModulesOnly(allocator, process_io, &plugin_host) catch {};
+        plugin_host_ptr = &plugin_host;
+    }
     defer plugin_host_ptr = null;
+    if (ctx.verbose and !ctx.quiet and ctx.no_extensions) {
+        if (ctx.isolated) {
+            std.debug.print("zlx: isolated mode, plugins and extension modules disabled\n", .{});
+        } else {
+            std.debug.print("zlx: --no-extensions, native plugins disabled\n", .{});
+        }
+    }
 
     plugin_module_paths = .init(allocator);
     if (zlx_store.Store.init(allocator)) |store| {
