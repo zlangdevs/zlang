@@ -3570,14 +3570,6 @@ pub fn main(init: std.process.Init) !u8 {
     var plugin_host = zlx_host.Host.init(allocator);
     defer plugin_host.deinit();
     _ = zlx_runtime.loadAllInstalled(allocator, process_io, &plugin_host) catch {};
-    for (plugin_host.link_flags.items) |flag| {
-        const flag_copy = utils.dupe(u8, allocator, flag);
-        if (!containsString(ctx.extra_args.items, flag_copy)) {
-            try ctx.extra_args.append(allocator, flag_copy);
-        } else {
-            allocator.free(flag_copy);
-        }
-    }
     {
         var ei: usize = 0;
         while (ei < ctx.extra_args.items.len) {
@@ -3597,12 +3589,32 @@ pub fn main(init: std.process.Init) !u8 {
             }
         }
     }
-    if (ctx.verbose and !ctx.quiet) {
-        if (plugin_host.link_flags.items.len != 0) {
-            std.debug.print("zlx: {d} plugin link flag(s) merged\n", .{plugin_host.link_flags.items.len});
+    var used_owners: std.StringHashMap(void) = .init(allocator);
+    defer used_owners.deinit();
+    for (ctx.plugin_flags.items) |used_flag| {
+        for (plugin_host.cli_flags.items) |flag| {
+            if (!std.mem.eql(u8, flag.name, used_flag)) continue;
+            if (flag.owner) |o| _ = used_owners.put(o, {}) catch {};
         }
+    }
+    var injected_link_flags: usize = 0;
+    for (plugin_host.link_flags.items) |entry| {
+        const owner = entry.owner orelse continue;
+        if (!used_owners.contains(owner)) continue;
+        const flag_copy = utils.dupe(u8, allocator, entry.flag);
+        if (!containsString(ctx.extra_args.items, flag_copy)) {
+            try ctx.extra_args.append(allocator, flag_copy);
+            injected_link_flags += 1;
+        } else {
+            allocator.free(flag_copy);
+        }
+    }
+    if (ctx.verbose and !ctx.quiet) {
         if (ctx.plugin_flags.items.len != 0) {
             std.debug.print("zlx: consumed {d} plugin CLI flag(s)\n", .{ctx.plugin_flags.items.len});
+        }
+        if (injected_link_flags != 0) {
+            std.debug.print("zlx: activated {d} plugin link flag(s)\n", .{injected_link_flags});
         }
     }
 

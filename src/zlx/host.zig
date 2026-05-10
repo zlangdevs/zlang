@@ -5,22 +5,31 @@ pub const SyntaxRegistration = struct {
     name: []u8,
     mode: abi.DelimiterMode,
     terminator: ?[]u8,
+    owner: ?[]u8,
 };
 
 pub const ModuleRegistration = struct {
     name: []u8,
     path: []u8,
+    owner: ?[]u8,
 };
 
 pub const CliFlagRegistration = struct {
     name: []u8,
     help: ?[]u8,
     mandatory: bool,
+    owner: ?[]u8,
 };
 
 pub const HelpSection = struct {
     section_id: []u8,
     text: []u8,
+    owner: ?[]u8,
+};
+
+pub const LinkFlagRegistration = struct {
+    flag: []u8,
+    owner: ?[]u8,
 };
 
 pub const Diagnostic = struct {
@@ -52,10 +61,26 @@ pub const Host = struct {
     syntax_blocks: std.ArrayList(SyntaxRegistration) = .empty,
     modules: std.ArrayList(ModuleRegistration) = .empty,
     cli_flags: std.ArrayList(CliFlagRegistration) = .empty,
-    link_flags: std.ArrayList([]u8) = .empty,
+    link_flags: std.ArrayList(LinkFlagRegistration) = .empty,
     help_sections: std.ArrayList(HelpSection) = .empty,
     diagnostics: std.ArrayList(Diagnostic) = .empty,
     counts: Counts = .{},
+    current_owner: ?[]u8 = null,
+
+    pub fn setCurrentOwner(self: *Host, name: []const u8) !void {
+        self.clearCurrentOwner();
+        self.current_owner = try self.alloc.dupe(u8, name);
+    }
+
+    pub fn clearCurrentOwner(self: *Host) void {
+        if (self.current_owner) |o| self.alloc.free(o);
+        self.current_owner = null;
+    }
+
+    fn dupeOwner(self: *Host) ?[]u8 {
+        const owner = self.current_owner orelse return null;
+        return self.alloc.dupe(u8, owner) catch null;
+    }
 
     pub fn init(alloc: std.mem.Allocator) Host {
         return .{
@@ -76,23 +101,30 @@ pub const Host = struct {
         for (self.syntax_blocks.items) |item| {
             self.alloc.free(item.name);
             if (item.terminator) |t| self.alloc.free(t);
+            if (item.owner) |o| self.alloc.free(o);
         }
         self.syntax_blocks.deinit(self.alloc);
         for (self.modules.items) |item| {
             self.alloc.free(item.name);
             self.alloc.free(item.path);
+            if (item.owner) |o| self.alloc.free(o);
         }
         self.modules.deinit(self.alloc);
         for (self.cli_flags.items) |item| {
             self.alloc.free(item.name);
             if (item.help) |h| self.alloc.free(h);
+            if (item.owner) |o| self.alloc.free(o);
         }
         self.cli_flags.deinit(self.alloc);
-        for (self.link_flags.items) |item| self.alloc.free(item);
+        for (self.link_flags.items) |item| {
+            self.alloc.free(item.flag);
+            if (item.owner) |o| self.alloc.free(o);
+        }
         self.link_flags.deinit(self.alloc);
         for (self.help_sections.items) |item| {
             self.alloc.free(item.section_id);
             self.alloc.free(item.text);
+            if (item.owner) |o| self.alloc.free(o);
         }
         self.help_sections.deinit(self.alloc);
         for (self.diagnostics.items) |item| {
@@ -101,6 +133,7 @@ pub const Host = struct {
             if (item.hint) |h| self.alloc.free(h);
         }
         self.diagnostics.deinit(self.alloc);
+        self.clearCurrentOwner();
     }
 
     fn fromApi(api: *abi.HostApi) *Host {
@@ -137,6 +170,7 @@ fn registerSyntaxBlock(
         .name = name_owned,
         .mode = syntax.mode,
         .terminator = term_owned,
+        .owner = host.dupeOwner(),
     }) catch return @intFromEnum(abi.RegisterResult.invalid);
     host.counts.syntax_blocks += 1;
     return @intFromEnum(abi.RegisterResult.ok);
@@ -153,7 +187,7 @@ fn registerHelpSection(host_api: *abi.HostApi, section_id: [*:0]const u8, text: 
     }
     const id_owned = dupeC(host.alloc, section_id) catch return @intFromEnum(abi.RegisterResult.invalid);
     const text_owned = dupeC(host.alloc, text) catch return @intFromEnum(abi.RegisterResult.invalid);
-    host.help_sections.append(host.alloc, .{ .section_id = id_owned, .text = text_owned }) catch return @intFromEnum(abi.RegisterResult.invalid);
+    host.help_sections.append(host.alloc, .{ .section_id = id_owned, .text = text_owned, .owner = host.dupeOwner() }) catch return @intFromEnum(abi.RegisterResult.invalid);
     host.counts.help_sections += 1;
     return @intFromEnum(abi.RegisterResult.ok);
 }
@@ -169,7 +203,7 @@ fn registerCliFlag(host_api: *abi.HostApi, flag_name: [*:0]const u8, help_text: 
     }
     const name_owned = dupeC(host.alloc, flag_name) catch return @intFromEnum(abi.RegisterResult.invalid);
     const help_owned = dupeCOpt(host.alloc, help_text) catch return @intFromEnum(abi.RegisterResult.invalid);
-    host.cli_flags.append(host.alloc, .{ .name = name_owned, .help = help_owned, .mandatory = mandatory != 0 }) catch return @intFromEnum(abi.RegisterResult.invalid);
+    host.cli_flags.append(host.alloc, .{ .name = name_owned, .help = help_owned, .mandatory = mandatory != 0, .owner = host.dupeOwner() }) catch return @intFromEnum(abi.RegisterResult.invalid);
     host.counts.cli_flags += 1;
     return @intFromEnum(abi.RegisterResult.ok);
 }
@@ -185,7 +219,7 @@ fn registerModule(host_api: *abi.HostApi, module_name: [*:0]const u8, package_re
     }
     const name_owned = dupeC(host.alloc, module_name) catch return @intFromEnum(abi.RegisterResult.invalid);
     const path_owned = dupeC(host.alloc, package_relative_path) catch return @intFromEnum(abi.RegisterResult.invalid);
-    host.modules.append(host.alloc, .{ .name = name_owned, .path = path_owned }) catch return @intFromEnum(abi.RegisterResult.invalid);
+    host.modules.append(host.alloc, .{ .name = name_owned, .path = path_owned, .owner = host.dupeOwner() }) catch return @intFromEnum(abi.RegisterResult.invalid);
     host.counts.modules += 1;
     return @intFromEnum(abi.RegisterResult.ok);
 }
@@ -194,13 +228,13 @@ fn registerLinkFlag(host_api: *abi.HostApi, flag: [*:0]const u8) callconv(.c) c_
     const host = Host.fromApi(host_api);
     const slice = std.mem.span(flag);
     for (host.link_flags.items) |item| {
-        if (std.mem.eql(u8, item, slice)) {
+        if (std.mem.eql(u8, item.flag, slice)) {
             host.counts.duplicate_link_flags += 1;
             return @intFromEnum(abi.RegisterResult.duplicate);
         }
     }
     const owned = dupeC(host.alloc, flag) catch return @intFromEnum(abi.RegisterResult.invalid);
-    host.link_flags.append(host.alloc, owned) catch return @intFromEnum(abi.RegisterResult.invalid);
+    host.link_flags.append(host.alloc, .{ .flag = owned, .owner = host.dupeOwner() }) catch return @intFromEnum(abi.RegisterResult.invalid);
     host.counts.link_flags += 1;
     return @intFromEnum(abi.RegisterResult.ok);
 }

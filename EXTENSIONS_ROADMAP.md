@@ -42,6 +42,7 @@ Done on branch `zlx`:
 - `zlang help` now appends a `Plugin extensions:` section listing what installed plugins register, so plugin authors can see the host saw their registrations without writing tests.
 - Plugin-registered link flags are now merged into `ctx.extra_args` after `parseArgs`, so the linker invocation includes flags contributed by installed plugins (verified with the dummy plugin registering `-lm`).
 - Plugin-registered CLI flags are now consumed: after `parseArgs`, any `extra_args` entry whose name matches a plugin-registered flag is moved to a new `ctx.plugin_flags` list and no longer leaks to the linker. Verified end-to-end with the dummy plugin: `zlang -dummy ...` reports `consumed 1 plugin CLI flag(s)` while the bare linker invocation no longer sees `-dummy`.
+- Host registrations now record the owning plugin: every syntax block, module, CLI flag, link flag, and help section carries an `owner` field set by the loader before `register_plugin` and cleared after. Plugin link flags are now activated by feature use (RFC §5.4): they enter the linker invocation only when one of the owning plugin's CLI flags appeared on the command line. Verified: dummy plugin without `-dummy` injects 0 link flags; with `-dummy`, 1 link flag is activated.
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
 
 Not done yet:
@@ -53,7 +54,7 @@ Not done yet:
 - Link flag activation by feature usage.
 
 Next planned increments:
-- Activate plugin link flags by feature use rather than unconditionally (RFC §5.4): only inject flags when the build actually uses the plugin's syntax block, module, or CLI flag.
+- Extend feature-use detection beyond CLI flags: scan input `.zl` files for `use <plugin_module>` and add the corresponding owner to the used set so module-only plugins (`threading.zlx`-style) also activate their link flags.
 - Add a parser dispatch path for `IDENTIFIER { ... }` extension blocks (Phase 4) and route the captured raw bytes to the registered handler.
 - Extend the package layout abstraction with a real container layout (archive extraction) so `entry`/`std/*.zl` paths are extracted from the `.zlx` instead of relying on a manifest-side sidecar `.so`.
 
