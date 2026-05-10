@@ -25,6 +25,10 @@ pub const Store = struct {
         return try std.fmt.allocPrint(alloc, "{s}/{s}.so", .{ self.root, name });
     }
 
+    pub fn pluginModulesDir(self: Store, alloc: std.mem.Allocator, name: []const u8) ![]u8 {
+        return try std.fmt.allocPrint(alloc, "{s}/{s}.modules", .{ self.root, name });
+    }
+
     pub fn indexPath(self: Store, alloc: std.mem.Allocator) ![]u8 {
         return try std.fmt.allocPrint(alloc, "{s}/index.zon", .{self.root});
     }
