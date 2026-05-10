@@ -260,6 +260,12 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
         return 1;
     };
 
+    const modules_installed = installModuleFiles(alloc, io, store, args[2], parsed) catch |err| {
+        std.debug.print("zlx: could not install plugin modules: {}\n", .{err});
+        return 1;
+    };
+    _ = modules_installed;
+
     const loaded_index = index_mod.load(alloc, io, store) catch |err| {
         std.debug.print("zlx: could not read module index: {}\n", .{err});
         return 1;
@@ -337,6 +343,44 @@ fn installSidecar(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store, 
     try writer.interface.writeAll(bytes);
     try writer.interface.flush();
     return true;
+}
+
+fn installModuleFiles(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store, source_zlx: []const u8, parsed: manifest.Manifest) !usize {
+    if (parsed.modules.len == 0) return 0;
+    const src_dir = std.fs.path.dirname(source_zlx) orelse ".";
+    const modules_root = try store.pluginModulesDir(alloc, parsed.name);
+    defer alloc.free(modules_root);
+
+    var copied: usize = 0;
+    for (parsed.modules) |module| {
+        const src_path = try std.fs.path.join(alloc, &.{ src_dir, module.path });
+        defer alloc.free(src_path);
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, src_path, alloc, .limited(16 * 1024 * 1024)) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        defer alloc.free(bytes);
+
+        const dest_path = try std.fs.path.join(alloc, &.{ modules_root, module.path });
+        defer alloc.free(dest_path);
+        if (std.fs.path.dirname(dest_path)) |parent| {
+            try std.Io.Dir.cwd().createDirPath(io, parent);
+        }
+        var out = try std.Io.Dir.cwd().createFile(io, dest_path, .{ .truncate = true });
+        defer out.close(io);
+        var buf: [4096]u8 = undefined;
+        var writer = out.writer(io, &buf);
+        try writer.interface.writeAll(bytes);
+        try writer.interface.flush();
+        copied += 1;
+    }
+    return copied;
+}
+
+fn deleteModulesDir(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store, name: []const u8) !void {
+    const dir = try store.pluginModulesDir(alloc, name);
+    defer alloc.free(dir);
+    std.Io.Dir.cwd().deleteTree(io, dir) catch |err| return err;
 }
 
 fn listModules(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
@@ -466,6 +510,10 @@ fn delModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
             std.debug.print("zlx: could not delete {s}: {}\n", .{ sidecar, err });
             return 1;
         },
+    };
+    deleteModulesDir(alloc, io, store, args[2]) catch |err| {
+        std.debug.print("zlx: could not delete plugin modules dir: {}\n", .{err});
+        return 1;
     };
 
     const loaded_index = index_mod.load(alloc, io, store) catch |err| {

@@ -17,9 +17,11 @@ const llvm_tools = @import("llvm_tools.zig");
 const zlx_commands = @import("zlx/commands.zig");
 const zlx_host = @import("zlx/host.zig");
 const zlx_runtime = @import("zlx/runtime.zig");
+const zlx_store = @import("zlx/store.zig");
 
 const allocator = std.heap.page_allocator;
 var process_io: std.Io = undefined;
+var plugin_module_paths: ?std.StringHashMap([]const u8) = null;
 
 fn nanoTimestamp() i96 {
     return std.Io.Timestamp.now(process_io, .real).toNanoseconds();
@@ -643,8 +645,16 @@ fn resolveModulePath(base_path: []const u8, module_name: []const u8, alloc: std.
     defer alloc.free(module_file);
     const full_path = try std.fs.path.join(alloc, &[_][]const u8{ base_dir, module_file });
     defer alloc.free(full_path);
-    std.Io.Dir.cwd().access(process_io, full_path, .{}) catch return null;
-    return utils.dupe(u8, alloc, full_path);
+    if (std.Io.Dir.cwd().access(process_io, full_path, .{})) {
+        return utils.dupe(u8, alloc, full_path);
+    } else |_| {}
+
+    if (plugin_module_paths) |*map| {
+        if (map.get(module_name)) |abs_path| {
+            return utils.dupe(u8, alloc, abs_path);
+        }
+    }
+    return null;
 }
 
 fn tryFindMoreErrors(alloc: std.mem.Allocator, file_path: []const u8, input: []const u8) void {
@@ -2015,6 +2025,16 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator, timing: ?*ParseTiming
                 arena_ast.deinit();
                 return error.ModuleNotFound;
             };
+        }
+
+        for (module.dependencies.items) |dep| {
+            if (std.mem.eql(u8, dep, "std") or std.mem.startsWith(u8, dep, "std.")) continue;
+            if (hasModuleByName(modules.items, dep)) continue;
+            const map = if (plugin_module_paths) |*m| m else continue;
+            const abs = map.get(dep) orelse continue;
+            if (loaded_paths.contains(abs) or containsString(pending_std_paths.items, abs)) continue;
+            const dup = utils.dupe(u8, alloc, abs);
+            try pending_std_paths.append(alloc, dup);
         }
 
         loadModulesFromPaths(pending_std_paths.items, &modules, &loaded_paths, arena, alloc, ctx) catch {
@@ -3570,6 +3590,40 @@ pub fn main(init: std.process.Init) !u8 {
     var plugin_host = zlx_host.Host.init(allocator);
     defer plugin_host.deinit();
     _ = zlx_runtime.loadAllInstalled(allocator, process_io, &plugin_host) catch {};
+
+    plugin_module_paths = .init(allocator);
+    if (zlx_store.Store.init(allocator)) |store| {
+        var st = store;
+        defer st.deinit(allocator);
+        for (plugin_host.modules.items) |entry| {
+            const owner = entry.owner orelse continue;
+            const modules_root = st.pluginModulesDir(allocator, owner) catch continue;
+            defer allocator.free(modules_root);
+            const abs = std.fs.path.join(allocator, &.{ modules_root, entry.path }) catch continue;
+            errdefer allocator.free(abs);
+            std.Io.Dir.cwd().access(process_io, abs, .{}) catch {
+                allocator.free(abs);
+                continue;
+            };
+            const name_owned = allocator.dupe(u8, entry.name) catch {
+                allocator.free(abs);
+                continue;
+            };
+            _ = plugin_module_paths.?.put(name_owned, abs) catch {
+                allocator.free(name_owned);
+                allocator.free(abs);
+            };
+        }
+    } else |_| {}
+    defer if (plugin_module_paths) |*map| {
+        var it = map.iterator();
+        while (it.next()) |e| {
+            allocator.free(e.key_ptr.*);
+            allocator.free(e.value_ptr.*);
+        }
+        map.deinit();
+        plugin_module_paths = null;
+    };
     {
         var ei: usize = 0;
         while (ei < ctx.extra_args.items.len) {
