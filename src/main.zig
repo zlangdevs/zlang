@@ -15,6 +15,8 @@ const interpreter = @import("interpreter.zig");
 const preprocessor = @import("preprocessor/preprocessor.zig");
 const llvm_tools = @import("llvm_tools.zig");
 const zlx_commands = @import("zlx/commands.zig");
+const zlx_host = @import("zlx/host.zig");
+const zlx_runtime = @import("zlx/runtime.zig");
 
 const allocator = std.heap.page_allocator;
 var process_io: std.Io = undefined;
@@ -3469,6 +3471,10 @@ pub fn main(init: std.process.Init) !u8 {
             help.printHelpSyntax();
         } else {
             help.printHelp();
+            var plugin_host = zlx_host.Host.init(allocator);
+            defer plugin_host.deinit();
+            _ = zlx_runtime.loadAllInstalled(allocator, process_io, &plugin_host) catch {};
+            zlx_runtime.printPluginExtensions(&plugin_host);
         }
         return 0;
     }
