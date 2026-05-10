@@ -25,19 +25,19 @@ Done on branch `zlx`:
 - Added CLI commands: `install`, `list-modules`, `del-module`, `validate-module`, `module-info`.
 - Added current-target compatibility detection; incompatible packages are indexed as `incompatible`.
 - Added dependency recording in `index.zon`; missing dependencies mark packages as `incompatible` with a reason.
+- Added dependency cycle detection and `module-load-order` for future plugin initialization order.
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
 
 Not done yet:
 - Real `.zlx` container archive unpacking.
 - Native plugin `.so` probing/loading.
-- Full dependency graph validation including cycle detection and load order.
+- Versioned dependency constraints.
 - Parser extension-block dispatch.
 - Extension-provided stdlib module search paths.
 - Link flag activation by feature usage.
 
 Next planned increments:
 - Add package layout abstraction so the current single-file MVP can evolve into real container extraction.
-- Add dependency cycle detection and topological load order.
 - Add host/plugin ABI type definitions without loading native code yet.
 
 ---
@@ -128,6 +128,7 @@ Rules:
 - Native plugin packages must declare supported `.targets`.
 - Dependencies in v1 are a flat list of extension names without version constraints. Cycles are invalid. Load order is topological. Versioned dependencies are deferred to v2.
 - Current implementation records flat dependencies in `index.zon`; if any declared dependency is not installed and compatible, the module is indexed as `incompatible: missing dependency`.
+- Current implementation marks dependency cycles as `incompatible: dependency cycle` and exposes a topological order for loadable modules through `zlang module-load-order`.
 - `native_libs` and `link_flags` are not applied globally just because a package is installed. They are applied only when the extension is used by the current compilation unit or explicitly marks itself as always-required.
 
 ---
@@ -139,6 +140,7 @@ Planned commands:
 ```bash
 zlang install ./brainfuck.zlx
 zlang list-modules
+zlang module-load-order
 zlang module-info ./brainfuck.zlx
 zlang validate-module ./brainfuck.zlx
 zlang del-module brainfuck

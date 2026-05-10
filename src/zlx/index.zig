@@ -127,12 +127,18 @@ pub fn rebuild(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store) !st
         });
     }
 
-    applyDependencyStatuses(entries.items);
+    try applyDependencyStatuses(alloc, entries.items);
     try write(alloc, io, store, entries.items);
     return entries;
 }
 
-pub fn applyDependencyStatuses(entries: []Entry) void {
+pub fn applyDependencyStatuses(alloc: std.mem.Allocator, entries: []Entry) !void {
+    applyMissingDependencyStatuses(entries);
+    try applyCycleStatuses(alloc, entries);
+    applyMissingDependencyStatuses(entries);
+}
+
+fn applyMissingDependencyStatuses(entries: []Entry) void {
     var changed = true;
     while (changed) {
         changed = false;
@@ -153,6 +159,68 @@ pub fn applyDependencyStatuses(entries: []Entry) void {
             if (entry.status != old_status or reasonChanged(old_reason, entry.status_reason)) changed = true;
         }
     }
+}
+
+pub fn loadOrder(alloc: std.mem.Allocator, entries: []const Entry) !std.ArrayList(usize) {
+    var order: std.ArrayList(usize) = .empty;
+    errdefer order.deinit(alloc);
+    const state = try alloc.alloc(u8, entries.len);
+    defer alloc.free(state);
+    @memset(state, 0);
+
+    for (entries, 0..) |entry, i| {
+        if (entry.status != .installed) continue;
+        try visitLoadOrder(alloc, entries, i, state, &order);
+    }
+    return order;
+}
+
+fn visitLoadOrder(alloc: std.mem.Allocator, entries: []const Entry, index: usize, state: []u8, order: *std.ArrayList(usize)) !void {
+    if (state[index] == 2) return;
+    if (state[index] == 1) return error.DependencyCycle;
+    state[index] = 1;
+    for (entries[index].dependencies) |dep| {
+        const dep_index = findEntry(entries, dep) orelse continue;
+        if (entries[dep_index].status == .installed) try visitLoadOrder(alloc, entries, dep_index, state, order);
+    }
+    state[index] = 2;
+    try order.append(alloc, index);
+}
+
+fn applyCycleStatuses(alloc: std.mem.Allocator, entries: []Entry) !void {
+    const state = try alloc.alloc(u8, entries.len);
+    defer alloc.free(state);
+    for (entries, 0..) |entry, i| {
+        if (entry.status != .installed) continue;
+        @memset(state, 0);
+        if (hasCycleFrom(entries, i, state)) markCycle(entries, i);
+    }
+}
+
+fn hasCycleFrom(entries: []const Entry, index: usize, state: []u8) bool {
+    if (state[index] == 1) return true;
+    if (state[index] == 2) return false;
+    state[index] = 1;
+    for (entries[index].dependencies) |dep| {
+        const dep_index = findEntry(entries, dep) orelse continue;
+        if (entries[dep_index].status != .installed) continue;
+        if (hasCycleFrom(entries, dep_index, state)) return true;
+    }
+    state[index] = 2;
+    return false;
+}
+
+fn markCycle(entries: []Entry, index: usize) void {
+    if (entries[index].status == .incompatible and entries[index].status_reason != null and !std.mem.eql(u8, entries[index].status_reason.?, "dependency cycle")) return;
+    entries[index].status = .incompatible;
+    entries[index].status_reason = "dependency cycle";
+}
+
+fn findEntry(entries: []const Entry, name: []const u8) ?usize {
+    for (entries, 0..) |entry, i| {
+        if (std.mem.eql(u8, entry.name, name)) return i;
+    }
+    return null;
 }
 
 fn reasonChanged(a: ?[]const u8, b: ?[]const u8) bool {
