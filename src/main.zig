@@ -408,6 +408,7 @@ pub const Context = struct {
     module_registrations: std.ArrayList(ModuleRegistration),
     function_module_bindings: std.ArrayList(SymbolModuleBinding),
     global_module_bindings: std.ArrayList(SymbolModuleBinding),
+    plugin_flags: std.ArrayList([]const u8),
 
     pub fn init() Context {
         return Context{
@@ -433,6 +434,7 @@ pub const Context = struct {
             .module_registrations = .empty,
             .function_module_bindings = .empty,
             .global_module_bindings = .empty,
+            .plugin_flags = .empty,
         };
     }
 
@@ -456,6 +458,8 @@ pub const Context = struct {
         self.function_module_bindings.deinit(alloc);
         for (self.global_module_bindings.items) |*entry| entry.deinit(alloc);
         self.global_module_bindings.deinit(alloc);
+        for (self.plugin_flags.items) |flag| alloc.free(flag);
+        self.plugin_flags.deinit(alloc);
     }
 
     pub fn print(self: *const Context) void {
@@ -3574,8 +3578,32 @@ pub fn main(init: std.process.Init) !u8 {
             allocator.free(flag_copy);
         }
     }
-    if (ctx.verbose and !ctx.quiet and plugin_host.link_flags.items.len != 0) {
-        std.debug.print("zlx: {d} plugin link flag(s) merged\n", .{plugin_host.link_flags.items.len});
+    {
+        var ei: usize = 0;
+        while (ei < ctx.extra_args.items.len) {
+            const arg = ctx.extra_args.items[ei];
+            var matched = false;
+            for (plugin_host.cli_flags.items) |flag| {
+                if (std.mem.eql(u8, flag.name, arg)) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (matched) {
+                try ctx.plugin_flags.append(allocator, try allocator.dupe(u8, arg));
+                _ = ctx.extra_args.orderedRemove(ei);
+            } else {
+                ei += 1;
+            }
+        }
+    }
+    if (ctx.verbose and !ctx.quiet) {
+        if (plugin_host.link_flags.items.len != 0) {
+            std.debug.print("zlx: {d} plugin link flag(s) merged\n", .{plugin_host.link_flags.items.len});
+        }
+        if (ctx.plugin_flags.items.len != 0) {
+            std.debug.print("zlx: consumed {d} plugin CLI flag(s)\n", .{ctx.plugin_flags.items.len});
+        }
     }
 
     const total_start = nanoTimestamp();
