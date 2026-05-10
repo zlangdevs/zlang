@@ -31,6 +31,8 @@ Done on branch `zlx`:
 - Added `include/zlang_plugin_api_v1.h` with the v1 plugin/host C ABI types (no native loading yet).
 - Added `src/zlx/abi.zig`, the Zig mirror of the v1 ABI, exposing `api_version`, supported range, entry-symbol names, and an `checkApiRange` helper.
 - Added `zlang module-abi` to print the host's supported ABI range and entry symbols for plugin authors.
+- Added `src/zlx/host.zig`: a concrete `HostApi` instance with C-callable stubs that record syntax-block, module, CLI-flag, link-flag, help-section registrations and diagnostics, with duplicate detection.
+- Added `zlang module-dryrun <file.zlx>`: simulates plugin-side registrations from manifest data through the host stubs and reports counts/duplicates. Validates `api_min/api_max` against the host's supported range before simulating.
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
 
 Not done yet:
@@ -42,7 +44,7 @@ Not done yet:
 - Link flag activation by feature usage.
 
 Next planned increments:
-- Wire a no-op host API table backed by `src/zlx/abi.zig` that the loader will populate in Phase 2 (still without dlopen).
+- Add a `.so` loader using `std.DynLib` that resolves `zlang_plugin_probe`/`zlang_plugin_init` and feeds the existing host stubs (Phase 2 entry).
 - Extend the package layout abstraction with a real container layout (archive extraction) alongside the existing `single_manifest` layout.
 
 ---
@@ -148,6 +150,7 @@ zlang list-modules
 zlang module-load-order
 zlang module-info ./brainfuck.zlx
 zlang module-abi
+zlang module-dryrun ./brainfuck.zlx
 zlang validate-module ./brainfuck.zlx
 zlang del-module brainfuck
 ```
