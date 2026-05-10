@@ -38,6 +38,8 @@ Done on branch `zlx`:
 - Added `tests/plugins/dummy_plugin.zig`: reference plugin exercising every host stub (compile with `zig build-lib -dynamic -fPIC tests/plugins/dummy_plugin.zig`).
 - `zlang install` now also installs a sidecar `.so` next to the input `.zlx` (same stem) into `~/.zlang/modules/<name>.so`; `del-module` removes it.
 - Added `zlang module-loadall`: walks the index in topological load order, loads every plugin with a sidecar through the host stubs, and reports per-plugin status plus aggregated counts.
+- Added `src/zlx/runtime.zig`: `loadAllInstalled` populates a host from every installed plugin sidecar; `printPluginExtensions` formats the host's CLI flags, syntax blocks, modules and help sections.
+- `zlang help` now appends a `Plugin extensions:` section listing what installed plugins register, so plugin authors can see the host saw their registrations without writing tests.
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
 
 Not done yet:
@@ -49,7 +51,8 @@ Not done yet:
 - Link flag activation by feature usage.
 
 Next planned increments:
-- Wire host registrations into the real compiler state (parser block dispatch table, CLI flag table, link-flag list) instead of the in-memory stub tables, so a compile invocation can call `module-loadall` internally and act on what plugins register.
+- Pipe plugin-registered link flags into the linker invocation when a build uses an extension, replacing the in-memory stub list for the link path.
+- Pipe plugin-registered CLI flags into the main argument parser so `zlang -dummy` is consumed by the plugin instead of erroring as an unknown flag.
 - Extend the package layout abstraction with a real container layout (archive extraction) so `entry`/`std/*.zl` paths are extracted from the `.zlx` instead of relying on a manifest-side sidecar `.so`.
 
 ---
