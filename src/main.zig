@@ -23,6 +23,7 @@ const zlx_preprocess = @import("zlx/preprocess.zig");
 const allocator = std.heap.page_allocator;
 var process_io: std.Io = undefined;
 var plugin_module_paths: ?std.StringHashMap([]const u8) = null;
+var plugin_host_ptr: ?*zlx_host.Host = null;
 
 fn nanoTimestamp() i96 {
     return std.Io.Timestamp.now(process_io, .real).toNanoseconds();
@@ -1873,9 +1874,44 @@ fn collectStdModulePathsForDep(dep: []const u8, pending_paths: *std.ArrayList([]
     try pending_paths.append(alloc, std_path);
 }
 
+const ExpandedPath = struct { path: []const u8, expansions: usize };
+
+fn expandPathIfNeeded(original: []const u8, idx: usize, alloc: std.mem.Allocator) !?ExpandedPath {
+    const host = plugin_host_ptr orelse return null;
+    if (host.syntax_blocks.items.len == 0) return null;
+    const bytes = std.Io.Dir.cwd().readFileAlloc(process_io, original, alloc, .limited(64 * 1024 * 1024)) catch return null;
+    defer alloc.free(bytes);
+    const result = try zlx_preprocess.expandExtensionBlocks(alloc, host, original, bytes);
+    if (result.report.expansions == 0) {
+        alloc.free(result.source);
+        return null;
+    }
+    const tmp_path = try std.fmt.allocPrint(alloc, "/tmp/zlang-zlx-{d}-{d}-{s}", .{ @as(u64, @intCast(nanoTimestamp())), idx, std.fs.path.basename(original) });
+    var tmp = std.Io.Dir.cwd().createFile(process_io, tmp_path, .{ .truncate = true }) catch {
+        alloc.free(tmp_path);
+        alloc.free(result.source);
+        return null;
+    };
+    defer tmp.close(process_io);
+    var buf: [4096]u8 = undefined;
+    var writer = tmp.writer(process_io, &buf);
+    writer.interface.writeAll(result.source) catch {};
+    writer.interface.flush() catch {};
+    alloc.free(result.source);
+    return .{ .path = tmp_path, .expansions = result.report.expansions };
+}
+
 fn loadModulesFromPaths(paths: []const []const u8, modules: *std.ArrayList(ModuleInfo), loaded_paths: *std.StringHashMap(void), arena: std.mem.Allocator, alloc: std.mem.Allocator, ctx: *Context) !void {
     if (paths.len == 0) return;
 
+    var effective_paths = try alloc.alloc([]const u8, paths.len);
+    defer alloc.free(effective_paths);
+    for (paths, 0..) |path, i| {
+        effective_paths[i] = path;
+        if (expandPathIfNeeded(path, i, alloc) catch null) |rewritten| {
+            effective_paths[i] = rewritten.path;
+        }
+    }
     for (paths) |path| {
         try loaded_paths.put(utils.dupe(u8, alloc, path), {});
     }
@@ -1884,7 +1920,7 @@ fn loadModulesFromPaths(paths: []const []const u8, modules: *std.ArrayList(Modul
         var tasks = try alloc.alloc(InitialLoadTask, paths.len);
         defer alloc.free(tasks);
 
-        for (paths, 0..) |path, i| {
+        for (effective_paths, 0..) |path, i| {
             tasks[i] = .{
                 .file_path = path,
                 .ctx = ctx,
@@ -1916,7 +1952,7 @@ fn loadModulesFromPaths(paths: []const []const u8, modules: *std.ArrayList(Modul
         return;
     }
 
-    for (paths) |path| {
+    for (effective_paths) |path| {
         const module = try parseModuleFile(path, arena, alloc, ctx);
         try modules.append(alloc, module);
     }
@@ -3591,6 +3627,8 @@ pub fn main(init: std.process.Init) !u8 {
     var plugin_host = zlx_host.Host.init(allocator);
     defer plugin_host.deinit();
     _ = zlx_runtime.loadAllInstalled(allocator, process_io, &plugin_host) catch {};
+    plugin_host_ptr = &plugin_host;
+    defer plugin_host_ptr = null;
 
     plugin_module_paths = .init(allocator);
     if (zlx_store.Store.init(allocator)) |store| {
@@ -3684,33 +3722,15 @@ pub fn main(init: std.process.Init) !u8 {
     if (plugin_host.syntax_blocks.items.len != 0) {
         var total_expansions: usize = 0;
         for (ctx.input_files.items, 0..) |path, idx| {
-            const bytes = std.Io.Dir.cwd().readFileAlloc(process_io, path, allocator, .limited(64 * 1024 * 1024)) catch continue;
-            defer allocator.free(bytes);
-            const result = zlx_preprocess.expandExtensionBlocks(allocator, &plugin_host, path, bytes) catch |err| {
+            if (expandPathIfNeeded(path, idx, allocator)) |maybe| {
+                if (maybe) |rewritten| {
+                    ctx.input_files.items[idx] = rewritten.path;
+                    total_expansions += rewritten.expansions;
+                }
+            } else |err| {
                 std.debug.print("zlx: extension block expansion failed for {s}: {s}\n", .{ path, @errorName(err) });
                 return 1;
-            };
-            if (result.report.expansions == 0) {
-                allocator.free(result.source);
-                continue;
             }
-            total_expansions += result.report.expansions;
-            const tmp_path = std.fmt.allocPrint(allocator, "/tmp/zlang-zlx-{d}-{d}-{s}", .{ @as(u64, @intCast(nanoTimestamp())), idx, std.fs.path.basename(path) }) catch {
-                allocator.free(result.source);
-                continue;
-            };
-            var tmp = std.Io.Dir.cwd().createFile(process_io, tmp_path, .{ .truncate = true }) catch {
-                allocator.free(tmp_path);
-                allocator.free(result.source);
-                continue;
-            };
-            defer tmp.close(process_io);
-            var buf: [4096]u8 = undefined;
-            var writer = tmp.writer(process_io, &buf);
-            writer.interface.writeAll(result.source) catch {};
-            writer.interface.flush() catch {};
-            allocator.free(result.source);
-            ctx.input_files.items[idx] = tmp_path;
         }
         if (ctx.verbose and !ctx.quiet and total_expansions != 0) {
             std.debug.print("zlx: expanded {d} extension block(s)\n", .{total_expansions});

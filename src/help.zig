@@ -62,6 +62,26 @@ pub fn printHelp() void {
     });
 
     std.debug.print(
+        \\{s}Extension commands (.zlx):{s}
+        \\  {s}install{s}            Install a .zlx extension package
+        \\  {s}del-module{s}         Remove an installed extension
+        \\  {s}list-modules{s}       List installed extensions and their status
+        \\  {s}module-info{s}        Print metadata of a .zlx package
+        \\  {s}module-abi{s}         Print host plugin ABI version and symbols
+        \\  {s}module-load{s}        Load a single plugin .so against the host
+        \\  {s}module-loadall{s}     Load every installed plugin in order
+        \\  {s}module-dryrun{s}      Simulate plugin registrations from manifest
+        \\  {s}module-load-order{s}  Print topological load order
+        \\  {s}validate-module{s}    Validate a .zlx package's manifest
+        \\
+    , .{
+        bold, reset,
+        cyan, reset, cyan, reset, cyan, reset, cyan, reset,
+        cyan, reset, cyan, reset, cyan, reset, cyan, reset,
+        cyan, reset, cyan, reset,
+    });
+
+    std.debug.print(
         \\{s}Options:{s}
         \\  {s}-o <file>{s}     Specify output file
         \\  {s}-arch <arch>{s}  Specify target/triple (e.g., x86_64 or x86_64-linux-gnu.2.17)

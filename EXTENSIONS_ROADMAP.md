@@ -46,6 +46,8 @@ Done on branch `zlx`:
 - Extended feature-use detection: `zlx_runtime.scanUseImports` lightly scans input `.zl` files for `use NAME` statements; if `NAME` matches a plugin-registered module, that module's owner joins the used-owners set. A `.zl` with `use dummy` now activates the `dummy` plugin's link flags without needing `-dummy` on the CLI.
 - Plugin stdlib modules now resolve at compile time (RFC §5.3): install copies every manifest-declared module file from `<input_dir>/<module.path>` to `<store>/<name>.modules/<module.path>`, `del-module` removes that tree, and the main pipeline builds an absolute-path map from the loaded host's `modules` list. The dependency loader pulls plugin module files into the modules array just like std modules, so `use dummy` now compiles and runs against the plugin-shipped `.zl`.
 - Extension-block dispatch (RFC §5.2 + Phase 5 codegen bridge MVP) implemented at the preprocessor layer in `src/zlx/preprocess.zig`: scans input `.zl` files for `IDENTIFIER { ... }` whose IDENTIFIER matches a plugin-registered syntax block, brace-counts the raw payload, invokes the registered handler via the v1 ABI, splices the handler's `generated_zlang_source` back into the source, and writes the rewritten file to a temp path that replaces the original in `ctx.input_files`. `SyntaxRegistration` now retains the registered `BlockHandler` so the preprocessor can dispatch directly. The dummy plugin's `dummy_block { ... }` is expanded into a real zlang statement; full compile-link-run works.
+- Extension-block expansion now also runs on dependency `.zl` files loaded via `use`: `loadModulesFromPaths` swaps any file containing a matched block for its rewritten temp copy before parsing, so plugin-shipped modules can themselves use extension blocks. Verified by placing `dummy_block { ... }` inside the plugin's own `std/dummy.zl`; the main file's `use dummy; dummy.dummy_say()` still returns 42.
+- `zlang help` now lists every `.zlx` command (`install`, `del-module`, `list-modules`, `module-info`, `module-abi`, `module-load`, `module-loadall`, `module-dryrun`, `module-load-order`, `validate-module`) under a dedicated `Extension commands (.zlx)` section so the extension story is discoverable from the main entry point.
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
 
 Not done yet:
@@ -57,9 +59,9 @@ Not done yet:
 - Link flag activation by feature usage.
 
 Next planned increments:
-- Extension-block expansion is currently only applied to top-level input files; extend it to dependency `.zl` files loaded via `use` so plugin-shipped modules can themselves contain extension blocks.
-- Add a real container layout to the package abstraction so `entry` and `std/*.zl` are extracted from a single `.zlx` archive instead of relying on a sidecar `.so` and an adjacent `std/` directory at install time.
 - Begin extracting the built-in brainfuck path into a `brainfuck.zlx` extension now that syntax-block dispatch works end-to-end (Phase 7 entry).
+- Add a real container layout to the package abstraction so `entry` and `std/*.zl` are extracted from a single `.zlx` archive instead of relying on a sidecar `.so` and an adjacent `std/` directory at install time.
+- Add Phase 9 security hooks: `--no-extensions` (skip dlopen), `--isolated` (also skip extension module paths), and `zlang doctor-modules` diagnostics.
 - Extend the package layout abstraction with a real container layout (archive extraction) so `entry`/`std/*.zl` paths are extracted from the `.zlx` instead of relying on a manifest-side sidecar `.so`.
 
 ---
