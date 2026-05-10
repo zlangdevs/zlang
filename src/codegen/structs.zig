@@ -450,7 +450,7 @@ pub fn generateStructType(cg: *llvm.CodeGenerator, struct_decl: ast.StructDecl) 
 
     try cg.struct_declarations.put(struct_decl.name, struct_decl);
 
-    var field_types = std.ArrayList(c.LLVMTypeRef){};
+    var field_types: std.ArrayList(c.LLVMTypeRef) = .empty;
     defer field_types.deinit(cg.allocator);
     var field_map = std.HashMap([]const u8, c_uint, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(cg.allocator);
 

@@ -747,7 +747,7 @@ fun add(a: f32, b: f32) >> f32 {
 
 ## Error Flow
 
-ZLang supports two related error signals:
+ZLang has two explicit, resumable signal channels:
 - `send <ErrorName>;`
 - `solicit <ErrorName>;`
 
@@ -760,6 +760,12 @@ error FileLocked = _;
 ```
 
 `_` means "assign an automatic unique code".
+
+### send vs solicit
+
+- `send` means "notify caller about an error/event".
+- `solicit` means "request caller intervention so callee can continue".
+- They are separate channels: `on ...` does not catch `solicit`, and `on solicit ...` does not catch `send`.
 
 ### Handlers at call site
 
@@ -785,12 +791,55 @@ Handler forms:
 
 Numeric handlers are useful when multiple error names share the same code.
 
+### Real examples
+
+Expression-position `on` handler:
+
+```zl
+error TestError = _;
+
+fun handler_test() >> i32 {
+    send TestError;
+    return 7;
+}
+
+fun main() >> i32 {
+    bool err = false;
+    i32 res = handler_test() on _ {
+        err = true;
+    };
+
+    @printf("(expected 1):%d\n", err as i32);
+    @printf("(expected 7):%d\n", res);
+    return 0;
+}
+```
+
+`solicit` with callee-state repair in handler:
+
+```zl
+error NeedSeed = _;
+
+fun next_value() >> i32 {
+    i32 seed = 0;
+    solicit NeedSeed;
+    return seed + 41;
+}
+
+fun main() >> i32 {
+    i32 out = next_value() on solicit NeedSeed {
+        seed = 1;
+    };
+    @printf("(expected 42):%d\n", out);
+    return 0;
+}
+```
+
 ### Behavior model
 
-- `send` and `solicit` are matched by separate handler channels (`on ...` vs `on solicit ...`).
-- `on` handlers can be used in statement position and expression position.
+- `on` handlers work in statement and expression position.
 - For `solicit`, handler bodies can access caller and callee variables under compiler checks.
-- Handler capture uses a hybrid strategy: mutated values by reference, read-only values by value.
+- Handler capture is hybrid: mutated values by reference, read-only values by value.
 
 ### Warnings
 

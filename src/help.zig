@@ -74,13 +74,15 @@ pub fn printHelp() void {
         \\  {s}-stats{s}       Show compilation statistics
         \\  {s}-optimize{s}    Enable optimizations
         \\  {s}-verify-ir{s}   Verify generated LLVM IR even with -optimize
+        \\  {s}-j <n>{s}       Set maximum threads (default: all CPU cores)
         \\  {s}-c{s}           Compile to object file only
         \\  {s}-DNAME=VALUE{s} Override #define value in source
         \\  {s}-l<lib>{s}      Link with library
         \\  {s}-L<path>{s}     Add library search path
         \\
-    , .{
+, .{
         bold,   reset,
+        yellow, reset,
         yellow, reset,
         yellow, reset,
         yellow, reset,

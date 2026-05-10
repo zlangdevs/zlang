@@ -49,7 +49,7 @@ const BrainfuckContext = struct {
 
 fn ParseBfContext(allocator: std.mem.Allocator, input: []const u8) BrainfuckContext {
     var ctx = BrainfuckContext{
-        .requests = std.ArrayList(BfLoadRequest){},
+        .requests = .empty,
         .code = "",
     };
     var search_pos: usize = 0;
@@ -128,7 +128,7 @@ fn expandArrayLoad(allocator: std.mem.Allocator, ctx: *BrainfuckContext, var_nam
 }
 
 fn expandArrayLoads(cg: *codegen, ctx: *BrainfuckContext) !void {
-    var new_requests = std.ArrayList(BfLoadRequest){};
+    var new_requests: std.ArrayList(BfLoadRequest) = .empty;
     defer new_requests.deinit(cg.allocator);
 
     for (ctx.requests.items) |req| {
@@ -166,7 +166,7 @@ fn expandArrayLoads(cg: *codegen, ctx: *BrainfuckContext) !void {
 
     ctx.requests.deinit(cg.allocator);
     ctx.requests = new_requests;
-    new_requests = std.ArrayList(BfLoadRequest){};
+    new_requests = .empty;
 }
 
 const LinearLoopOp = struct {
@@ -188,7 +188,7 @@ const BfOp = union(enum) {
 };
 
 fn parseBrainfuckOps(allocator: std.mem.Allocator, code: []const u8) !std.ArrayList(BfOp) {
-    var ops = std.ArrayList(BfOp){};
+    var ops: std.ArrayList(BfOp) = .empty;
     errdefer ops.deinit(allocator);
 
     for (code) |char| {
@@ -229,7 +229,7 @@ fn checkLinearLoop(allocator: std.mem.Allocator, body: []const BfOp) !?std.Array
     const start_change = effects.get(0) orelse return null;
     if (start_change != -1) return null;
 
-    var factors = std.ArrayList(LinearLoopOp){};
+    var factors: std.ArrayList(LinearLoopOp) = .empty;
     errdefer factors.deinit(allocator);
 
     var it = effects.iterator();
@@ -283,7 +283,7 @@ const ComptimeInterpreter = struct {
             .allocator = allocator,
             .max_iterations = 0,
             .iterations = 0,
-            .output = std.ArrayList(u8){},
+            .output = .empty,
             .jump_table = &[_]usize{},
         };
     }
@@ -300,7 +300,7 @@ const ComptimeInterpreter = struct {
         self.jump_table = try self.allocator.alloc(usize, ops.len);
         @memset(self.jump_table, 0);
 
-        var stack = std.ArrayList(usize){};
+        var stack: std.ArrayList(usize) = .empty;
         defer stack.deinit(self.allocator);
 
         for (ops, 0..) |op, i| {
@@ -433,7 +433,7 @@ const ComptimeInterpreter = struct {
 };
 
 fn generateDiffOps(allocator: std.mem.Allocator, initial_state: []const i64, final_state: []const i64, initial_ptr: usize, final_ptr: usize) !std.ArrayList(BfOp) {
-    var result = std.ArrayList(BfOp){};
+    var result: std.ArrayList(BfOp) = .empty;
     errdefer result.deinit(allocator);
 
     var current_ptr: i32 = @intCast(initial_ptr);
@@ -626,7 +626,7 @@ fn trySplitAndPrecompute(allocator: std.mem.Allocator, ops: []const BfOp) !?std.
 
     std.debug.print("Prefix pre-computed! {} bytes of output, continuing with remaining code...\n", .{interpreter.output.items.len});
 
-    var result = std.ArrayList(BfOp){};
+    var result: std.ArrayList(BfOp) = .empty;
     errdefer result.deinit(allocator);
 
     for (interpreter.output.items) |byte| {
@@ -700,7 +700,7 @@ fn trySkipUnusedInputAndOptimize(allocator: std.mem.Allocator, ops: []const BfOp
 
     std.debug.print("Pre-computed {} bytes of output, recreating memory state...\n", .{interpreter.output.items.len});
 
-    var result = std.ArrayList(BfOp){};
+    var result: std.ArrayList(BfOp) = .empty;
     errdefer result.deinit(allocator);
 
     for (interpreter.output.items) |byte| {
@@ -744,7 +744,7 @@ fn tryComptimeOptimization(allocator: std.mem.Allocator, ops: []const BfOp, opti
 
     if (try tryFullProgramPrecompute(allocator, ops)) |precomputed_output| {
         defer allocator.free(precomputed_output);
-        var result = std.ArrayList(BfOp){};
+        var result: std.ArrayList(BfOp) = .empty;
         for (precomputed_output) |byte| {
             try result.append(allocator, .{ .add_val = @intCast(byte) });
             try result.append(allocator, .output);
@@ -767,13 +767,13 @@ fn tryComptimeOptimization(allocator: std.mem.Allocator, ops: []const BfOp, opti
         std.debug.print("Applying segmented compile-time optimization... (Ctrl+C to cancel)\n", .{});
     }
 
-    var segments = std.ArrayList(std.ArrayList(BfOp)){};
+    var segments: std.ArrayList(std.ArrayList(BfOp)) = .empty;
     defer {
         for (segments.items) |*seg| seg.deinit(allocator);
         segments.deinit(allocator);
     }
 
-    var current_segment = std.ArrayList(BfOp){};
+    var current_segment: std.ArrayList(BfOp) = .empty;
     errdefer current_segment.deinit(allocator);
     var has_io = false;
 
@@ -782,9 +782,9 @@ fn tryComptimeOptimization(allocator: std.mem.Allocator, ops: []const BfOp, opti
             has_io = true;
             if (current_segment.items.len > 0) {
                 try segments.append(allocator, current_segment);
-                current_segment = std.ArrayList(BfOp){};
+                current_segment = .empty;
             }
-            var io_segment = std.ArrayList(BfOp){};
+            var io_segment: std.ArrayList(BfOp) = .empty;
             try io_segment.append(allocator, op);
             try segments.append(allocator, io_segment);
         } else {
@@ -801,7 +801,7 @@ fn tryComptimeOptimization(allocator: std.mem.Allocator, ops: []const BfOp, opti
         return try tryComptimeOptimizeSingleSegment(allocator, ops);
     }
 
-    var optimized_total = std.ArrayList(BfOp){};
+    var optimized_total: std.ArrayList(BfOp) = .empty;
     errdefer optimized_total.deinit(allocator);
 
     var optimized_count: usize = 0;
@@ -835,7 +835,7 @@ fn tryComptimeOptimization(allocator: std.mem.Allocator, ops: []const BfOp, opti
 }
 
 fn optimizeOps(allocator: std.mem.Allocator, initial_ops: []const BfOp, enable_comptime: bool) !std.ArrayList(BfOp) {
-    var contracted = std.ArrayList(BfOp){};
+    var contracted: std.ArrayList(BfOp) = .empty;
     defer contracted.deinit(allocator);
     var i: usize = 0;
     while (i < initial_ops.len) {
@@ -884,7 +884,7 @@ fn optimizeOps(allocator: std.mem.Allocator, initial_ops: []const BfOp, enable_c
         }
     }
 
-    var optimized = std.ArrayList(BfOp){};
+    var optimized: std.ArrayList(BfOp) = .empty;
     errdefer {
         freeBfOps(allocator, optimized.items);
         optimized.deinit(allocator);
@@ -1062,7 +1062,7 @@ pub fn generateBrainfuck(cg: *codegen, bf: ast.Brainfuck, enable_comptime_opt: b
     const putchar_func = try cg.declareLibcFunction("putchar");
     const getchar_func = try cg.declareLibcFunction("getchar");
 
-    var loop_stack = std.ArrayList(struct { cond: c.LLVMBasicBlockRef, exit: c.LLVMBasicBlockRef }){};
+    var loop_stack: std.ArrayList(struct { cond: c.LLVMBasicBlockRef, exit: c.LLVMBasicBlockRef }) = .empty;
     defer loop_stack.deinit(cg.allocator);
 
     const cell_zero = c.LLVMConstInt(cell_type, 0, 0);

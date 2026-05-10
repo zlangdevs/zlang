@@ -42,8 +42,9 @@ fn majorFromLlvmLibName(lib_name: []const u8) u32 {
     return std.fmt.parseInt(u32, lib_name[dash + 1 ..], 10) catch 0;
 }
 
-fn detectLlvmLinkInfo(allocator: std.mem.Allocator) LlvmLinkInfo {
-    var candidates = std.ArrayList([]const u8){};
+fn detectLlvmLinkInfo(b: *std.Build) LlvmLinkInfo {
+    const allocator = b.allocator;
+    var candidates: std.ArrayList([]const u8) = .empty;
     defer candidates.deinit(allocator);
 
     candidates.append(allocator, "llvm-config") catch {};
@@ -54,16 +55,11 @@ fn detectLlvmLinkInfo(allocator: std.mem.Allocator) LlvmLinkInfo {
     }
 
     for (candidates.items) |exe| {
-        const run = std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &[_][]const u8{ exe, "--libs" },
-        }) catch continue;
-        defer allocator.free(run.stdout);
-        defer allocator.free(run.stderr);
-        if (run.term != .Exited or run.term.Exited != 0) continue;
+        var out_code: u8 = 0;
+        const stdout = b.runAllowFail(&[_][]const u8{ exe, "--libs" }, &out_code, .ignore) catch continue;
 
         var lib_name: ?[]const u8 = null;
-        var it = std.mem.tokenizeAny(u8, run.stdout, " \t\r\n");
+        var it = std.mem.tokenizeAny(u8, stdout, " \t\r\n");
         while (it.next()) |arg| {
             lib_name = llvmLibNameFromArg(allocator, arg);
             if (lib_name != null) break;
@@ -72,34 +68,28 @@ fn detectLlvmLinkInfo(allocator: std.mem.Allocator) LlvmLinkInfo {
 
         var detected_major = majorFromLlvmLibName(lib_name.?);
         if (detected_major == 0) {
-            const version_run = std.process.Child.run(.{
-                .allocator = allocator,
-                .argv = &[_][]const u8{ exe, "--version" },
-            }) catch return .{ .lib_name = lib_name.?, .version_major = 0 };
-            defer allocator.free(version_run.stdout);
-            defer allocator.free(version_run.stderr);
-            if (version_run.term == .Exited and version_run.term.Exited == 0) {
-                detected_major = parseLlvmMajor(version_run.stdout) orelse 0;
-            }
+            const version_stdout = b.runAllowFail(&[_][]const u8{ exe, "--version" }, &out_code, .ignore) catch return .{ .lib_name = lib_name.?, .version_major = 0 };
+            detected_major = parseLlvmMajor(version_stdout) orelse 0;
         }
 
         return .{ .lib_name = lib_name.?, .version_major = detected_major };
     }
 
-    const lib_dirs = [_][]const u8{ "/usr/local/lib", "/lib64", "/lib", "/usr/lib64", "/usr/lib" };
     var best_name: ?[]const u8 = null;
     var best_major: u32 = 0;
-    for (lib_dirs) |dir_path| {
-        var dir = std.fs.openDirAbsolute(dir_path, .{ .iterate = true }) catch continue;
-        defer dir.close();
-        var it = dir.iterate();
-        while (it.next() catch null) |entry| {
-            const lib_name = llvmLibNameFromFile(allocator, entry.name) orelse continue;
-            const major = majorFromLlvmLibName(lib_name);
-            if (major >= best_major) {
-                best_name = lib_name;
-                best_major = major;
-            }
+    var out_code: u8 = 0;
+    const lib_names = b.runAllowFail(&[_][]const u8{
+        "sh",
+        "-c",
+        "for d in /usr/local/lib /lib64 /lib /usr/lib64 /usr/lib; do for f in \"$d\"/libLLVM*.so \"$d\"/libLLVM*.so.* \"$d\"/libLLVM*.a \"$d\"/libLLVM*.dylib; do [ -e \"$f\" ] && basename \"$f\"; done; done",
+    }, &out_code, .ignore) catch "";
+    var lib_it = std.mem.tokenizeAny(u8, lib_names, "\r\n");
+    while (lib_it.next()) |file_name| {
+        const lib_name = llvmLibNameFromFile(allocator, file_name) orelse continue;
+        const major = majorFromLlvmLibName(lib_name);
+        if (major >= best_major) {
+            best_name = lib_name;
+            best_major = major;
         }
     }
     if (best_name) |lib_name| return .{ .lib_name = lib_name, .version_major = best_major };
@@ -107,17 +97,17 @@ fn detectLlvmLinkInfo(allocator: std.mem.Allocator) LlvmLinkInfo {
     return .{ .lib_name = "LLVM", .version_major = 0 };
 }
 
-fn addCommonSystemLibraryPaths(exe: *std.Build.Step.Compile) void {
+fn addCommonSystemLibraryPaths(mod: *std.Build.Module) void {
     const paths = [_][]const u8{ "/usr/local/lib", "/lib64", "/lib", "/usr/lib64", "/usr/lib" };
     for (paths) |path| {
-        exe.addLibraryPath(.{ .cwd_relative = path });
+        mod.addLibraryPath(.{ .cwd_relative = path });
     }
 }
 
-fn addCommonSystemIncludePaths(exe: *std.Build.Step.Compile) void {
+fn addCommonSystemIncludePaths(mod: *std.Build.Module) void {
     const paths = [_][]const u8{ "/usr/local/include", "/usr/include" };
     for (paths) |path| {
-        exe.addIncludePath(.{ .cwd_relative = path });
+        mod.addIncludePath(.{ .cwd_relative = path });
     }
 }
 
@@ -138,7 +128,7 @@ pub fn build(b: *std.Build) void {
     const system_symlink = b.option([]const u8, "system-symlink", "Symlink path for zlang executable") orelse "/usr/bin/zlang";
     const llvm_lib_option = b.option([]const u8, "llvm-lib", "LLVM library name to link against (e.g. LLVM-22, LLVM)");
     const llvm_version_option = b.option(u32, "llvm-version-major", "LLVM major version to show in -stats");
-    const detected_llvm = if (llvm_lib_option == null or llvm_version_option == null) detectLlvmLinkInfo(b.allocator) else LlvmLinkInfo{ .lib_name = llvm_lib_option.?, .version_major = llvm_version_option.? };
+    const detected_llvm = if (llvm_lib_option == null or llvm_version_option == null) detectLlvmLinkInfo(b) else LlvmLinkInfo{ .lib_name = llvm_lib_option.?, .version_major = llvm_version_option.? };
     const llvm_lib = llvm_lib_option orelse detected_llvm.lib_name;
     const llvm_version_major = llvm_version_option orelse blk: {
         const major = majorFromLlvmLibName(llvm_lib);
@@ -318,7 +308,7 @@ pub fn build(b: *std.Build) void {
     // generating and linking lexer (depends on parser.h)
     const flex_cmd = b.addSystemCommand(&[_][]const u8{ "flex", "-o", "src/lexer/lexer.c", "src/lexer/lexer.l" });
     flex_cmd.step.dependOn(&bison_cmd.step);
-    exe.addCSourceFile(.{
+    exe.root_module.addCSourceFile(.{
         .file = b.path("src/lexer/lexer.c"),
         .flags = &[_][]const u8{
             "-std=gnu99",
@@ -329,7 +319,7 @@ pub fn build(b: *std.Build) void {
             "-Wno-unused-function",
         },
     });
-    exe.addCSourceFile(.{
+    exe.root_module.addCSourceFile(.{
         .file = b.path("src/parser/parser.c"),
         .flags = &[_][]const u8{
             "-std=gnu99",
@@ -343,14 +333,14 @@ pub fn build(b: *std.Build) void {
     });
 
     //exe.linkSystemLibrary("fl");
-    exe.linkLibC();
-    addCommonSystemIncludePaths(exe);
-    addCommonSystemLibraryPaths(exe);
-    exe.linkSystemLibrary(llvm_lib);
+    exe.root_module.link_libc = true;
+    addCommonSystemIncludePaths(exe.root_module);
+    addCommonSystemLibraryPaths(exe.root_module);
+    exe.root_module.linkSystemLibrary(llvm_lib, .{});
     exe.step.dependOn(&flex_cmd.step);
     exe.step.dependOn(&bison_cmd.step);
 
-    appimage_exe.addCSourceFile(.{
+    appimage_exe.root_module.addCSourceFile(.{
         .file = b.path("src/lexer/lexer.c"),
         .flags = &[_][]const u8{
             "-std=gnu99",
@@ -361,7 +351,7 @@ pub fn build(b: *std.Build) void {
             "-Wno-unused-function",
         },
     });
-    appimage_exe.addCSourceFile(.{
+    appimage_exe.root_module.addCSourceFile(.{
         .file = b.path("src/parser/parser.c"),
         .flags = &[_][]const u8{
             "-std=gnu99",
@@ -374,10 +364,10 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    appimage_exe.linkLibC();
-    addCommonSystemIncludePaths(appimage_exe);
-    addCommonSystemLibraryPaths(appimage_exe);
-    appimage_exe.linkSystemLibrary(llvm_lib);
+    appimage_exe.root_module.link_libc = true;
+    addCommonSystemIncludePaths(appimage_exe.root_module);
+    addCommonSystemLibraryPaths(appimage_exe.root_module);
+    appimage_exe.root_module.linkSystemLibrary(llvm_lib, .{});
     appimage_exe.step.dependOn(&flex_cmd.step);
     appimage_exe.step.dependOn(&bison_cmd.step);
 

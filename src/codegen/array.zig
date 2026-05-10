@@ -79,7 +79,7 @@ pub fn generateArrayElementFieldAssignment(self: *CodeGenerator, array_index: as
 }
 
 pub fn getArrayElementPtrAndType(self: *CodeGenerator, arr_idx: ast.ArrayIndex) errors.CodegenError!ArrayElementAccess {
-    var collected_indices = std.ArrayList(c.LLVMValueRef){};
+    var collected_indices: std.ArrayList(c.LLVMValueRef) = .empty;
     defer collected_indices.deinit(self.allocator);
 
     const base_node = try collectArrayIndices(self, arr_idx.array, &collected_indices);
@@ -189,7 +189,7 @@ pub fn getArrayElementPtrAndType(self: *CodeGenerator, arr_idx: ast.ArrayIndex) 
 
     index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
     try collected_indices.append(self.allocator, index_value);
-    var all_indices = std.ArrayList(c.LLVMValueRef){};
+    var all_indices: std.ArrayList(c.LLVMValueRef) = .empty;
     defer all_indices.deinit(self.allocator);
     try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
 
@@ -236,7 +236,7 @@ pub fn getArrayElementPtrAndType(self: *CodeGenerator, arr_idx: ast.ArrayIndex) 
 }
 
 pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignment) errors.CodegenError!void {
-    var collected_indices = std.ArrayList(c.LLVMValueRef){};
+    var collected_indices: std.ArrayList(c.LLVMValueRef) = .empty;
     defer collected_indices.deinit(self.allocator);
 
     const base_node = try collectArrayIndices(self, arr_ass.array, &collected_indices);
@@ -378,7 +378,7 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
         final_type = c.LLVMGetElementType(@ptrCast(final_type));
     }
 
-    var all_indices = std.ArrayList(c.LLVMValueRef){};
+    var all_indices: std.ArrayList(c.LLVMValueRef) = .empty;
     defer all_indices.deinit(self.allocator);
     try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
 
@@ -541,7 +541,7 @@ pub fn generateArrayDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.
 }
 
 pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayIndex) errors.CodegenError!c.LLVMValueRef {
-    var collected_indices = std.ArrayList(c.LLVMValueRef){};
+    var collected_indices: std.ArrayList(c.LLVMValueRef) = .empty;
     defer collected_indices.deinit(self.allocator);
 
     const base_node = try collectArrayIndices(self, arr_idx.array, &collected_indices);
@@ -666,7 +666,7 @@ pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayInde
         final_type = c.LLVMGetElementType(final_type);
     }
 
-    var all_indices = std.ArrayList(c.LLVMValueRef){};
+    var all_indices: std.ArrayList(c.LLVMValueRef) = .empty;
     defer all_indices.deinit(self.allocator);
     try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
 

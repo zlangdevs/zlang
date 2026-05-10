@@ -34,7 +34,7 @@ pub const ModuleManager = struct {
         self.global_to_module.deinit();
     }
     pub fn registerModule(self: *ModuleManager, module_name: []const u8, full_path: []const u8, deps: []const []const u8) !void {
-        var list = std.ArrayList([]const u8){};
+        var list: std.ArrayList([]const u8) = .empty;
         for (deps) |d| {
             try list.append(self.allocator, utils.dupe(u8, self.allocator, d));
         }
@@ -43,6 +43,9 @@ pub const ModuleManager = struct {
     }
     pub fn registerFunctionModule(self: *ModuleManager, func_name: []const u8, module_name: []const u8) !void {
         try self.function_to_module.put(utils.dupe(u8, self.allocator, func_name), utils.dupe(u8, self.allocator, module_name));
+    }
+    pub fn getFunctionModule(self: *ModuleManager, func_name: []const u8) ?[]const u8 {
+        return self.function_to_module.get(func_name);
     }
     pub fn registerGlobalModule(self: *ModuleManager, global_name: []const u8, module_name: []const u8) !void {
         try self.global_to_module.put(utils.dupe(u8, self.allocator, global_name), utils.dupe(u8, self.allocator, module_name));

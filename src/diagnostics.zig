@@ -18,15 +18,10 @@ pub const Diagnostic = struct {
 };
 
 fn getLineContent(allocator: std.mem.Allocator, file_path: []const u8, line_num: usize) !?[]const u8 {
-    const file = std.fs.cwd().openFile(file_path, .{}) catch return null;
-    defer file.close();
-
-    const content_buffer = utils.alloc(u8, allocator, 1024 * 1024);
-    const bytes_read = file.readAll(content_buffer) catch {
-        allocator.free(content_buffer);
-        return null;
-    };
-    const content = content_buffer[0..bytes_read];
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const content = std.Io.Dir.cwd().readFileAlloc(threaded.io(), file_path, allocator, .limited(1024 * 1024)) catch return null;
+    const content_buffer = content;
     defer allocator.free(content_buffer);
 
     var it = std.mem.splitScalar(u8, content, '\n');
@@ -65,7 +60,7 @@ pub fn printDiagnostic(allocator: std.mem.Allocator, diag: Diagnostic) void {
 
     if (getLineContent(allocator, diag.file_path, diag.line) catch null) |line_content| {
         defer allocator.free(line_content);
-        const trimmed_line = std.mem.trimRight(u8, line_content, "\r");
+        const trimmed_line = std.mem.trimEnd(u8, line_content, "\r");
 
         std.debug.print("{s}    |{s}\n", .{ blue, reset });
 

@@ -3,6 +3,12 @@ const utils = @import("codegen/utils.zig");
 const c_abi = @import("c_abi.zig");
 const llvm_tools = @import("llvm_tools.zig");
 
+fn nanoTimestamp() i128 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(.REALTIME, &ts) != 0) return 0;
+    return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
+}
+
 const AliasMap = std.StringHashMap([]const u8);
 
 const StructFieldInfo = struct {
@@ -91,7 +97,7 @@ fn asciiLower(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 fn squeezeSpaces(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
 
     var prev_space = false;
@@ -110,7 +116,7 @@ fn squeezeSpaces(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 fn stripCommentsAndPreproc(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
 
     var i: usize = 0;
@@ -149,7 +155,7 @@ fn stripCommentsAndPreproc(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 fn removeExternCGuards(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
 
     var it = std.mem.splitScalar(u8, input, '\n');
@@ -170,7 +176,7 @@ fn removeExternCGuards(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 fn stripCommentsOnly(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
 
     var i: usize = 0;
@@ -202,7 +208,7 @@ fn isNumericToken(token: []const u8) bool {
 }
 
 fn sanitizeNumericToken(alloc: std.mem.Allocator, token: []const u8) ![]const u8 {
-    var tmp = std.ArrayList(u8){};
+    var tmp: std.ArrayList(u8) = .empty;
     defer tmp.deinit(alloc);
 
     for (token) |ch| {
@@ -252,7 +258,7 @@ fn sanitizeConstantExpr(alloc: std.mem.Allocator, raw_expr: []const u8) !?[]cons
         expr = trimSpaces(expr[1 .. expr.len - 1]);
     }
 
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
 
     var i: usize = 0;
@@ -344,7 +350,7 @@ fn parseTypedefEnum(
 
     var enum_info = EnumInfo{
         .name = utils.dupe(u8, alloc, enum_name),
-        .values = std.ArrayList(EnumValueInfo){},
+        .values = .empty,
     };
 
     const body = trimmed[open_brace + 1 .. close_brace];
@@ -392,7 +398,7 @@ fn parseTypedefEnum(
 }
 
 fn parseDefineConstants(alloc: std.mem.Allocator, source: []const u8, constants: *std.ArrayList(ConstInfo)) !void {
-    var current = std.ArrayList(u8){};
+    var current: std.ArrayList(u8) = .empty;
     defer current.deinit(alloc);
 
     var collecting = false;
@@ -638,8 +644,8 @@ fn emitKnownHeaderFlags(writer: anytype, alloc: std.mem.Allocator, header_path: 
 }
 
 fn splitTopLevel(alloc: std.mem.Allocator, input: []const u8, delimiter: u8) !std.ArrayList([]const u8) {
-    var parts = std.ArrayList([]const u8){};
-    var current = std.ArrayList(u8){};
+    var parts: std.ArrayList([]const u8) = .empty;
+    var current: std.ArrayList(u8) = .empty;
 
     var paren_depth: usize = 0;
     var brace_depth: usize = 0;
@@ -850,7 +856,7 @@ fn mapCTypeToZType(alloc: std.mem.Allocator, raw0: []const u8, aliases: *const A
 
     var ptr_depth: usize = 0;
     {
-        var tmp = std.ArrayList(u8){};
+        var tmp: std.ArrayList(u8) = .empty;
         defer tmp.deinit(alloc);
         for (raw) |ch| {
             if (ch == '*') {
@@ -1009,7 +1015,7 @@ fn parseOpaqueStructAlias(
     info.* = .{
         .name = utils.dupe(u8, alloc, chosen_name),
         .is_union = is_union,
-        .fields = std.ArrayList(StructFieldInfo){},
+        .fields = .empty,
         .abi_mapping = .{},
     };
 
@@ -1116,7 +1122,7 @@ fn parseTypedefStruct(
         created.* = .{
             .name = utils.dupe(u8, alloc, struct_name),
             .is_union = is_union,
-            .fields = std.ArrayList(StructFieldInfo){},
+            .fields = .empty,
             .abi_mapping = .{},
         };
         struct_info = created;
@@ -1127,7 +1133,7 @@ fn parseTypedefStruct(
         try parseFieldDeclaration(alloc, field_stmt, aliases, &struct_info.fields);
     }
 
-    var abi_fields = std.ArrayList(c_abi.StructField){};
+    var abi_fields: std.ArrayList(c_abi.StructField) = .empty;
     defer abi_fields.deinit(alloc);
     for (struct_info.fields.items) |field| {
         try abi_fields.append(alloc, .{
@@ -1197,7 +1203,7 @@ fn parseFunctionStatement(alloc: std.mem.Allocator, stmt_in: []const u8, aliases
         .ret_abi_type = ret_info.abi_type,
         .ret_conversion = ret_info.conversion,
         .ret_struct_name = ret_info.struct_name,
-        .params = std.ArrayList(ParamInfo){},
+        .params = .empty,
         .has_varargs = false,
     };
 
@@ -1568,15 +1574,9 @@ fn emitFunctionWrappers(writer: anytype, functions: []const FunctionInfo, used_h
 }
 
 fn readFile(alloc: std.mem.Allocator, file_path: []const u8) ![]u8 {
-    const cwd = std.fs.cwd();
-    const stat = try cwd.statFile(file_path);
-    const file = try cwd.openFile(file_path, .{ .mode = .read_only });
-    defer file.close();
-
-    const cap = if (stat.size == 0) 1 else stat.size;
-    const buffer = utils.alloc(u8, alloc, @intCast(cap));
-    const bytes_read = try file.readAll(buffer);
-    return buffer[0..bytes_read];
+    var threaded: std.Io.Threaded = .init(alloc, .{});
+    defer threaded.deinit();
+    return try std.Io.Dir.cwd().readFileAlloc(threaded.io(), file_path, alloc, .unlimited);
 }
 
 const ProbeSignature = struct {
@@ -1674,7 +1674,7 @@ fn parseProbeSignaturesFromLl(alloc: std.mem.Allocator, ll_text: []const u8) !st
         var params = try splitTopLevel(alloc, params_chunk, ',');
         defer params.deinit(alloc);
 
-        var param_types = std.ArrayList([]const u8){};
+        var param_types: std.ArrayList([]const u8) = .empty;
         for (params.items) |param_raw| {
             const p = trimSpaces(param_raw);
             if (p.len == 0) continue;
@@ -1729,14 +1729,18 @@ fn refineAbiUsingClangProbe(alloc: std.mem.Allocator, header_path: []const u8, f
     defer arena.deinit();
     const a = arena.allocator();
 
-    const probe_c = try std.fmt.allocPrint(a, ".zig-cache/wrapgen/probe_{d}.c", .{std.time.nanoTimestamp()});
-    const probe_ll = try std.fmt.allocPrint(a, ".zig-cache/wrapgen/probe_{d}.ll", .{std.time.nanoTimestamp()});
-    defer std.fs.cwd().deleteFile(probe_c) catch {};
-    defer std.fs.cwd().deleteFile(probe_ll) catch {};
+    const probe_c = try std.fmt.allocPrint(a, ".zig-cache/wrapgen/probe_{d}.c", .{nanoTimestamp()});
+    const probe_ll = try std.fmt.allocPrint(a, ".zig-cache/wrapgen/probe_{d}.ll", .{nanoTimestamp()});
+    var threaded: std.Io.Threaded = .init(alloc, .{});
+    defer threaded.deinit();
+    defer std.Io.Dir.cwd().deleteFile(threaded.io(), probe_c) catch {};
+    defer std.Io.Dir.cwd().deleteFile(threaded.io(), probe_ll) catch {};
 
-    var src = std.ArrayList(u8){};
+    var src: std.ArrayList(u8) = .empty;
     defer src.deinit(a);
-    const w = src.writer(a);
+    var src_writer = std.Io.Writer.Allocating.fromArrayList(a, &src);
+    defer src = src_writer.toArrayList();
+    const w = &src_writer.writer;
     try w.print("#include \"{s}\"\n\n", .{header_path});
 
     for (functions.items) |fn_info| {
@@ -1763,11 +1767,14 @@ fn refineAbiUsingClangProbe(alloc: std.mem.Allocator, header_path: []const u8, f
         try w.writeAll(");\n}\n\n");
     }
 
-    var f = try std.fs.cwd().createFile(probe_c, .{ .truncate = true });
-    defer f.close();
-    try f.writeAll(src.items);
+    var f = try std.Io.Dir.cwd().createFile(threaded.io(), probe_c, .{ .truncate = true });
+    defer f.close(threaded.io());
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = f.writer(threaded.io(), &file_buffer);
+    try file_writer.interface.writeAll(src_writer.written());
+    try file_writer.interface.flush();
 
-    var argv = std.ArrayList([]const u8){};
+    var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(a);
     try argv.append(a, clang_path);
     try argv.append(a, "-S");
@@ -1779,13 +1786,15 @@ fn refineAbiUsingClangProbe(alloc: std.mem.Allocator, header_path: []const u8, f
     try argv.append(a, "-o");
     try argv.append(a, probe_ll);
 
-    var child = std.process.Child.init(argv.items, a);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    const term = try child.spawnAndWait();
+    var child = try std.process.spawn(threaded.io(), .{
+        .argv = argv.items,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
+    const term = try child.wait(threaded.io());
     switch (term) {
-        .Exited => |code| if (code != 0) return,
+        .exited => |code| if (code != 0) return,
         else => return,
     }
 
@@ -1834,11 +1843,11 @@ fn generateFromHeaderImpl(alloc: std.mem.Allocator, source_header_path: []const 
 
     var aliases = AliasMap.init(a);
     var structs = StructMap.init(a);
-    var ordered_structs = std.ArrayList(*StructInfo){};
-    var enums = std.ArrayList(EnumInfo){};
+    var ordered_structs: std.ArrayList(*StructInfo) = .empty;
+    var enums: std.ArrayList(EnumInfo) = .empty;
     var enum_value_names = std.StringHashMap(void).init(a);
-    var constants = std.ArrayList(ConstInfo){};
-    var functions = std.ArrayList(FunctionInfo){};
+    var constants: std.ArrayList(ConstInfo) = .empty;
+    var functions: std.ArrayList(FunctionInfo) = .empty;
 
     defer {
         aliases.deinit();
@@ -1883,10 +1892,12 @@ fn generateFromHeaderImpl(alloc: std.mem.Allocator, source_header_path: []const 
     var used_helpers = std.StringHashMap(void).init(a);
     defer used_helpers.deinit();
 
-    var output = std.ArrayList(u8){};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(a);
 
-    const writer = output.writer(a);
+    var output_writer = std.Io.Writer.Allocating.fromArrayList(a, &output);
+    defer output = output_writer.toArrayList();
+    const writer = &output_writer.writer;
     try emitKnownHeaderFlags(writer, a, source_header_path);
 
     try emitOpaqueTypeDeclarations(writer, a, ordered_structs.items, enums.items, functions.items);
@@ -1925,9 +1936,14 @@ fn generateFromHeaderImpl(alloc: std.mem.Allocator, source_header_path: []const 
     try emitPackUnpackHelpers(writer, ordered_structs.items, &used_helpers);
     try emitFunctionWrappers(writer, functions.items, &used_helpers, &structs);
 
-    var out_file = try std.fs.cwd().createFile(out_path, .{ .truncate = true });
-    defer out_file.close();
-    try out_file.writeAll(output.items);
+    var threaded: std.Io.Threaded = .init(alloc, .{});
+    defer threaded.deinit();
+    var out_file = try std.Io.Dir.cwd().createFile(threaded.io(), out_path, .{ .truncate = true });
+    defer out_file.close(threaded.io());
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = out_file.writer(threaded.io(), &file_buffer);
+    try file_writer.interface.writeAll(output_writer.written());
+    try file_writer.interface.flush();
 }
 
 pub fn generateFromHeader(alloc: std.mem.Allocator, header_path: []const u8, out_path: []const u8) !void {
@@ -1942,11 +1958,14 @@ pub fn generateFromHeaderWithClang(alloc: std.mem.Allocator, header_path: []cons
     defer arena.deinit();
     const a = arena.allocator();
 
-    try std.fs.cwd().makePath(".zig-cache/wrapgen");
-    const tmp_path = try std.fmt.allocPrint(a, ".zig-cache/wrapgen/preprocessed_{d}.h", .{std.time.nanoTimestamp()});
-    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+    var threaded: std.Io.Threaded = .init(alloc, .{});
+    defer threaded.deinit();
+    try std.Io.Dir.cwd().createDirPath(threaded.io(), ".zig-cache/wrapgen");
+    const timestamp = std.Io.Timestamp.now(threaded.io(), .real).toNanoseconds();
+    const tmp_path = try std.fmt.allocPrint(a, ".zig-cache/wrapgen/preprocessed_{d}.h", .{timestamp});
+    defer std.Io.Dir.cwd().deleteFile(threaded.io(), tmp_path) catch {};
 
-    var argv = std.ArrayList([]const u8){};
+    var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(a);
 
     try argv.append(a, clang_path);
@@ -1964,14 +1983,13 @@ pub fn generateFromHeaderWithClang(alloc: std.mem.Allocator, header_path: []cons
     try argv.append(a, "-o");
     try argv.append(a, tmp_path);
 
-    var child = std.process.Child.init(argv.items, a);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-
-    const term = try child.spawnAndWait();
+    var child = try std.process.spawn(threaded.io(), .{
+        .argv = argv.items,
+        .stdin = .ignore,
+    });
+    const term = try child.wait(threaded.io());
     switch (term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) return error.ClangPreprocessFailed;
         },
         else => return error.ClangPreprocessFailed,

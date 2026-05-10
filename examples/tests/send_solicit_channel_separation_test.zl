@@ -1,0 +1,37 @@
+error Shared = _;
+
+fun emit(mode: i32) >> i32 {
+    if mode == 0 {
+        send Shared;
+        return 11;
+    }
+    solicit Shared;
+    return 22;
+}
+
+fun main() >> i32 {
+    i32 send_seen = 0;
+    i32 solicit_seen = 0;
+
+    i32 a = emit(0)
+        on Shared {
+            send_seen = 1;
+        }
+        on solicit Shared {
+            send_seen = 9;
+        };
+
+    i32 b = emit(1)
+        on Shared {
+            solicit_seen = 9;
+        }
+        on solicit Shared {
+            solicit_seen = 1;
+        };
+
+    @printf("(expected 1):%d\n", send_seen);
+    @printf("(expected 1):%d\n", solicit_seen);
+    @printf("(expected 11):%d\n", a);
+    @printf("(expected 22):%d\n", b);
+    return 0;
+}
