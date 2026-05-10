@@ -18,7 +18,9 @@ pub const Entry = struct {
     path: []const u8,
     api_min: u32,
     api_max: u32,
+    dependencies: []const []const u8 = &.{},
     status: Status = .installed,
+    status_reason: ?[]const u8 = null,
 };
 
 pub const Index = struct {
@@ -72,7 +74,17 @@ pub fn write(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store, entri
         try writeString(&writer.interface, entry.version);
         try writer.interface.writeAll(", .path = ");
         try writeString(&writer.interface, entry.path);
-        try writer.interface.print(", .api_min = {d}, .api_max = {d}, .status = .{s} }},\n", .{ entry.api_min, entry.api_max, @tagName(entry.status) });
+        try writer.interface.print(", .api_min = {d}, .api_max = {d}, .dependencies = .{{", .{ entry.api_min, entry.api_max });
+        for (entry.dependencies, 0..) |dep, i| {
+            if (i != 0) try writer.interface.writeAll(", ");
+            try writeString(&writer.interface, dep);
+        }
+        try writer.interface.print("}}, .status = .{s}", .{@tagName(entry.status)});
+        if (entry.status_reason) |reason| {
+            try writer.interface.writeAll(", .status_reason = ");
+            try writeString(&writer.interface, reason);
+        }
+        try writer.interface.writeAll(" },\n");
     }
     try writer.interface.writeAll("    },\n}\n");
     try writer.interface.flush();
@@ -109,12 +121,51 @@ pub fn rebuild(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store) !st
             .path = package_path,
             .api_min = parsed.api_min,
             .api_max = parsed.api_max,
+            .dependencies = try dupeStringList(alloc, parsed.dependencies),
             .status = if (manifest_mod.supportsCurrentTarget(parsed)) .installed else .incompatible,
+            .status_reason = if (manifest_mod.supportsCurrentTarget(parsed)) null else "unsupported target",
         });
     }
 
+    applyDependencyStatuses(entries.items);
     try write(alloc, io, store, entries.items);
     return entries;
+}
+
+pub fn applyDependencyStatuses(entries: []Entry) void {
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (entries) |*entry| {
+            if (entry.status == .incompatible and entry.status_reason != null and !std.mem.eql(u8, entry.status_reason.?, "missing dependency")) continue;
+            const old_status = entry.status;
+            const old_reason = entry.status_reason;
+            for (entry.dependencies) |dep| {
+                if (!hasInstalledDependency(entries, dep)) {
+                    entry.status = .incompatible;
+                    entry.status_reason = "missing dependency";
+                    break;
+                }
+            } else if (entry.status_reason != null and std.mem.eql(u8, entry.status_reason.?, "missing dependency")) {
+                entry.status = .installed;
+                entry.status_reason = null;
+            }
+            if (entry.status != old_status or reasonChanged(old_reason, entry.status_reason)) changed = true;
+        }
+    }
+}
+
+fn reasonChanged(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a == null and b == null) return false;
+    if (a == null or b == null) return true;
+    return !std.mem.eql(u8, a.?, b.?);
+}
+
+fn hasInstalledDependency(entries: []const Entry, name: []const u8) bool {
+    for (entries) |entry| {
+        if (std.mem.eql(u8, entry.name, name) and entry.status == .installed) return true;
+    }
+    return false;
 }
 
 pub fn deinitEntries(entries: *std.ArrayList(Entry), alloc: std.mem.Allocator) void {
@@ -122,8 +173,23 @@ pub fn deinitEntries(entries: *std.ArrayList(Entry), alloc: std.mem.Allocator) v
         alloc.free(entry.name);
         alloc.free(entry.version);
         alloc.free(entry.path);
+        freeStringList(alloc, entry.dependencies);
     }
     entries.deinit(alloc);
+}
+
+fn dupeStringList(alloc: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
+    const out = try alloc.alloc([]const u8, values.len);
+    errdefer alloc.free(out);
+    for (values, 0..) |value, i| {
+        out[i] = try alloc.dupe(u8, value);
+    }
+    return out;
+}
+
+fn freeStringList(alloc: std.mem.Allocator, values: []const []const u8) void {
+    for (values) |value| alloc.free(value);
+    alloc.free(values);
 }
 
 fn writeString(writer: *std.Io.Writer, value: []const u8) !void {
