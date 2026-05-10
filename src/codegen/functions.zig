@@ -280,6 +280,9 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
     const mangled_name = try getMangledName(cg.allocator, func.name, type_names.items, cg);
     defer if (!std.mem.eql(u8, func.name, "main")) cg.allocator.free(mangled_name);
     const llvm_func = cg.functions.get(mangled_name) orelse return errors.CodegenError.UndefinedFunction;
+    if (!std.mem.eql(u8, func.name, "main")) {
+        c.LLVMSetLinkage(llvm_func, c.LLVMInternalLinkage);
+    }
     cg.setCurrentModuleByFunction(func.name);
     cg.current_function = llvm_func;
     cg.current_source_function_name = func.name;
@@ -777,7 +780,13 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
     }
 
     for (call.args.items, 0..) |arg, i| {
-        const val = cg.generateExpression(arg) catch |err| blk: {
+        const val = if (i < eager_param_type_names.items.len) blk: {
+            const expected_name = eager_param_type_names.items[i];
+            break :blk cg.generateExpressionWithContext(arg, expected_name) catch |err| {
+                if (err != errors.CodegenError.TypeMismatch and err != errors.CodegenError.UnsupportedOperation) return err;
+                break :blk try cg.generateExpression(arg);
+            };
+        } else cg.generateExpression(arg) catch |err| blk: {
             if (err != errors.CodegenError.TypeMismatch and err != errors.CodegenError.UnsupportedOperation) return err;
             if (i >= eager_param_type_names.items.len) return err;
             const expected_name = eager_param_type_names.items[i];

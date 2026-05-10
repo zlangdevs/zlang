@@ -3473,13 +3473,15 @@ pub const CodeGenerator = struct {
 
         const from_name = self.getTypeNameFromLLVMType(@ptrCast(from_ty));
         const to_name = self.getTypeNameFromLLVMType(@ptrCast(target_type));
-
         if (value_node) |vn| {
+            const old_line = self.current_line;
             const old_col = self.current_column;
             const old_token_text = self.current_token_text;
+            if (vn.line > 0) self.current_line = vn.line;
             if (vn.column > 0) self.current_column = vn.column;
             self.current_token_text = tokenTextForNode(vn);
             self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
+            self.current_line = old_line;
             self.current_column = old_col;
             self.current_token_text = old_token_text;
         } else {
@@ -3677,9 +3679,17 @@ pub const CodeGenerator = struct {
         }
         const from_name = self.getTypeNameFromLLVMType(@ptrCast(from_ty));
         const to_name = self.getTypeNameFromLLVMType(@ptrCast(target_type));
-
-        if (value_node) |_| {
+        if (value_node) |vn| {
+            const old_line = self.current_line;
+            const old_col = self.current_column;
+            const old_token_text = self.current_token_text;
+            if (vn.line > 0) self.current_line = vn.line;
+            if (vn.column > 0) self.current_column = vn.column;
+            self.current_token_text = tokenTextForNode(vn);
             self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
+            self.current_line = old_line;
+            self.current_column = old_col;
+            self.current_token_text = old_token_text;
         } else {
             self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
         }
@@ -3805,18 +3815,12 @@ pub const CodeGenerator = struct {
                     return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
                 } else {
                     if (expected_type) |type_name| {
-                        if (std.mem.eql(u8, type_name, "f16") or std.mem.eql(u8, type_name, "f32") or std.mem.eql(u8, type_name, "f64")) {
-                            const ival = numeric.parseNumericLiteral(num.value) catch 0;
-                            const fval: f64 = @floatFromInt(ival);
-                            if (std.mem.eql(u8, type_name, "f16")) {
-                                return c.LLVMConstReal(c.LLVMHalfTypeInContext(self.context), fval);
-                            } else if (std.mem.eql(u8, type_name, "f32")) {
-                                return c.LLVMConstReal(c.LLVMFloatTypeInContext(self.context), fval);
-                            } else {
-                                return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), fval);
-                            }
-                        }
                         const llvm_type = try self.getLLVMType(type_name);
+                        const expected_kind = c.LLVMGetTypeKind(llvm_type);
+                        if (expected_kind != c.LLVMIntegerTypeKind) {
+                            const value = numeric.parseNumericLiteral(num.value) catch 0;
+                            return c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
+                        }
                         if (std.mem.startsWith(u8, type_name, "u")) {
                             if (std.mem.startsWith(u8, num.value, "-")) {
                                 const sval = numeric.parseNumericLiteral(num.value) catch {
@@ -5519,7 +5523,7 @@ pub const CodeGenerator = struct {
             if (use_fast_pipeline) {
                 try opt_args_list.appendSlice(self.allocator, &[_][]const u8{
                     "opt",
-                    "-passes=sroa,mem2reg,instcombine,simplifycfg,gvn,dse,instcombine,simplifycfg",
+                    "-passes=globaldce,sroa,mem2reg,instcombine,simplifycfg,gvn,dse,instcombine,simplifycfg,globaldce",
                     ir_file,
                     "-o",
                     ir_file,
@@ -5654,7 +5658,7 @@ pub const CodeGenerator = struct {
                 if (self.shouldUseFastOptimizePipeline()) {
                     try opt_args_list.appendSlice(arena_alloc, &[_][]const u8{
                         opt_tool.?,
-                        "-passes=sroa,mem2reg,instcombine,simplifycfg,gvn,dse,instcombine,simplifycfg",
+                        "-passes=globaldce,sroa,mem2reg,instcombine,simplifycfg,gvn,dse,instcombine,simplifycfg,globaldce",
                         ir_file,
                         "-o",
                         opt_output_file,
