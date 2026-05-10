@@ -75,6 +75,7 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
         return 1;
     };
     defer alloc.free(dest_path);
+    const status: index_mod.Status = if (manifest.supportsCurrentTarget(parsed)) .installed else .incompatible;
 
     var out_file = std.Io.Dir.cwd().createFile(io, dest_path, .{ .truncate = true }) catch |err| {
         std.debug.print("zlx: could not write {s}: {}\n", .{ dest_path, err });
@@ -102,7 +103,7 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
                 .path = dest_path,
                 .api_min = parsed.api_min,
                 .api_max = parsed.api_max,
-                .status = .installed,
+                .status = status,
             });
             replaced = true;
         } else {
@@ -116,7 +117,7 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
             .path = dest_path,
             .api_min = parsed.api_min,
             .api_max = parsed.api_max,
-            .status = .installed,
+            .status = status,
         });
     }
     index_mod.write(alloc, io, store, next_entries.items) catch |err| {
@@ -124,7 +125,11 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
         return 1;
     };
 
-    std.debug.print("Installed {s} {s}\n", .{ parsed.name, parsed.version });
+    if (status == .incompatible) {
+        std.debug.print("Installed {s} {s} as incompatible with current target {s}\n", .{ parsed.name, parsed.version, manifest.currentTargetName() });
+    } else {
+        std.debug.print("Installed {s} {s}\n", .{ parsed.name, parsed.version });
+    }
     return 0;
 }
 
@@ -231,13 +236,34 @@ fn moduleInfo(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     std.debug.print("version: {s}\n", .{parsed.version});
     std.debug.print("format: {d}\n", .{parsed.format_version});
     std.debug.print("api: {d}-{d}\n", .{ parsed.api_min, parsed.api_max });
+    std.debug.print("current_target: {s}\n", .{manifest.currentTargetName()});
+    std.debug.print("target_compatible: {}\n", .{manifest.supportsCurrentTarget(parsed)});
+    if (parsed.entry) |entry| {
+        std.debug.print("entry: {s}\n", .{entry});
+    } else {
+        std.debug.print("entry: none\n", .{});
+    }
     printStringList("provides", parsed.provides);
     printStringList("targets", parsed.targets);
     printStringList("dependencies", parsed.dependencies);
+    printModules(parsed.modules);
     printStringList("native_libs", parsed.native_libs);
     printStringList("link_flags", parsed.link_flags);
-    printStringList("expose", parsed.expose);
+    std.debug.print("expose.global_syntax: {}\n", .{parsed.expose.global_syntax});
+    std.debug.print("expose.global_modules: {}\n", .{parsed.expose.global_modules});
     return 0;
+}
+
+fn printModules(modules: []const manifest.Module) void {
+    std.debug.print("modules:", .{});
+    if (modules.len == 0) {
+        std.debug.print(" none\n", .{});
+        return;
+    }
+    std.debug.print("\n", .{});
+    for (modules) |module| {
+        std.debug.print("  - {s}: {s}\n", .{ module.name, module.path });
+    }
 }
 
 fn printStringList(label: []const u8, values: []const []const u8) void {
