@@ -9,7 +9,7 @@ const INTERP_POOL_COUNT: u64 = 8;
 const INTERP_BUF_SIZE: u64 = 4096;
 
 pub fn parseEscape(allocator: std.mem.Allocator, str: []const u8) errors.CodegenError![]const u8 {
-    var transformed_string = std.ArrayList(u8){};
+    var transformed_string: std.ArrayList(u8) = .empty;
     defer transformed_string.deinit(allocator);
     var i: usize = 0;
     while (i < str.len) : (i += 1) {
@@ -113,7 +113,7 @@ fn appendFormatted(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, fmt: []const u8
     defer cg.allocator.free(fmt_z);
     const fmt_ptr = c.LLVMBuildGlobalStringPtr(cg.builder, fmt_z.ptr, "interp_fmt");
 
-    var call_args = std.ArrayList(c.LLVMValueRef){};
+    var call_args: std.ArrayList(c.LLVMValueRef) = .empty;
     defer call_args.deinit(cg.allocator);
     call_args.append(cg.allocator, dst_tail) catch unreachable;
     call_args.append(cg.allocator, remain) catch unreachable;

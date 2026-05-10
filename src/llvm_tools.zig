@@ -6,6 +6,7 @@ pub const LLVMTool = enum {
     llc,
     lli,
     opt,
+    llvm_split,
     clang,
     ld_lld,
     zig,
@@ -14,6 +15,7 @@ pub const LLVMTool = enum {
             .llc => "llc",
             .lli => "lli",
             .opt => "opt",
+            .llvm_split => "llvm-split",
             .clang => "clang",
             .ld_lld => "ld.lld",
             .zig => "zig",
@@ -30,6 +32,11 @@ pub const ToolPath = struct {
     }
 };
 
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: [:0]const u8) !?[]u8 {
+    const value = std.c.getenv(name) orelse return null;
+    return try allocator.dupe(u8, std.mem.span(value));
+}
+
 pub fn findLLVMTool(allocator: std.mem.Allocator, tool: LLVMTool) !?ToolPath {
     const base_name = tool.baseName();
     if (tool == .zig) {
@@ -39,7 +46,7 @@ pub fn findLLVMTool(allocator: std.mem.Allocator, tool: LLVMTool) !?ToolPath {
         return null;
     }
 
-    if (std.process.getEnvVarOwned(allocator, "ZLANG_LLVM_BIN")) |llvm_bin| {
+    if ((try getEnvVarOwned(allocator, "ZLANG_LLVM_BIN"))) |llvm_bin| {
         defer allocator.free(llvm_bin);
         if (llvm_bin.len != 0) {
             const full = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ llvm_bin, base_name });
@@ -48,7 +55,7 @@ pub fn findLLVMTool(allocator: std.mem.Allocator, tool: LLVMTool) !?ToolPath {
                 return ToolPath{ .path = utils.dupe(u8, allocator, full), .owned = true };
             }
         }
-    } else |_| {}
+    }
 
     if (build_options.llvm_version_major != 0) {
         if (try findVersionedTool(allocator, base_name, build_options.llvm_version_major)) |tool_path| {
@@ -145,8 +152,9 @@ pub fn detectToolVersionMajor(allocator: std.mem.Allocator, command_path: []cons
     const base = std.fs.path.basename(command_path);
     if (parseTrailingVersion(base)) |v| return v;
 
-    const run = std.process.Child.run(.{
-        .allocator = allocator,
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const run = std.process.run(allocator, threaded.io(), .{
         .argv = &[_][]const u8{ command_path, "--version" },
     }) catch return null;
     defer allocator.free(run.stdout);
@@ -164,13 +172,13 @@ fn isToolAvailable(allocator: std.mem.Allocator, tool_name: []const u8) !bool {
     };
 
     for (probe_args) |argv| {
-        var child = std.process.Child.init(argv, allocator);
-        child.stdin_behavior = .Ignore;
-        child.stdout_behavior = .Ignore;
-        child.stderr_behavior = .Ignore;
-        const term = child.spawnAndWait() catch continue;
-        const ok = switch (term) {
-            .Exited => |code| code == 0,
+        var threaded: std.Io.Threaded = .init(allocator, .{});
+        defer threaded.deinit();
+        const run = std.process.run(allocator, threaded.io(), .{ .argv = argv }) catch continue;
+        defer allocator.free(run.stdout);
+        defer allocator.free(run.stderr);
+        const ok = switch (run.term) {
+            .exited => |code| code == 0,
             else => false,
         };
         if (ok) return true;
@@ -182,6 +190,7 @@ pub const ToolCache = struct {
     llc: ?ToolPath = null,
     lli: ?ToolPath = null,
     opt: ?ToolPath = null,
+    llvm_split: ?ToolPath = null,
     clang: ?ToolPath = null,
     ld_lld: ?ToolPath = null,
     zig: ?ToolPath = null,
@@ -195,6 +204,7 @@ pub const ToolCache = struct {
         if (self.llc) |tool| tool.deinit(self.allocator);
         if (self.lli) |tool| tool.deinit(self.allocator);
         if (self.opt) |tool| tool.deinit(self.allocator);
+        if (self.llvm_split) |tool| tool.deinit(self.allocator);
         if (self.clang) |tool| tool.deinit(self.allocator);
         if (self.ld_lld) |tool| tool.deinit(self.allocator);
         if (self.zig) |tool| tool.deinit(self.allocator);
@@ -204,6 +214,7 @@ pub const ToolCache = struct {
             .llc => &self.llc,
             .lli => &self.lli,
             .opt => &self.opt,
+            .llvm_split => &self.llvm_split,
             .clang => &self.clang,
             .ld_lld => &self.ld_lld,
             .zig => &self.zig,

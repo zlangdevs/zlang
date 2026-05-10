@@ -13,8 +13,8 @@ const FunctionFlowInfo = struct {
 
     fn init() FunctionFlowInfo {
         return .{
-            .send_errors = std.ArrayList([]const u8){},
-            .solicit_errors = std.ArrayList([]const u8){},
+            .send_errors = .empty,
+            .solicit_errors = .empty,
         };
     }
 
@@ -60,7 +60,7 @@ pub const Analyzer = struct {
             .function_flows = std.StringHashMap(FunctionFlowInfo).init(allocator),
             .function_defs = std.StringHashMap(ast.Function).init(allocator),
             .globals = std.StringHashMap(VarInfo).init(allocator),
-            .scopes = std.ArrayList(std.StringHashMap(VarInfo)){},
+            .scopes = .empty,
             .loop_depth = 0,
             .current_function_name = null,
             .current_global_name = null,

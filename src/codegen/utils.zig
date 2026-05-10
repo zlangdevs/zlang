@@ -232,7 +232,7 @@ pub fn getLLVMFunctionType(self: *codegen.CodeGenerator, sig: []const u8) errors
 
     const ret_part = std.mem.trim(u8, sig[0..lp], " \t");
     const args_part_full = sig[lp + 1 .. rp];
-    var args_list = std.ArrayList(c.LLVMTypeRef){};
+    var args_list: std.ArrayList(c.LLVMTypeRef) = .empty;
     defer args_list.deinit(self.allocator);
     var it = std.mem.tokenizeAny(u8, args_part_full, ",");
     var is_vararg_llvm: c.LLVMBool = 0;
@@ -319,7 +319,7 @@ fn getLLVMTypeInternal(self: *codegen.CodeGenerator, type_name: []const u8, verb
         try self.struct_types.put(type_name_dupe, @ptrCast(struct_type));
 
         // Register dummy declaration so field access works
-        var fields = std.ArrayList(ast.StructField){};
+        var fields: std.ArrayList(ast.StructField) = .empty;
         const ptr_type_name = try std.fmt.allocPrint(self.allocator, "ptr<{s}>", .{element_type_name});
         try fields.append(self.allocator, ast.StructField{ .name = "ptr", .type_name = ptr_type_name, .default_value = null });
         try fields.append(self.allocator, ast.StructField{ .name = "len", .type_name = "i64", .default_value = null });

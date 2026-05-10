@@ -14,8 +14,19 @@ const help = @import("help.zig");
 const interpreter = @import("interpreter.zig");
 const preprocessor = @import("preprocessor/preprocessor.zig");
 const llvm_tools = @import("llvm_tools.zig");
+const zlx_commands = @import("zlx/commands.zig");
 
 const allocator = std.heap.page_allocator;
+var process_io: std.Io = undefined;
+
+fn nanoTimestamp() i96 {
+    return std.Io.Timestamp.now(process_io, .real).toNanoseconds();
+}
+
+fn getEnvVarOwned(alloc: std.mem.Allocator, name: [:0]const u8) !?[]u8 {
+    const value = std.c.getenv(name) orelse return null;
+    return try alloc.dupe(u8, std.mem.span(value));
+}
 
 const ModuleInfo = struct {
     name: []const u8,
@@ -31,8 +42,8 @@ const ModuleInfo = struct {
             .path = utils.dupe(u8, alloc, path),
             .line_count = line_count,
             .ast = ast_node,
-            .dependencies = std.ArrayList([]const u8){},
-            .linker_flags = std.ArrayList([]const u8){},
+            .dependencies = .empty,
+            .linker_flags = .empty,
         };
     }
 
@@ -79,6 +90,13 @@ pub const CompilationStats = struct {
     parse_merge_time_ns: u64,
     codegen_time_ns: u64,
     backend_time_ns: u64,
+    backend_prepare_time_ns: u64,
+    backend_split_time_ns: u64,
+    backend_wall_time_ns: u64,
+    backend_cpu_sum_time_ns: u64,
+    backend_units: usize,
+    backend_unit_max_time_ns: u64,
+    backend_unit_min_time_ns: u64,
     link_time_ns: u64,
     total_time_ns: u64,
     lines_of_code: usize,
@@ -99,10 +117,231 @@ const ParseTiming = struct {
     merge_time_ns: u64 = 0,
 };
 
+const BackendObjectTask = struct {
+    cg: *codegen.CodeGenerator,
+    ir_file: []const u8,
+    obj_file: []const u8,
+    arch: []const u8,
+    optimize: bool,
+    max_threads: usize,
+    llc_time_ns: u64 = 0,
+    err: ?anyerror = null,
+};
+
+const BackendUnit = struct {
+    ir_file: []const u8,
+    obj_file: []const u8,
+    keep_ir: bool,
+};
+
+const RewriteTask = struct {
+    module: *ModuleInfo,
+    modules: []const ModuleInfo,
+    reachable_modules: *const std.StringHashMap(void),
+    alloc: std.mem.Allocator,
+    err: ?anyerror = null,
+};
+
+const ResolvePrecomputeTask = struct {
+    module: *const ModuleInfo,
+    module_names: []const []const u8,
+    module_name_indices: []const usize,
+    allocator: std.mem.Allocator,
+    matched_dep_indices: std.ArrayList(usize),
+    unmatched_dep_index: ?usize = null,
+    err: ?anyerror = null,
+
+    fn init(module: *const ModuleInfo, module_names: []const []const u8, module_name_indices: []const usize, alloc: std.mem.Allocator) ResolvePrecomputeTask {
+        return .{
+            .module = module,
+            .module_names = module_names,
+            .module_name_indices = module_name_indices,
+            .allocator = alloc,
+            .matched_dep_indices = .empty,
+        };
+    }
+
+    fn deinit(self: *ResolvePrecomputeTask) void {
+        self.matched_dep_indices.deinit(self.allocator);
+    }
+};
+
+const MergeScanTask = struct {
+    module: *const ModuleInfo,
+    function_count: usize = 0,
+    global_count: usize = 0,
+};
+
+
+fn runBackendObjectTask(task: *BackendObjectTask) void {
+    task.cg.compileIRToObjectFile(task.ir_file, task.obj_file, task.arch, task.optimize, task.max_threads, &task.llc_time_ns) catch |err| {
+        task.err = err;
+    };
+}
+
+fn compileBackendObjects(tasks: []BackendObjectTask, max_threads: usize, alloc: std.mem.Allocator) !u64 {
+    if (tasks.len == 0) return 0;
+
+    if (max_threads <= 1 or tasks.len == 1) {
+        for (tasks) |*task| runBackendObjectTask(task);
+    } else {
+        const worker_count = @min(max_threads, tasks.len);
+        var next_task_idx: usize = 0;
+        while (next_task_idx < tasks.len) {
+            const batch_count = @min(worker_count, tasks.len - next_task_idx);
+            var threads = try alloc.alloc(std.Thread, batch_count);
+            defer alloc.free(threads);
+
+            for (0..batch_count) |j| {
+                threads[j] = try std.Thread.spawn(.{}, runBackendObjectTask, .{&tasks[next_task_idx + j]});
+            }
+            for (threads) |thread| thread.join();
+            next_task_idx += batch_count;
+        }
+    }
+
+    var llc_total_ns: u64 = 0;
+    for (tasks) |task| {
+        if (task.err) |err| return err;
+        llc_total_ns += task.llc_time_ns;
+    }
+    return llc_total_ns;
+}
+
+fn cleanupBackendUnits(units: []const BackendUnit) void {
+    for (units) |unit| {
+        std.Io.Dir.cwd().deleteFile(process_io, unit.obj_file) catch {};
+        if (!unit.keep_ir) std.Io.Dir.cwd().deleteFile(process_io, unit.ir_file) catch {};
+    }
+}
+
+fn backendSplitUnitCount(max_threads: usize) usize {
+    if (max_threads <= 1) return 1;
+    return max_threads;
+}
+
+fn runRewriteTask(task: *RewriteTask) void {
+    var use_specs: std.ArrayList(UseSpec) = .empty;
+    defer use_specs.deinit(task.alloc);
+    collectUseSpecs(task.module, &use_specs, task.alloc) catch |err| {
+        task.err = err;
+        return;
+    };
+
+    var rewrite_ctx = RewriteContext.init(task.module, use_specs.items, task.modules, task.reachable_modules, task.alloc);
+    defer rewrite_ctx.deinit();
+    rewriteModuleImportsInNode(&rewrite_ctx, task.module.ast);
+}
+
+fn rewriteReachableModulesParallel(modules: []ModuleInfo, reachable_modules: *const std.StringHashMap(void), max_threads: usize, alloc: std.mem.Allocator) !void {
+    var rewrite_count: usize = 0;
+    for (modules) |module| {
+        if (reachable_modules.contains(module.name)) rewrite_count += 1;
+    }
+    if (rewrite_count == 0) return;
+
+    var tasks = try alloc.alloc(RewriteTask, rewrite_count);
+    defer alloc.free(tasks);
+
+    var idx: usize = 0;
+    for (modules) |*module| {
+        if (!reachable_modules.contains(module.name)) continue;
+        tasks[idx] = .{
+            .module = module,
+            .modules = modules,
+            .reachable_modules = reachable_modules,
+            .alloc = alloc,
+        };
+        idx += 1;
+    }
+
+    if (max_threads <= 1 or tasks.len == 1) {
+        for (tasks) |*task| runRewriteTask(task);
+    } else {
+        const worker_count = @min(max_threads, tasks.len);
+        var next_task_idx: usize = 0;
+        while (next_task_idx < tasks.len) {
+            const batch_count = @min(worker_count, tasks.len - next_task_idx);
+            var threads = try alloc.alloc(std.Thread, batch_count);
+            defer alloc.free(threads);
+
+            for (0..batch_count) |j| {
+                threads[j] = try std.Thread.spawn(.{}, runRewriteTask, .{&tasks[next_task_idx + j]});
+            }
+            for (threads) |thread| thread.join();
+            next_task_idx += batch_count;
+        }
+    }
+
+    for (tasks) |task| {
+        if (task.err) |err| return err;
+    }
+}
+
+fn runResolvePrecomputeTask(task: *ResolvePrecomputeTask) void {
+    for (task.module.dependencies.items, 0..) |dep, dep_idx| {
+        var matched_any = false;
+        for (task.module_names, 0..) |candidate, candidate_idx| {
+            if (!moduleMatchesImport(dep, candidate)) continue;
+            matched_any = true;
+            task.matched_dep_indices.append(task.allocator, task.module_name_indices[candidate_idx]) catch |err| {
+                task.err = err;
+                return;
+            };
+        }
+        if (!matched_any) {
+            task.unmatched_dep_index = dep_idx;
+            return;
+        }
+    }
+}
+
+fn runMergeScanTask(task: *MergeScanTask) void {
+    switch (task.module.ast.data) {
+        .program => |prog| {
+            for (prog.functions.items) |func| {
+                if (func.data != .use_stmt) task.function_count += 1;
+            }
+            task.global_count = prog.globals.items.len;
+        },
+        else => {
+            task.function_count = 1;
+            task.global_count = 0;
+        },
+    }
+}
+
+fn runTasksParallel(comptime T: type, tasks: []T, max_threads: usize, alloc: std.mem.Allocator, comptime runner: fn (*T) void) !void {
+    if (tasks.len == 0) return;
+    if (max_threads <= 1 or tasks.len == 1) {
+        for (tasks) |*task| runner(task);
+        return;
+    }
+
+    const worker_count = @min(max_threads, tasks.len);
+    var next_task_idx: usize = 0;
+    while (next_task_idx < tasks.len) {
+        const batch_count = @min(worker_count, tasks.len - next_task_idx);
+        var threads = try alloc.alloc(std.Thread, batch_count);
+        defer alloc.free(threads);
+
+        for (0..batch_count) |j| {
+            threads[j] = try std.Thread.spawn(.{}, runner, .{&tasks[next_task_idx + j]});
+        }
+        for (threads) |thread| thread.join();
+        next_task_idx += batch_count;
+    }
+}
+
+
 fn printStats(stats: CompilationStats) void {
     const parse_ms = @as(f64, @floatFromInt(stats.parse_time_ns)) / 1_000_000.0;
     const codegen_ms = @as(f64, @floatFromInt(stats.codegen_time_ns)) / 1_000_000.0;
     const backend_ms = @as(f64, @floatFromInt(stats.backend_time_ns)) / 1_000_000.0;
+    const backend_prepare_ms = @as(f64, @floatFromInt(stats.backend_prepare_time_ns)) / 1_000_000.0;
+    const backend_split_ms = @as(f64, @floatFromInt(stats.backend_split_time_ns)) / 1_000_000.0;
+    const backend_wall_ms = @as(f64, @floatFromInt(stats.backend_wall_time_ns)) / 1_000_000.0;
+    const backend_cpu_sum_ms = @as(f64, @floatFromInt(stats.backend_cpu_sum_time_ns)) / 1_000_000.0;
     const link_ms = @as(f64, @floatFromInt(stats.link_time_ns)) / 1_000_000.0;
     const total_ms = @as(f64, @floatFromInt(stats.total_time_ns)) / 1_000_000.0;
 
@@ -125,6 +364,15 @@ fn printStats(stats: CompilationStats) void {
     });
     std.debug.print("  Codegen time:    {d:.2} ms\n", .{codegen_ms});
     std.debug.print("  Backend time:    {d:.2} ms\n", .{backend_ms});
+    std.debug.print("  Backend prepare: {d:.2} ms\n", .{backend_prepare_ms});
+    std.debug.print("  Backend split:   {d:.2} ms\n", .{backend_split_ms});
+    std.debug.print("  Backend wall:    {d:.2} ms\n", .{backend_wall_ms});
+    std.debug.print("  Backend cpu-sum: {d:.2} ms\n", .{backend_cpu_sum_ms});
+    std.debug.print("  Backend units:   {d} (unit min/max: {d:.2}/{d:.2} ms)\n", .{
+        stats.backend_units,
+        @as(f64, @floatFromInt(stats.backend_unit_min_time_ns)) / 1_000_000.0,
+        @as(f64, @floatFromInt(stats.backend_unit_max_time_ns)) / 1_000_000.0,
+    });
     std.debug.print("  Link time:       {d:.2} ms\n", .{link_ms});
     std.debug.print("  Link backend:    {s}\n", .{link_backend_text});
     std.debug.print("  LLVM linked:     {d}\n", .{stats.llvm_link_version_major});
@@ -142,6 +390,7 @@ pub const Context = struct {
     program_args: std.ArrayList([]const u8),
     output: []const u8,
     arch: []const u8,
+    max_threads: usize,
     keepll: bool,
     show_ast: bool,
     optimize: bool,
@@ -160,12 +409,13 @@ pub const Context = struct {
 
     pub fn init() Context {
         return Context{
-            .input_files = std.ArrayList([]const u8){},
-            .link_objects = std.ArrayList([]const u8){},
-            .extra_args = std.ArrayList([]const u8){},
-            .program_args = std.ArrayList([]const u8){},
+            .input_files = .empty,
+            .link_objects = .empty,
+            .extra_args = .empty,
+            .program_args = .empty,
             .output = consts.DEFAULT_OUTPUT_NAME,
             .arch = "",
+            .max_threads = defaultMaxThreads(),
             .keepll = false,
             .show_ast = false,
             .optimize = false,
@@ -176,11 +426,11 @@ pub const Context = struct {
             .run_mode = false,
             .brainfuck_mode = false,
             .bf_cell_size = 8,
-            .define_overrides = std.ArrayList(preprocessor.DefineOverride){},
-            .seen_define_names = std.ArrayList([]const u8){},
-            .module_registrations = std.ArrayList(ModuleRegistration){},
-            .function_module_bindings = std.ArrayList(SymbolModuleBinding){},
-            .global_module_bindings = std.ArrayList(SymbolModuleBinding){},
+            .define_overrides = .empty,
+            .seen_define_names = .empty,
+            .module_registrations = .empty,
+            .function_module_bindings = .empty,
+            .global_module_bindings = .empty,
         };
     }
 
@@ -217,6 +467,7 @@ pub const Context = struct {
         std.debug.print("\n", .{});
         std.debug.print("Output path: {s}\n", .{self.output});
         std.debug.print("Architecture: {s}\n", .{self.arch});
+        std.debug.print("Max threads: {d}\n", .{self.max_threads});
         std.debug.print("Keep ll: {s}\n", .{if (self.keepll) "yes" else "no"});
         std.debug.print("Optimize: {s}\n", .{if (self.optimize) "yes" else "no"});
         std.debug.print("Link objects: ", .{});
@@ -228,6 +479,10 @@ pub const Context = struct {
         std.debug.print("==================================\n", .{});
     }
 };
+
+fn defaultMaxThreads() usize {
+    return std.Thread.getCpuCount() catch 1;
+}
 
 fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8)) void {
     switch (node.data) {
@@ -309,10 +564,10 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
 }
 
 fn getStdlibPath(alloc: std.mem.Allocator) ![]const u8 {
-    if (std.process.getEnvVarOwned(alloc, "ZSTDPATH")) |zstdpath| {
+    if ((try getEnvVarOwned(alloc, "ZSTDPATH"))) |zstdpath| {
         return zstdpath;
-    } else |_| {
-        const exe_path = try std.fs.selfExePathAlloc(alloc);
+    } else {
+        const exe_path = try std.process.executablePathAlloc(process_io, alloc);
         defer alloc.free(exe_path);
         const exe_dir = std.fs.path.dirname(exe_path) orelse ".";
         return std.fs.path.join(alloc, &[_][]const u8{ exe_dir, "stdlib" });
@@ -324,10 +579,10 @@ fn resolveStdModule(module_name: []const u8, alloc: std.mem.Allocator, has_zstdp
         return null;
     }
     const module_part = module_name[4..];
-    has_zstdpath.* = if (std.process.getEnvVarOwned(alloc, "ZSTDPATH")) |path| blk: {
+    has_zstdpath.* = if ((getEnvVarOwned(alloc, "ZSTDPATH") catch null)) |path| blk: {
         alloc.free(path);
         break :blk true;
-    } else |_| false;
+    } else false;
 
     const stdlib_path = getStdlibPath(alloc) catch return null;
     defer alloc.free(stdlib_path);
@@ -337,11 +592,10 @@ fn resolveStdModule(module_name: []const u8, alloc: std.mem.Allocator, has_zstdp
 
     const full_path = std.fs.path.join(alloc, &[_][]const u8{ stdlib_path, module_file }) catch return null;
 
-    const file = std.fs.cwd().openFile(full_path, .{}) catch {
+    std.Io.Dir.cwd().access(process_io, full_path, .{}) catch {
         alloc.free(full_path);
         return null;
     };
-    file.close();
 
     return full_path;
 }
@@ -383,8 +637,7 @@ fn resolveModulePath(base_path: []const u8, module_name: []const u8, alloc: std.
     defer alloc.free(module_file);
     const full_path = try std.fs.path.join(alloc, &[_][]const u8{ base_dir, module_file });
     defer alloc.free(full_path);
-    const file = std.fs.cwd().openFile(full_path, .{}) catch return null;
-    file.close();
+    std.Io.Dir.cwd().access(process_io, full_path, .{}) catch return null;
     return utils.dupe(u8, alloc, full_path);
 }
 
@@ -464,21 +717,46 @@ fn countLinesInText(text: []const u8) usize {
     return count;
 }
 
-fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_alloc: std.mem.Allocator, ctx: *Context) !ModuleInfo {
+const PreparsedModule = struct {
+    module_name: []const u8,
+    parser_text: []const u8,
+    line_count: usize,
+    flags: std.ArrayList([]const u8),
+    defined_names: std.ArrayList([]const u8),
+
+    fn deinit(self: *PreparsedModule, alloc: std.mem.Allocator) void {
+        alloc.free(self.module_name);
+        alloc.free(self.parser_text);
+        for (self.flags.items) |flag| alloc.free(flag);
+        self.flags.deinit(alloc);
+        for (self.defined_names.items) |name| alloc.free(name);
+        self.defined_names.deinit(alloc);
+    }
+};
+
+const InitialLoadTask = struct {
+    file_path: []const u8,
+    ctx: *Context,
+    alloc: std.mem.Allocator,
+    result: ?PreparsedModule = null,
+    err: ?anyerror = null,
+};
+
+fn preprocessModuleFile(file_path: []const u8, alloc: std.mem.Allocator, ctx: *Context) !PreparsedModule {
     const input = read_file(file_path) catch |err| {
         std.debug.print("Error reading file {s}: {}\n", .{ file_path, err });
         return err;
     };
     defer allocator.free(input);
 
-    var preprocessed = preprocessor.preprocessWithFlagsAndDefines(arena, input, ctx.define_overrides.items) catch |err| {
+    var preprocessed = preprocessor.preprocessWithFlagsAndDefines(alloc, input, ctx.define_overrides.items) catch |err| {
         const msg = switch (err) {
             errors.PreprocessError.InvalidDirective => "Invalid preprocessor directive",
             errors.PreprocessError.InvalidDefine => "Invalid #define",
             errors.PreprocessError.ExpansionLimit => "Macro expansion limit reached",
             errors.PreprocessError.OutOfMemory => "Out of memory during preprocessing",
         };
-        diagnostics.printDiagnostic(backing_alloc, .{
+        diagnostics.printDiagnostic(alloc, .{
             .file_path = file_path,
             .line = 1,
             .column = 1,
@@ -487,19 +765,13 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
         });
         return err;
     };
-    defer preprocessed.deinitFlags(arena);
+    defer preprocessed.deinitFlags(alloc);
 
-    for (preprocessed.defined_names.items) |name| {
-        if (!containsString(ctx.seen_define_names.items, name)) {
-            try ctx.seen_define_names.append(backing_alloc, utils.dupe(u8, backing_alloc, name));
-        }
-    }
-
-    const parsed_header = parseModuleHeader(arena, preprocessed.text) catch |err| {
+    const parsed_header = parseModuleHeader(alloc, preprocessed.text) catch |err| {
         if (err == error.InvalidModuleHeader) {
             const header_start = findModuleHeaderStart(preprocessed.text);
             const header_pos = sourcePosAtOffset(preprocessed.text, header_start);
-            diagnostics.printDiagnostic(backing_alloc, .{
+            diagnostics.printDiagnostic(alloc, .{
                 .file_path = file_path,
                 .line = header_pos.line,
                 .column = header_pos.column,
@@ -514,10 +786,44 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
     const module_name = if (parsed_header.module_name) |name|
         name
     else
-        defaultModuleNameFromPath(file_path);
+        try alloc.dupe(u8, defaultModuleNameFromPath(file_path));
     const line_count = countLinesInText(input);
 
-    const ast_root = parser.parse(arena, parsed_header.text_for_parser) catch |err| {
+    var flags: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (flags.items) |flag| alloc.free(flag);
+        flags.deinit(alloc);
+    }
+    for (preprocessed.flags.items) |flag| {
+        try flags.append(alloc, utils.dupe(u8, alloc, flag));
+    }
+
+    var defined_names: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (defined_names.items) |name| alloc.free(name);
+        defined_names.deinit(alloc);
+    }
+    for (preprocessed.defined_names.items) |name| {
+        try defined_names.append(alloc, utils.dupe(u8, alloc, name));
+    }
+
+    return .{
+        .module_name = module_name,
+        .parser_text = parsed_header.text_for_parser,
+        .line_count = line_count,
+        .flags = flags,
+        .defined_names = defined_names,
+    };
+}
+
+fn parseModuleFromPrepared(file_path: []const u8, arena: std.mem.Allocator, backing_alloc: std.mem.Allocator, ctx: *Context, prep: *PreparsedModule) !ModuleInfo {
+    for (prep.defined_names.items) |name| {
+        if (!containsString(ctx.seen_define_names.items, name)) {
+            try ctx.seen_define_names.append(backing_alloc, utils.dupe(u8, backing_alloc, name));
+        }
+    }
+
+    const ast_root = parser.parse(arena, prep.parser_text) catch |err| {
         const parse_errors = parser.getParseErrors();
         if (parse_errors.len > 0) {
             for (parse_errors) |parse_err| {
@@ -545,18 +851,31 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
             }
         }
 
-        tryFindMoreErrors(backing_alloc, file_path, input);
+        tryFindMoreErrors(backing_alloc, file_path, prep.parser_text);
         return err;
     };
     if (ast_root) |root| {
-        var module = ModuleInfo.init(backing_alloc, module_name, file_path, line_count, root);
+        var module = ModuleInfo.init(backing_alloc, prep.module_name, file_path, prep.line_count, root);
         collectUseStatements(root, &module.dependencies);
-        for (preprocessed.flags.items) |flag| {
+        for (prep.flags.items) |flag| {
             try module.linker_flags.append(backing_alloc, utils.dupe(u8, backing_alloc, flag));
         }
         return module;
     }
     return error.ParseFailed;
+}
+
+fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_alloc: std.mem.Allocator, ctx: *Context) !ModuleInfo {
+    var prep = try preprocessModuleFile(file_path, backing_alloc, ctx);
+    defer prep.deinit(backing_alloc);
+    return parseModuleFromPrepared(file_path, arena, backing_alloc, ctx, &prep);
+}
+
+fn runInitialLoadTask(task: *InitialLoadTask) void {
+    task.result = preprocessModuleFile(task.file_path, task.alloc, task.ctx) catch |err| {
+        task.err = err;
+        return;
+    };
 }
 
 fn containsString(list: []const []const u8, value: []const u8) bool {
@@ -578,7 +897,7 @@ fn parseProcStatusKbValue(content: []const u8, key: []const u8) ?usize {
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
         if (!std.mem.startsWith(u8, line, key)) continue;
-        const rest = std.mem.trimLeft(u8, line[key.len..], " \t:");
+        const rest = std.mem.trimStart(u8, line[key.len..], " \t:");
         var i: usize = 0;
         while (i < rest.len and (rest[i] < '0' or rest[i] > '9')) : (i += 1) {}
         var j = i;
@@ -591,11 +910,11 @@ fn parseProcStatusKbValue(content: []const u8, key: []const u8) ?usize {
 
 fn readMemoryPeakKb() usize {
     if (builtin.os.tag != .linux) return 0;
-    const file = std.fs.cwd().openFile("/proc/self/status", .{}) catch return 0;
-    defer file.close();
+    const file = std.c.fopen("/proc/self/status", "rb") orelse return 0;
+    defer _ = std.c.fclose(file);
 
     var buffer: [16384]u8 = undefined;
-    const bytes_read = file.readAll(&buffer) catch return 0;
+    const bytes_read = std.c.fread(&buffer, 1, buffer.len, file);
     const content = buffer[0..bytes_read];
 
     return parseProcStatusKbValue(content, "VmHWM") orelse
@@ -1006,7 +1325,7 @@ fn resolveNamespacedTypeToken(type_path: []const u8, rewrite_ctx: *RewriteContex
 }
 
 fn rewriteTypeNameForImports(type_name: []const u8, rewrite_ctx: *RewriteContext, owner_alloc: std.mem.Allocator) []const u8 {
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(owner_alloc);
 
     var changed = false;
@@ -1119,7 +1438,7 @@ fn appendRefPath(buf: *std.ArrayList(u8), node: *const ast.Node, alloc: std.mem.
 }
 
 fn extractRefPath(node: *const ast.Node, alloc: std.mem.Allocator) ?[]const u8 {
-    var buf = std.ArrayList(u8){};
+    var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(alloc);
     const ok = appendRefPath(&buf, node, alloc) catch return null;
     if (!ok) {
@@ -1472,11 +1791,11 @@ fn loadStdModulesForDep(dep: []const u8, modules: *std.ArrayList(ModuleInfo), lo
         const stdlib_path = try getStdlibPath(alloc);
         defer alloc.free(stdlib_path);
 
-        var dir = try std.fs.cwd().openDir(stdlib_path, .{ .iterate = true });
-        defer dir.close();
+        var dir = try std.Io.Dir.cwd().openDir(process_io, stdlib_path, .{ .iterate = true });
+        defer dir.close(process_io);
 
         var it = dir.iterate();
-        while (try it.next()) |entry| {
+        while (try it.next(process_io)) |entry| {
             if (entry.kind != .file) continue;
             if (!std.mem.endsWith(u8, entry.name, ".zl")) continue;
 
@@ -1503,6 +1822,89 @@ fn loadStdModulesForDep(dep: []const u8, modules: *std.ArrayList(ModuleInfo), lo
     try modules.append(alloc, std_module);
 }
 
+fn collectStdModulePathsForDep(dep: []const u8, pending_paths: *std.ArrayList([]const u8), loaded_paths: *std.StringHashMap(void), alloc: std.mem.Allocator) !void {
+    if (std.mem.eql(u8, dep, "std")) {
+        const stdlib_path = try getStdlibPath(alloc);
+        defer alloc.free(stdlib_path);
+
+        var dir = try std.Io.Dir.cwd().openDir(process_io, stdlib_path, .{ .iterate = true });
+        defer dir.close(process_io);
+
+        var it = dir.iterate();
+        while (try it.next(process_io)) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".zl")) continue;
+
+            const full = try std.fs.path.join(alloc, &[_][]const u8{ stdlib_path, entry.name });
+            errdefer alloc.free(full);
+            if (loaded_paths.contains(full) or containsString(pending_paths.items, full)) {
+                alloc.free(full);
+                continue;
+            }
+            try pending_paths.append(alloc, full);
+        }
+        return;
+    }
+
+    var has_zstdpath: bool = false;
+    const std_path = resolveStdModule(dep, alloc, &has_zstdpath) orelse return error.ModuleNotFound;
+    errdefer alloc.free(std_path);
+    if (loaded_paths.contains(std_path) or containsString(pending_paths.items, std_path)) {
+        alloc.free(std_path);
+        return;
+    }
+    try pending_paths.append(alloc, std_path);
+}
+
+fn loadModulesFromPaths(paths: []const []const u8, modules: *std.ArrayList(ModuleInfo), loaded_paths: *std.StringHashMap(void), arena: std.mem.Allocator, alloc: std.mem.Allocator, ctx: *Context) !void {
+    if (paths.len == 0) return;
+
+    for (paths) |path| {
+        try loaded_paths.put(utils.dupe(u8, alloc, path), {});
+    }
+
+    if (ctx.max_threads > 1 and paths.len > 1) {
+        var tasks = try alloc.alloc(InitialLoadTask, paths.len);
+        defer alloc.free(tasks);
+
+        for (paths, 0..) |path, i| {
+            tasks[i] = .{
+                .file_path = path,
+                .ctx = ctx,
+                .alloc = alloc,
+            };
+        }
+
+        const worker_count = @min(ctx.max_threads, paths.len);
+        var next_task_idx: usize = 0;
+        while (next_task_idx < tasks.len) {
+            const batch_count = @min(worker_count, tasks.len - next_task_idx);
+            var threads = try alloc.alloc(std.Thread, batch_count);
+            defer alloc.free(threads);
+
+            for (0..batch_count) |j| {
+                threads[j] = try std.Thread.spawn(.{}, runInitialLoadTask, .{&tasks[next_task_idx + j]});
+            }
+            for (threads) |thread| thread.join();
+            next_task_idx += batch_count;
+        }
+
+        for (tasks) |*task| {
+            if (task.err) |err| return err;
+            var prep = task.result.?;
+            defer prep.deinit(alloc);
+            const module = try parseModuleFromPrepared(task.file_path, arena, alloc, ctx, &prep);
+            try modules.append(alloc, module);
+        }
+        return;
+    }
+
+    for (paths) |path| {
+        const module = try parseModuleFile(path, arena, alloc, ctx);
+        try modules.append(alloc, module);
+    }
+}
+
 fn clearModuleBindings(ctx: *Context, alloc: std.mem.Allocator) void {
     for (ctx.module_registrations.items) |*entry| entry.deinit(alloc);
     ctx.module_registrations.clearRetainingCapacity();
@@ -1524,7 +1926,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator, timing: ?*ParseTiming
     const arena = arena_ast.allocator();
     clearModuleBindings(ctx, alloc);
 
-    var modules = std.ArrayList(ModuleInfo){};
+    var modules: std.ArrayList(ModuleInfo) = .empty;
     defer {
         for (modules.items) |*module| {
             module.deinit(alloc);
@@ -1535,38 +1937,113 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator, timing: ?*ParseTiming
     var loaded_paths = std.StringHashMap(void).init(alloc);
     defer loaded_paths.deinit();
 
-    const load_start = std.time.nanoTimestamp();
-    for (ctx.input_files.items) |input_file| {
-        if (loaded_paths.contains(input_file)) continue;
-        const module = try parseModuleFile(input_file, arena, alloc, ctx);
-        try loaded_paths.put(utils.dupe(u8, alloc, input_file), {});
-        try modules.append(alloc, module);
-    }
-    if (timing) |t| t.load_time_ns = @intCast(std.time.nanoTimestamp() - load_start);
+    const load_start = nanoTimestamp();
+    if (ctx.max_threads > 1 and ctx.input_files.items.len > 1) {
+        var unique_inputs: std.ArrayList([]const u8) = .empty;
+        defer unique_inputs.deinit(alloc);
 
-    const std_start = std.time.nanoTimestamp();
+        for (ctx.input_files.items) |input_file| {
+            if (loaded_paths.contains(input_file)) continue;
+            try loaded_paths.put(utils.dupe(u8, alloc, input_file), {});
+            try unique_inputs.append(alloc, input_file);
+        }
+
+        var tasks = try alloc.alloc(InitialLoadTask, unique_inputs.items.len);
+        defer alloc.free(tasks);
+
+        for (unique_inputs.items, 0..) |input_file, i| {
+            tasks[i] = .{
+                .file_path = input_file,
+                .ctx = ctx,
+                .alloc = alloc,
+            };
+        }
+
+        const worker_count = @min(ctx.max_threads, unique_inputs.items.len);
+        var next_task_idx: usize = 0;
+        while (next_task_idx < tasks.len) {
+            const batch_count = @min(worker_count, tasks.len - next_task_idx);
+            var threads = try alloc.alloc(std.Thread, batch_count);
+            defer alloc.free(threads);
+
+            for (0..batch_count) |j| {
+                threads[j] = try std.Thread.spawn(.{}, runInitialLoadTask, .{&tasks[next_task_idx + j]});
+            }
+            for (threads) |thread| thread.join();
+            next_task_idx += batch_count;
+        }
+
+        for (tasks) |*task| {
+            if (task.err) |err| return err;
+            var prep = task.result.?;
+            defer prep.deinit(alloc);
+            const module = try parseModuleFromPrepared(task.file_path, arena, alloc, ctx, &prep);
+            try modules.append(alloc, module);
+        }
+    } else {
+        for (ctx.input_files.items) |input_file| {
+            if (loaded_paths.contains(input_file)) continue;
+            const module = try parseModuleFile(input_file, arena, alloc, ctx);
+            try loaded_paths.put(utils.dupe(u8, alloc, input_file), {});
+            try modules.append(alloc, module);
+        }
+    }
+    if (timing) |t| t.load_time_ns = @intCast(nanoTimestamp() - load_start);
+
+    const std_start = nanoTimestamp();
     var scan_idx: usize = 0;
     while (scan_idx < modules.items.len) : (scan_idx += 1) {
         const module = modules.items[scan_idx];
+        var pending_std_paths: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (pending_std_paths.items) |path| alloc.free(path);
+            pending_std_paths.deinit(alloc);
+        }
+
         for (module.dependencies.items) |dep| {
             if (!(std.mem.eql(u8, dep, "std") or std.mem.startsWith(u8, dep, "std."))) continue;
             if (hasModuleByName(modules.items, dep)) continue;
 
-            loadStdModulesForDep(dep, &modules, &loaded_paths, arena, alloc, ctx) catch {
+            collectStdModulePathsForDep(dep, &pending_std_paths, &loaded_paths, alloc) catch {
                 std.debug.print("\x1b[31mError:\x1b[0m Cannot resolve module '\x1b[33m{s}\x1b[0m' imported from {s}\n", .{ dep, module.path });
                 arena_ast.deinit();
                 return error.ModuleNotFound;
             };
         }
-    }
-    if (timing) |t| t.std_time_ns = @intCast(std.time.nanoTimestamp() - std_start);
 
-    const resolve_start = std.time.nanoTimestamp();
+        loadModulesFromPaths(pending_std_paths.items, &modules, &loaded_paths, arena, alloc, ctx) catch {
+            std.debug.print("\x1b[31mError:\x1b[0m Failed to load std dependencies imported from {s}\n", .{module.path});
+            arena_ast.deinit();
+            return error.ModuleNotFound;
+        };
+    }
+    if (timing) |t| t.std_time_ns = @intCast(nanoTimestamp() - std_start);
+
+    const resolve_start = nanoTimestamp();
     var module_names = std.StringHashMap(void).init(alloc);
     defer module_names.deinit();
     for (modules.items) |module| {
         try module_names.put(module.name, {});
     }
+
+    var module_name_list: std.ArrayList([]const u8) = .empty;
+    defer module_name_list.deinit(alloc);
+    var module_name_indices: std.ArrayList(usize) = .empty;
+    defer module_name_indices.deinit(alloc);
+    for (modules.items, 0..) |module, i| {
+        try module_name_list.append(alloc, module.name);
+        try module_name_indices.append(alloc, i);
+    }
+
+    var resolve_tasks = try alloc.alloc(ResolvePrecomputeTask, modules.items.len);
+    defer {
+        for (resolve_tasks) |*task| task.deinit();
+        alloc.free(resolve_tasks);
+    }
+    for (modules.items, 0..) |*module, i| {
+        resolve_tasks[i] = ResolvePrecomputeTask.init(module, module_name_list.items, module_name_indices.items, alloc);
+    }
+    try runTasksParallel(ResolvePrecomputeTask, resolve_tasks, ctx.max_threads, alloc, runResolvePrecomputeTask);
 
     var root_modules = std.StringHashMap(void).init(alloc);
     defer root_modules.deinit();
@@ -1587,7 +2064,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator, timing: ?*ParseTiming
 
     var reachable_modules = std.StringHashMap(void).init(alloc);
     defer reachable_modules.deinit();
-    var queue = std.ArrayList([]const u8){};
+    var queue: std.ArrayList([]const u8) = .empty;
     defer queue.deinit(alloc);
 
     var root_it = root_modules.iterator();
@@ -1600,44 +2077,49 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator, timing: ?*ParseTiming
     while (q_idx < queue.items.len) : (q_idx += 1) {
         const current_module_name = queue.items[q_idx];
 
-        for (modules.items) |module| {
+        for (modules.items, 0..) |module, module_idx| {
             if (!std.mem.eql(u8, module.name, current_module_name)) continue;
+            const task = &resolve_tasks[module_idx];
+            if (task.err) |err| return err;
+            if (task.unmatched_dep_index) |dep_idx| {
+                const dep = module.dependencies.items[dep_idx];
+                std.debug.print("\x1b[31mError:\x1b[0m Cannot resolve module '\x1b[33m{s}\x1b[0m' imported from module {s}\n", .{ dep, current_module_name });
+                arena_ast.deinit();
+                return error.ModuleNotFound;
+            }
 
-            for (module.dependencies.items) |dep| {
-                var matched_any = false;
-                var names_it = module_names.iterator();
-                while (names_it.next()) |name_entry| {
-                    const candidate = name_entry.key_ptr.*;
-                    if (!moduleMatchesImport(dep, candidate)) continue;
-                    matched_any = true;
-                    if (!reachable_modules.contains(candidate)) {
-                        try reachable_modules.put(candidate, {});
-                        try queue.append(alloc, candidate);
-                    }
-                }
-                if (!matched_any) {
-                    std.debug.print("\x1b[31mError:\x1b[0m Cannot resolve module '\x1b[33m{s}\x1b[0m' imported from module {s}\n", .{ dep, current_module_name });
-                    arena_ast.deinit();
-                    return error.ModuleNotFound;
+            for (task.matched_dep_indices.items) |matched_idx| {
+                const candidate = modules.items[matched_idx].name;
+                if (!reachable_modules.contains(candidate)) {
+                    try reachable_modules.put(candidate, {});
+                    try queue.append(alloc, candidate);
                 }
             }
         }
     }
-    if (timing) |t| t.resolve_time_ns = @intCast(std.time.nanoTimestamp() - resolve_start);
+    if (timing) |t| t.resolve_time_ns = @intCast(nanoTimestamp() - resolve_start);
 
-    const rewrite_start = std.time.nanoTimestamp();
-    for (modules.items) |*module| {
-        if (!reachable_modules.contains(module.name)) continue;
-        var use_specs = std.ArrayList(UseSpec){};
-        defer use_specs.deinit(alloc);
-        try collectUseSpecs(module, &use_specs, alloc);
-        var rewrite_ctx = RewriteContext.init(module, use_specs.items, modules.items, &reachable_modules, alloc);
-        defer rewrite_ctx.deinit();
-        rewriteModuleImportsInNode(&rewrite_ctx, module.ast);
+    const rewrite_start = nanoTimestamp();
+    try rewriteReachableModulesParallel(modules.items, &reachable_modules, ctx.max_threads, alloc);
+    if (timing) |t| t.rewrite_time_ns = @intCast(nanoTimestamp() - rewrite_start);
+
+    const merge_start = nanoTimestamp();
+    var merge_scan_tasks = try alloc.alloc(MergeScanTask, modules.items.len);
+    defer alloc.free(merge_scan_tasks);
+    for (modules.items, 0..) |*module, i| {
+        merge_scan_tasks[i] = .{ .module = module };
     }
-    if (timing) |t| t.rewrite_time_ns = @intCast(std.time.nanoTimestamp() - rewrite_start);
+    try runTasksParallel(MergeScanTask, merge_scan_tasks, ctx.max_threads, alloc, runMergeScanTask);
 
-    const merge_start = std.time.nanoTimestamp();
+    var expected_functions: usize = 0;
+    var expected_globals: usize = 0;
+    for (merge_scan_tasks, 0..) |task, i| {
+        _ = i;
+        if (!reachable_modules.contains(task.module.name)) continue;
+        expected_functions += task.function_count;
+        expected_globals += task.global_count;
+    }
+
     for (modules.items) |*module| {
         if (reachable_modules.contains(module.name)) {
             try appendModuleFlagsToContext(ctx, module, alloc);
@@ -1646,12 +2128,14 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator, timing: ?*ParseTiming
 
     const merged_program_data = ast.NodeData{
         .program = ast.Program{
-            .functions = std.ArrayList(*ast.Node){},
-            .globals = std.ArrayList(*ast.Node){},
+            .functions = .empty,
+            .globals = .empty,
         },
     };
 
     const merged_program = ast.Node.create(arena, merged_program_data);
+    try merged_program.data.program.functions.ensureTotalCapacity(arena, expected_functions);
+    try merged_program.data.program.globals.ensureTotalCapacity(arena, expected_globals);
 
     for (modules.items) |module| {
         if (!reachable_modules.contains(module.name)) continue;
@@ -1660,7 +2144,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator, timing: ?*ParseTiming
             .module_name = utils.dupe(u8, alloc, module.name),
             .module_path = utils.dupe(u8, alloc, module.path),
             .line_count = module.line_count,
-            .dependencies = std.ArrayList([]const u8){},
+            .dependencies = .empty,
         };
         for (module.dependencies.items) |dep| {
             try module_registration.dependencies.append(alloc, utils.dupe(u8, alloc, dep));
@@ -1695,33 +2179,27 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator, timing: ?*ParseTiming
             },
         }
     }
-    if (timing) |t| t.merge_time_ns = @intCast(std.time.nanoTimestamp() - merge_start);
+    if (timing) |t| t.merge_time_ns = @intCast(nanoTimestamp() - merge_start);
 
     arena_ast.setRoot(merged_program);
     return arena_ast;
 }
 
 pub fn read_file(file_name: []const u8) anyerror![]const u8 {
-    const cwd = std.fs.cwd();
-    cwd.access(file_name, .{}) catch |err| {
+    const cwd = std.Io.Dir.cwd();
+    cwd.access(process_io, file_name, .{}) catch |err| {
         if (err == error.FileNotFound) {
             return errors.ReadFileError.FileNotFound;
         }
         return errors.ReadFileError.AccessDenied;
     };
 
-    const file_stat = try cwd.statFile(file_name);
+    const file_stat = try cwd.statFile(process_io, file_name, .{});
     if (file_stat.kind == .file) {
-        const file = cwd.openFile(file_name, .{ .mode = .read_only }) catch {
-            return errors.ReadFileError.AccessDenied;
-        };
-        defer file.close();
         if (file_stat.size == 0) {
             return utils.dupe(u8, allocator, "");
         }
-        const buffer = utils.alloc(u8, allocator, @intCast(file_stat.size));
-        const bytes_read = try file.readAll(buffer);
-        return buffer[0..bytes_read];
+        return try cwd.readFileAlloc(process_io, file_name, allocator, .limited(file_stat.size + 1));
     }
 
     return errors.ReadFileError.InvalidPath;
@@ -1797,6 +2275,12 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoArch;
                     context.arch = args[i];
+                } else if (std.mem.eql(u8, flag, "-j")) {
+                    i += 1;
+                    if (i >= args.len) return errors.CLIError.InvalidArgument;
+                    const parsed = std.fmt.parseInt(usize, args[i], 10) catch return errors.CLIError.InvalidArgument;
+                    if (parsed == 0) return errors.CLIError.InvalidArgument;
+                    context.max_threads = parsed;
                 } else if (std.mem.eql(u8, flag, "-link")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.InvalidArgument;
@@ -1860,7 +2344,7 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                 } else if (std.mem.endsWith(u8, arg, ".b") or std.mem.endsWith(u8, arg, ".bf")) {
                     try context.input_files.append(allocator, arg);
                 } else {
-                    const stat = std.fs.cwd().statFile(arg) catch |err| {
+                    const stat = std.Io.Dir.cwd().statFile(process_io, arg, .{}) catch |err| {
                         if (err == error.FileNotFound) {
                             try context.link_objects.append(allocator, arg);
                             continue;
@@ -1955,7 +2439,7 @@ fn loadModuleIntoZli(loaded_modules: *std.ArrayList(ZliLoadedModule), file_path_
     }
 
     const raw_path = stripMatchingQuotes(trimmed);
-    const abs_path = std.fs.cwd().realpathAlloc(alloc, raw_path) catch |err| {
+    const abs_path = std.Io.Dir.cwd().realPathFileAlloc(process_io, raw_path, alloc) catch |err| {
         std.debug.print("zli: cannot load '{s}': {}\n", .{ raw_path, err });
         return;
     };
@@ -2042,7 +2526,7 @@ fn isLikelyCalculatorExpression(expr: []const u8) bool {
 }
 
 fn rewriteCalcIntegersToFloat(expr: []const u8, alloc: std.mem.Allocator) ![]const u8 {
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
 
     var i: usize = 0;
@@ -2105,9 +2589,11 @@ const ZliSnippetMode = enum {
 };
 
 fn buildZliSnippetSource(loaded_modules: []const ZliLoadedModule, imports: []const []const u8, statement_line: []const u8, mode: ZliSnippetMode, alloc: std.mem.Allocator) ![]const u8 {
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
-    var writer = out.writer(alloc);
+    var out_writer = std.Io.Writer.Allocating.fromArrayList(alloc, &out);
+    defer out = out_writer.toArrayList();
+    var writer = &out_writer.writer;
 
     try writer.print("module zli.session;\n", .{});
 
@@ -2140,26 +2626,29 @@ fn buildZliSnippetSource(loaded_modules: []const ZliLoadedModule, imports: []con
     defer alloc.free(statement);
 
     try writer.print("\nfun main() >> i32 {{\n    {s}\n    return 0;\n}}\n", .{statement});
-    return out.toOwnedSlice(alloc);
+    return try out_writer.toOwnedSlice();
 }
 
 fn runZliSnippet(exe_path: []const u8, loaded_modules: []const ZliLoadedModule, imports: []const []const u8, line: []const u8, mode: ZliSnippetMode, alloc: std.mem.Allocator) !u8 {
     const snippet_src = try buildZliSnippetSource(loaded_modules, imports, line, mode, alloc);
     defer alloc.free(snippet_src);
 
-    const tmp_path = try std.fmt.allocPrint(alloc, "__zli_eval_{d}.zl", .{std.time.nanoTimestamp()});
+    const tmp_path = try std.fmt.allocPrint(alloc, "__zli_eval_{d}.zl", .{nanoTimestamp()});
     defer alloc.free(tmp_path);
 
-    var tmp_file = std.fs.cwd().createFile(tmp_path, .{ .truncate = true }) catch |err| {
+    var tmp_file = std.Io.Dir.cwd().createFile(process_io, tmp_path, .{ .truncate = true }) catch |err| {
         std.debug.print("zli: failed to create temp file: {}\n", .{err});
         return 1;
     };
-    defer tmp_file.close();
+    defer tmp_file.close(process_io);
 
-    try tmp_file.writeAll(snippet_src);
-    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = tmp_file.writer(process_io, &file_buffer);
+    try file_writer.interface.writeAll(snippet_src);
+    try file_writer.interface.flush();
+    defer std.Io.Dir.cwd().deleteFile(process_io, tmp_path) catch {};
 
-    var argv = std.ArrayList([]const u8){};
+    var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(alloc);
 
     try argv.append(alloc, exe_path);
@@ -2169,39 +2658,10 @@ fn runZliSnippet(exe_path: []const u8, loaded_modules: []const ZliLoadedModule, 
     }
     try argv.append(alloc, tmp_path);
 
-    var child = std.process.Child.init(argv.items, alloc);
-    child.stdin_behavior = .Inherit;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-
-    var env_map = std.process.getEnvMap(alloc) catch null;
-    defer if (env_map) |*map| map.deinit();
-
-    var zstdpath_for_child: ?[]const u8 = null;
-    defer if (zstdpath_for_child) |p| alloc.free(p);
-
-    var has_zstdpath = false;
-    if (std.process.getEnvVarOwned(alloc, "ZSTDPATH")) |existing_path| {
-        has_zstdpath = true;
-        alloc.free(existing_path);
-    } else |_| {}
-
-    if (!has_zstdpath) {
-        if (std.fs.cwd().realpathAlloc(alloc, "stdlib") catch null) |stdlib_path| {
-            zstdpath_for_child = stdlib_path;
-            if (env_map) |*map| {
-                try map.put("ZSTDPATH", stdlib_path);
-            }
-        }
-    }
-
-    if (env_map) |*map| {
-        child.env_map = map;
-    }
-
-    const term = try child.spawnAndWait();
+    var child = try std.process.spawn(process_io, .{ .argv = argv.items });
+    const term = try child.wait(process_io);
     return switch (term) {
-        .Exited => |code| code,
+        .exited => |code| code,
         else => 1,
     };
 }
@@ -2216,19 +2676,22 @@ fn runZliSnippetCaptured(exe_path: []const u8, loaded_modules: []const ZliLoaded
     const snippet_src = try buildZliSnippetSource(loaded_modules, imports, line, mode, alloc);
     defer alloc.free(snippet_src);
 
-    const tmp_path = try std.fmt.allocPrint(alloc, "__zli_eval_{d}.zl", .{std.time.nanoTimestamp()});
+    const tmp_path = try std.fmt.allocPrint(alloc, "__zli_eval_{d}.zl", .{nanoTimestamp()});
     defer alloc.free(tmp_path);
 
-    var tmp_file = std.fs.cwd().createFile(tmp_path, .{ .truncate = true }) catch |err| {
+    var tmp_file = std.Io.Dir.cwd().createFile(process_io, tmp_path, .{ .truncate = true }) catch |err| {
         std.debug.print("zli: failed to create temp file: {}\n", .{err});
         return error.TempFileFailed;
     };
-    defer tmp_file.close();
+    defer tmp_file.close(process_io);
 
-    try tmp_file.writeAll(snippet_src);
-    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = tmp_file.writer(process_io, &file_buffer);
+    try file_writer.interface.writeAll(snippet_src);
+    try file_writer.interface.flush();
+    defer std.Io.Dir.cwd().deleteFile(process_io, tmp_path) catch {};
 
-    var argv = std.ArrayList([]const u8){};
+    var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(alloc);
 
     try argv.append(alloc, exe_path);
@@ -2238,38 +2701,15 @@ fn runZliSnippetCaptured(exe_path: []const u8, loaded_modules: []const ZliLoaded
     }
     try argv.append(alloc, tmp_path);
 
-    var env_map = std.process.getEnvMap(alloc) catch null;
-    defer if (env_map) |*map| map.deinit();
-
-    var zstdpath_for_child: ?[]const u8 = null;
-    defer if (zstdpath_for_child) |p| alloc.free(p);
-
-    var has_zstdpath = false;
-    if (std.process.getEnvVarOwned(alloc, "ZSTDPATH")) |existing_path| {
-        has_zstdpath = true;
-        alloc.free(existing_path);
-    } else |_| {}
-
-    if (!has_zstdpath) {
-        if (std.fs.cwd().realpathAlloc(alloc, "stdlib") catch null) |stdlib_path| {
-            zstdpath_for_child = stdlib_path;
-            if (env_map) |*map| {
-                try map.put("ZSTDPATH", stdlib_path);
-            }
-        }
-    }
-
-    const env_map_ptr: ?*const std.process.EnvMap = if (env_map) |*map| map else null;
-    const run_res = try std.process.Child.run(.{
-        .allocator = alloc,
+    const run_res = try std.process.run(alloc, process_io, .{
         .argv = argv.items,
-        .env_map = env_map_ptr,
-        .max_output_bytes = 1024 * 1024,
+        .stdout_limit = .limited(1024 * 1024),
+        .stderr_limit = .limited(1024 * 1024),
     });
 
     return .{
         .exit_code = switch (run_res.term) {
-            .Exited => |code| code,
+            .exited => |code| code,
             else => 1,
         },
         .stdout = run_res.stdout,
@@ -2305,11 +2745,18 @@ fn zliPushHistory(history: *std.ArrayList([]const u8), line: []const u8, alloc: 
     try history.append(alloc, utils.dupe(u8, alloc, line));
 }
 
-fn zliReadByte(stdin_file: std.fs.File) !?u8 {
+fn zliReadByte(stdin_file: std.Io.File) !?u8 {
     var b: [1]u8 = undefined;
-    const n = try stdin_file.read(&b);
+    const n = try std.posix.read(stdin_file.handle, &b);
     if (n == 0) return null;
     return b[0];
+}
+
+fn writeStdoutAll(bytes: []const u8) !void {
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.File.stdout().writer(process_io, &buffer);
+    try writer.interface.writeAll(bytes);
+    try writer.interface.flush();
 }
 
 fn zliReplaceLine(buf: *std.ArrayList(u8), cursor: *usize, text: []const u8, alloc: std.mem.Allocator) !void {
@@ -2319,22 +2766,21 @@ fn zliReplaceLine(buf: *std.ArrayList(u8), cursor: *usize, text: []const u8, all
 }
 
 fn zliRedraw(prompt: []const u8, line: []const u8, cursor: usize, alloc: std.mem.Allocator) !void {
-    const stdout_file = std.fs.File.stdout();
-    try stdout_file.writeAll("\r");
-    try stdout_file.writeAll(prompt);
-    try stdout_file.writeAll(line);
-    try stdout_file.writeAll("\x1b[K");
+    try writeStdoutAll("\r");
+    try writeStdoutAll(prompt);
+    try writeStdoutAll(line);
+    try writeStdoutAll("\x1b[K");
 
     const tail = line.len - cursor;
     if (tail > 0) {
         const move_left = try std.fmt.allocPrint(alloc, "\x1b[{d}D", .{tail});
         defer alloc.free(move_left);
-        try stdout_file.writeAll(move_left);
+        try writeStdoutAll(move_left);
     }
 }
 
 fn readZliLineInteractive(prompt: []const u8, history: *std.ArrayList([]const u8), alloc: std.mem.Allocator) !?[]const u8 {
-    const stdin_file = std.fs.File.stdin();
+    const stdin_file = std.Io.File.stdin();
 
     const orig_termios = try std.posix.tcgetattr(stdin_file.handle);
     var raw_termios = orig_termios;
@@ -2345,10 +2791,10 @@ fn readZliLineInteractive(prompt: []const u8, history: *std.ArrayList([]const u8
     try std.posix.tcsetattr(stdin_file.handle, .NOW, raw_termios);
     defer std.posix.tcsetattr(stdin_file.handle, .NOW, orig_termios) catch {};
 
-    var line_buf = std.ArrayList(u8){};
+    var line_buf: std.ArrayList(u8) = .empty;
     defer line_buf.deinit(alloc);
 
-    var draft_buf = std.ArrayList(u8){};
+    var draft_buf: std.ArrayList(u8) = .empty;
     defer draft_buf.deinit(alloc);
 
     var cursor: usize = 0;
@@ -2359,8 +2805,7 @@ fn readZliLineInteractive(prompt: []const u8, history: *std.ArrayList([]const u8
     while (true) {
         const maybe_ch = try zliReadByte(stdin_file);
         if (maybe_ch == null) {
-            const stdout_file = std.fs.File.stdout();
-            try stdout_file.writeAll("\n");
+            try writeStdoutAll("\n");
             if (line_buf.items.len == 0) return null;
             const out = try line_buf.toOwnedSlice(alloc);
             try zliPushHistory(history, out, alloc);
@@ -2370,21 +2815,18 @@ fn readZliLineInteractive(prompt: []const u8, history: *std.ArrayList([]const u8
         const ch = maybe_ch.?;
         switch (ch) {
             '\r', '\n' => {
-                const stdout_file = std.fs.File.stdout();
-                try stdout_file.writeAll("\r\n");
+                try writeStdoutAll("\r\n");
                 const out = try line_buf.toOwnedSlice(alloc);
                 try zliPushHistory(history, out, alloc);
                 return out;
             },
             3 => {
-                const stdout_file = std.fs.File.stdout();
-                try stdout_file.writeAll("^C\r\n");
+                try writeStdoutAll("^C\r\n");
                 return utils.dupe(u8, alloc, "");
             },
             4 => {
                 if (line_buf.items.len == 0) {
-                    const stdout_file = std.fs.File.stdout();
-                    try stdout_file.writeAll("\r\n");
+                    try writeStdoutAll("\r\n");
                     return null;
                 }
             },
@@ -2406,8 +2848,7 @@ fn readZliLineInteractive(prompt: []const u8, history: *std.ArrayList([]const u8
                 try zliRedraw(prompt, line_buf.items, cursor, alloc);
             },
             12 => {
-                const stdout_file = std.fs.File.stdout();
-                try stdout_file.writeAll("\x1b[2J\x1b[H");
+                try writeStdoutAll("\x1b[2J\x1b[H");
                 try zliRedraw(prompt, line_buf.items, cursor, alloc);
             },
             27 => {
@@ -2494,13 +2935,13 @@ fn runZli(cli_args: [][:0]u8, alloc: std.mem.Allocator) !u8 {
         return 1;
     }
 
-    const exe_path = try std.fs.selfExePathAlloc(alloc);
+    const exe_path = try std.process.executablePathAlloc(process_io, alloc);
     defer alloc.free(exe_path);
 
-    var loaded_modules = std.ArrayList(ZliLoadedModule){};
+    var loaded_modules: std.ArrayList(ZliLoadedModule) = .empty;
     defer deinitZliLoadedModules(&loaded_modules, alloc);
 
-    var imports = std.ArrayList([]const u8){};
+    var imports: std.ArrayList([]const u8) = .empty;
     defer deinitOwnedStringList(&imports, alloc);
 
     for (cli_args) |arg| {
@@ -2509,14 +2950,14 @@ fn runZli(cli_args: [][:0]u8, alloc: std.mem.Allocator) !u8 {
 
     std.debug.print("zli: interactive mode (type :help for commands)\n", .{});
 
-    const stdin_file = std.fs.File.stdin();
-    const stdin_is_tty = stdin_file.isTty();
+    const stdin_file = std.Io.File.stdin();
+    const stdin_is_tty = stdin_file.isTty(process_io) catch false;
 
-    var history = std.ArrayList([]const u8){};
+    var history: std.ArrayList([]const u8) = .empty;
     defer deinitOwnedStringList(&history, alloc);
 
     var stdin_buf: [4096]u8 = undefined;
-    var stdin_reader = stdin_file.reader(&stdin_buf);
+    var stdin_reader = stdin_file.reader(process_io, &stdin_buf);
 
     while (true) {
         var owned_line: ?[]const u8 = null;
@@ -2665,7 +3106,7 @@ fn compileBrainfuck(ctx: *Context, alloc: std.mem.Allocator) !u8 {
     const ret_val = c.LLVMConstInt(c.LLVMInt32TypeInContext(code_generator.context), 0, 0);
     _ = c.LLVMBuildRet(code_generator.builder, ret_val);
 
-    code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items, null) catch |err| {
+    code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items, ctx.max_threads, null) catch |err| {
         std.debug.print("Error compiling to executable: {}\n", .{err});
         return 1;
     };
@@ -2677,19 +3118,16 @@ fn compileBrainfuck(ctx: *Context, alloc: std.mem.Allocator) !u8 {
 }
 
 fn collectZlFilesFromDir(alloc: std.mem.Allocator, dir_path: []const u8, files_list: *std.ArrayList([]const u8)) !void {
-    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
-    defer dir.close();
+    var threaded: std.Io.Threaded = .init(alloc, .{});
+    defer threaded.deinit();
+    const run = try std.process.run(alloc, threaded.io(), .{ .argv = &[_][]const u8{ "find", dir_path, "-type", "f", "-name", "*.zl" } });
+    defer alloc.free(run.stdout);
+    defer alloc.free(run.stderr);
+    if (run.term != .exited or run.term.exited != 0) return error.FileNotFound;
 
-    var walker = try dir.walk(alloc);
-    defer walker.deinit();
-
-    while (try walker.next()) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.path, ".zl")) {
-            const full_path = try std.fs.path.join(alloc, &[_][]const u8{ dir_path, entry.path });
-            defer alloc.free(full_path);
-            const path_copy = utils.dupe(u8, alloc, full_path);
-            try files_list.append(alloc, path_copy);
-        }
+    var it = std.mem.tokenizeScalar(u8, run.stdout, '\n');
+    while (it.next()) |path| {
+        try files_list.append(alloc, utils.dupe(u8, alloc, path));
     }
 }
 
@@ -2714,7 +3152,7 @@ fn asciiLower(a: []const u8, alloc: std.mem.Allocator) ![]u8 {
 }
 
 fn stripCommentsAndPreproc(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
     var i: usize = 0;
     while (i < input.len) : (i += 1) {
@@ -2742,8 +3180,8 @@ fn stripCommentsAndPreproc(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 fn collectStatements(alloc: std.mem.Allocator, content: []const u8) !std.ArrayList([]const u8) {
-    var stmts = std.ArrayList([]const u8){};
-    var buf = std.ArrayList(u8){};
+    var stmts: std.ArrayList([]const u8) = .empty;
+    var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(alloc);
     var depth: usize = 0;
     for (content) |ch| {
@@ -2840,7 +3278,7 @@ fn mapCTypeToZType(alloc: std.mem.Allocator, raw0: []const u8) !?[]u8 {
     if (raw.len == 0) return null;
     var ptr_depth: usize = 0;
     {
-        var tmp = std.ArrayList(u8){};
+        var tmp: std.ArrayList(u8) = .empty;
         defer tmp.deinit(alloc);
         for (raw) |ch| {
             if (ch == '*') {
@@ -2854,7 +3292,7 @@ fn mapCTypeToZType(alloc: std.mem.Allocator, raw0: []const u8) !?[]u8 {
 
     var lower = try asciiLower(raw, alloc);
     {
-        var tmp = std.ArrayList(u8){};
+        var tmp: std.ArrayList(u8) = .empty;
         defer tmp.deinit(alloc);
         var seen_space = false;
         for (lower) |ch| {
@@ -2941,7 +3379,7 @@ fn parseAndWriteWrapper(alloc: std.mem.Allocator, stmt_in: []const u8) !?[]const
     if (name.len == 0) return null;
     const ret_raw = trimSpaces(stmt[0..name_start]);
     const ret_z = try mapCTypeToZType(alloc, ret_raw) orelse return null;
-    var params_buf = std.ArrayList([]const u8){};
+    var params_buf: std.ArrayList([]const u8) = .empty;
     defer params_buf.deinit(alloc);
     const inner_trim = trimSpaces(inner);
     if (!(inner_trim.len == 0 or std.mem.eql(u8, inner_trim, "void"))) {
@@ -2955,7 +3393,7 @@ fn parseAndWriteWrapper(alloc: std.mem.Allocator, stmt_in: []const u8) !?[]const
         }
     }
 
-    var output = std.ArrayList(u8){};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(alloc);
 
     const wrap_start = try std.fmt.allocPrint(alloc, "wrap @{s}(", .{name});
@@ -2988,10 +3426,12 @@ fn generateWrapperFromHeader(alloc: std.mem.Allocator, header_path: []const u8, 
     const cleaned = try stripCommentsAndPreproc(a, header_src);
     var stmts = try collectStatements(a, cleaned);
     defer stmts.deinit(a);
-    var file = try std.fs.cwd().createFile(out_path, .{ .truncate = true });
-    defer file.close();
+    var file = try std.Io.Dir.cwd().createFile(process_io, out_path, .{ .truncate = true });
+    defer file.close(process_io);
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(process_io, &file_buffer);
     const header_comment = try std.fmt.allocPrint(a, "// Auto-generated by zlang wrap from: {s}\n", .{header_path});
-    try file.writeAll(header_comment);
+    try file_writer.interface.writeAll(header_comment);
     for (stmts.items) |stmt| {
         const maybe_wrapper_str = parseAndWriteWrapper(a, stmt) catch |e| {
             switch (e) {
@@ -2999,14 +3439,27 @@ fn generateWrapperFromHeader(alloc: std.mem.Allocator, header_path: []const u8, 
             }
         };
         if (maybe_wrapper_str) |wrapper_str| {
-            try file.writeAll(wrapper_str);
+            try file_writer.interface.writeAll(wrapper_str);
             a.free(wrapper_str);
         }
     }
+    try file_writer.interface.flush();
 }
-pub fn main() !u8 {
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+pub fn main(init: std.process.Init) !u8 {
+    process_io = init.io;
+
+    var arg_it = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
+    defer arg_it.deinit();
+
+    var args_list: std.ArrayList([:0]u8) = .empty;
+    defer {
+        for (args_list.items) |arg| allocator.free(arg);
+        args_list.deinit(allocator);
+    }
+    while (arg_it.next()) |arg| {
+        try args_list.append(allocator, try allocator.dupeZ(u8, arg));
+    }
+    const args = args_list.items;
     if (args.len < 2) {
         help.printHelp();
         return 1;
@@ -3026,6 +3479,9 @@ pub fn main() !u8 {
     if (std.mem.eql(u8, args[1], "zli")) {
         const zli_args = if (args.len > 2) args[2..] else args[args.len..args.len];
         return runZli(zli_args, allocator);
+    }
+    if (try zlx_commands.handle(args, allocator, process_io)) |exit_code| {
+        return exit_code;
     }
     if (std.mem.eql(u8, args[1], "wrap") or std.mem.eql(u8, args[1], "wrap-clang")) {
         const use_clang = std.mem.eql(u8, args[1], "wrap-clang");
@@ -3101,7 +3557,7 @@ pub fn main() !u8 {
     };
     defer ctx.deinit(allocator);
 
-    const total_start = std.time.nanoTimestamp();
+    const total_start = nanoTimestamp();
     var stats = CompilationStats{
         .parse_time_ns = 0,
         .parse_load_time_ns = 0,
@@ -3111,6 +3567,13 @@ pub fn main() !u8 {
         .parse_merge_time_ns = 0,
         .codegen_time_ns = 0,
         .backend_time_ns = 0,
+        .backend_prepare_time_ns = 0,
+        .backend_split_time_ns = 0,
+        .backend_wall_time_ns = 0,
+        .backend_cpu_sum_time_ns = 0,
+        .backend_units = 0,
+        .backend_unit_max_time_ns = 0,
+        .backend_unit_min_time_ns = 0,
         .link_time_ns = 0,
         .total_time_ns = 0,
         .lines_of_code = 0,
@@ -3136,20 +3599,20 @@ pub fn main() !u8 {
         }
         const result = compileBrainfuck(&ctx, allocator);
         if (ctx.stats) {
-            stats.total_time_ns = @intCast(std.time.nanoTimestamp() - total_start);
+            stats.total_time_ns = @intCast(nanoTimestamp() - total_start);
             std.debug.print("\n", .{});
             printStats(stats);
         }
         return result;
     }
 
-    const parse_start = std.time.nanoTimestamp();
+    const parse_start = nanoTimestamp();
     var parse_timing = ParseTiming{};
     var ast_root = parseMultiFile(&ctx, allocator, &parse_timing) catch {
         return 1;
     };
     emitUnknownDefineOverrideWarnings(&ctx);
-    const parse_end = std.time.nanoTimestamp();
+    const parse_end = nanoTimestamp();
     stats.parse_time_ns = @intCast(parse_end - parse_start);
     stats.parse_load_time_ns = parse_timing.load_time_ns;
     stats.parse_std_time_ns = parse_timing.std_time_ns;
@@ -3201,7 +3664,7 @@ pub fn main() !u8 {
         std.debug.print("{s}\n", .{error_msg});
         return 1;
     };
-    const codegen_start = std.time.nanoTimestamp();
+    const codegen_start = nanoTimestamp();
     var code_generator = codegen.CodeGenerator.init(allocator) catch |err| {
         const error_msg = switch (err) {
             error.ModuleCreationFailed => "Failed to create LLVM module.",
@@ -3324,7 +3787,7 @@ pub fn main() !u8 {
         };
     }
 
-    const codegen_end = std.time.nanoTimestamp();
+    const codegen_end = nanoTimestamp();
     stats.codegen_time_ns = @intCast(codegen_end - codegen_start);
 
     if (ctx.run_mode) {
@@ -3334,13 +3797,20 @@ pub fn main() !u8 {
             return 1;
         }
 
-        const ir_file = code_generator.emitLLVMIR("__zlang_run_temp", ctx.optimize) catch |err| {
+        const run_nonce: u64 = @intCast(nanoTimestamp());
+        const run_temp_base = std.fmt.allocPrint(allocator, "__zlang_run_temp_{d}_{d}", .{ nanoTimestamp(), run_nonce }) catch {
+            std.debug.print("Error preparing temporary run file name\n", .{});
+            return 1;
+        };
+        defer allocator.free(run_temp_base);
+
+        const ir_file = code_generator.emitLLVMIR(run_temp_base, ctx.optimize) catch |err| {
             std.debug.print("Error emitting LLVM IR: {}\n", .{err});
             return 1;
         };
         defer {
             if (!ctx.keepll) {
-                std.fs.cwd().deleteFile(ir_file) catch {};
+                std.Io.Dir.cwd().deleteFile(process_io, ir_file) catch {};
             }
             allocator.free(ir_file);
         }
@@ -3355,25 +3825,150 @@ pub fn main() !u8 {
         };
 
         if (ctx.stats) {
-            stats.total_time_ns = @intCast(std.time.nanoTimestamp() - total_start);
+            stats.total_time_ns = @intCast(nanoTimestamp() - total_start);
             std.debug.print("\n", .{});
             printStats(stats);
         }
         return exit_code;
     } else {
         var backend_timing = codegen.CodeGenerator.BackendTiming{};
-        code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items, &backend_timing) catch |err| {
-            std.debug.print("Error compiling to executable: {}\n", .{err});
+        const backend_prepare_start = nanoTimestamp();
+        var backend_units: std.ArrayList(BackendUnit) = .empty;
+        defer backend_units.deinit(allocator);
+
+        const backend_nonce: u64 = @intCast(nanoTimestamp());
+        const backend_temp_base = std.fmt.allocPrint(allocator, "{s}.tmp.{d}.{d}", .{ ctx.output, nanoTimestamp(), backend_nonce }) catch {
+            std.debug.print("Error preparing backend temporary prefix\n", .{});
+            return 1;
+        };
+        defer allocator.free(backend_temp_base);
+
+        const primary_bc_file = std.fmt.allocPrint(allocator, "{s}.bc", .{backend_temp_base}) catch {
+            std.debug.print("Error preparing backend bitcode path\n", .{});
+            return 1;
+        };
+        errdefer allocator.free(primary_bc_file);
+
+        code_generator.writeBitcodeToFile(primary_bc_file) catch |err| {
+            std.debug.print("Error writing LLVM bitcode: {}\n", .{err});
+            return 1;
+        };
+
+        if (ctx.keepll) {
+            const kept_ll_file = std.fmt.allocPrint(allocator, "{s}.ll", .{ctx.output}) catch {
+                std.debug.print("Error preparing kept LLVM IR path\n", .{});
+                return 1;
+            };
+            defer allocator.free(kept_ll_file);
+            code_generator.writeToFile(kept_ll_file) catch |err| {
+                std.debug.print("Error writing LLVM IR: {}\n", .{err});
+                return 1;
+            };
+        }
+
+        var split_unit_paths: std.ArrayList([]const u8) = .empty;
+        defer split_unit_paths.deinit(allocator);
+
+        const split_prefix = std.fmt.allocPrint(allocator, "{s}.unit.bc", .{backend_temp_base}) catch {
+            std.debug.print("Error preparing split prefix\n", .{});
+            return 1;
+        };
+        defer allocator.free(split_prefix);
+
+        const split_start = nanoTimestamp();
+        const split_success = code_generator.splitBitcodeIntoUnits(primary_bc_file, split_prefix, backendSplitUnitCount(ctx.max_threads), ctx.arch, &split_unit_paths) catch false;
+        const split_end = nanoTimestamp();
+        stats.backend_split_time_ns = @intCast(split_end - split_start);
+
+        if (split_success) {
+            for (split_unit_paths.items) |unit_bc| {
+                const unit_obj = std.fmt.allocPrint(allocator, "{s}.o", .{unit_bc}) catch {
+                    std.debug.print("Error preparing split object path\n", .{});
+                    return 1;
+                };
+                try backend_units.append(allocator, .{
+                    .ir_file = unit_bc,
+                    .obj_file = unit_obj,
+                    .keep_ir = false,
+                });
+            }
+            std.Io.Dir.cwd().deleteFile(process_io, primary_bc_file) catch {};
+            allocator.free(primary_bc_file);
+        } else {
+            const primary_obj_file = std.fmt.allocPrint(allocator, "{s}.o", .{backend_temp_base}) catch {
+                std.debug.print("Error preparing backend object path\n", .{});
+                return 1;
+            };
+            try backend_units.append(allocator, .{
+                .ir_file = primary_bc_file,
+                .obj_file = primary_obj_file,
+                .keep_ir = false,
+            });
+        }
+
+        defer {
+            cleanupBackendUnits(backend_units.items);
+            for (backend_units.items) |unit| {
+                allocator.free(unit.ir_file);
+                allocator.free(unit.obj_file);
+            }
+        }
+
+        var generated_objects: std.ArrayList([]const u8) = .empty;
+        defer generated_objects.deinit(allocator);
+        for (backend_units.items) |unit| {
+            try generated_objects.append(allocator, unit.obj_file);
+        }
+
+        var object_tasks = try allocator.alloc(BackendObjectTask, generated_objects.items.len);
+        defer allocator.free(object_tasks);
+        const llc_task_threads: usize = if (generated_objects.items.len > 1) 1 else ctx.max_threads;
+        for (generated_objects.items, 0..) |obj_file, i| {
+            object_tasks[i] = .{
+                .cg = &code_generator,
+                .ir_file = backend_units.items[i].ir_file,
+                .obj_file = obj_file,
+                .arch = ctx.arch,
+                .optimize = ctx.optimize,
+                .max_threads = llc_task_threads,
+            };
+        }
+        stats.backend_prepare_time_ns = @intCast(nanoTimestamp() - backend_prepare_start);
+
+        const backend_compile_start = nanoTimestamp();
+        backend_timing.llc_time_ns = compileBackendObjects(object_tasks, ctx.max_threads, allocator) catch |err| {
+            std.debug.print("Error compiling IR to object: {}\n", .{err});
+            return 1;
+        };
+        const backend_compile_end = nanoTimestamp();
+
+        var unit_max: u64 = 0;
+        var unit_min: u64 = 0;
+        if (object_tasks.len > 0) {
+            unit_min = object_tasks[0].llc_time_ns;
+            for (object_tasks) |task| {
+                if (task.llc_time_ns > unit_max) unit_max = task.llc_time_ns;
+                if (task.llc_time_ns < unit_min) unit_min = task.llc_time_ns;
+            }
+        }
+
+        code_generator.linkObjectFilesToExecutable(ctx.output, ctx.arch, generated_objects.items, ctx.link_objects.items, ctx.extra_args.items, ctx.max_threads, &backend_timing) catch |err| {
+            std.debug.print("Error linking executable: {}\n", .{err});
             return 1;
         };
         stats.backend_time_ns = backend_timing.opt_time_ns + backend_timing.llc_time_ns;
+        stats.backend_wall_time_ns = @intCast(backend_compile_end - backend_compile_start);
+        stats.backend_cpu_sum_time_ns = backend_timing.llc_time_ns;
+        stats.backend_units = generated_objects.items.len;
+        stats.backend_unit_max_time_ns = unit_max;
+        stats.backend_unit_min_time_ns = unit_min;
         stats.link_time_ns = backend_timing.link_time_ns;
         stats.llc_version_major = backend_timing.llc_version_major;
         stats.opt_version_major = backend_timing.opt_version_major;
         stats.clang_version_major = backend_timing.clang_version_major;
         stats.lld_version_major = backend_timing.lld_version_major;
         stats.link_backend = backend_timing.link_backend;
-        stats.total_time_ns = @intCast(std.time.nanoTimestamp() - total_start);
+        stats.total_time_ns = @intCast(nanoTimestamp() - total_start);
 
         if (ctx.verbose and !ctx.quiet) {
             std.debug.print("Executable compiled to {s}\n", .{ctx.output});

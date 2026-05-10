@@ -1480,7 +1480,7 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
         .brainfuck => |bf| {
             std.debug.print("🧠 Brainfuck:\n", .{});
             var lines = std.mem.splitScalar(u8, bf.code, '\n');
-            var line_list = std.ArrayList([]const u8){};
+            var line_list: std.ArrayList([]const u8) = .empty;
             defer line_list.deinit(std.heap.page_allocator);
             while (lines.next()) |line| {
                 const trimmed = std.mem.trim(u8, line, " \t\r");
@@ -1831,7 +1831,9 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
 
 pub fn printASTTree(root: *Node) void {
     var buffer: [8192]u8 = undefined;
-    var stdout_file_writer = std.fs.File.stdout().writer(&buffer);
+    var threaded: std.Io.Threaded = .init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    var stdout_file_writer = std.Io.File.stdout().writer(threaded.io(), &buffer);
     writeASTNodeJson(&stdout_file_writer.interface, root, 0) catch |err| {
         std.debug.print("Failed to write AST JSON: {any}\n", .{err});
         return;
