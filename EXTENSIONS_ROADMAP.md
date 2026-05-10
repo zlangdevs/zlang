@@ -28,6 +28,9 @@ Done on branch `zlx`:
 - Added dependency cycle detection and `module-load-order` for future plugin initialization order.
 - Added `src/zlx/package.zig` package layout abstraction; current `single_manifest` layout reads the whole `.zlx` as a ZON manifest, with archive layouts reserved for v2.
 - `module-info` now reports the detected `layout`.
+- Added `include/zlang_plugin_api_v1.h` with the v1 plugin/host C ABI types (no native loading yet).
+- Added `src/zlx/abi.zig`, the Zig mirror of the v1 ABI, exposing `api_version`, supported range, entry-symbol names, and an `checkApiRange` helper.
+- Added `zlang module-abi` to print the host's supported ABI range and entry symbols for plugin authors.
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
 
 Not done yet:
@@ -39,7 +42,7 @@ Not done yet:
 - Link flag activation by feature usage.
 
 Next planned increments:
-- Add host/plugin ABI type definitions without loading native code yet.
+- Wire a no-op host API table backed by `src/zlx/abi.zig` that the loader will populate in Phase 2 (still without dlopen).
 - Extend the package layout abstraction with a real container layout (archive extraction) alongside the existing `single_manifest` layout.
 
 ---
@@ -144,6 +147,7 @@ zlang install ./brainfuck.zlx
 zlang list-modules
 zlang module-load-order
 zlang module-info ./brainfuck.zlx
+zlang module-abi
 zlang validate-module ./brainfuck.zlx
 zlang del-module brainfuck
 ```
