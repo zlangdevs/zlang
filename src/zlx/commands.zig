@@ -1,10 +1,9 @@
 const std = @import("std");
 const index_mod = @import("index.zig");
 const manifest = @import("manifest.zig");
+const package_mod = @import("package.zig");
 const registry = @import("registry.zig");
 const store_mod = @import("store.zig");
-
-const max_package_size = 16 * 1024 * 1024;
 
 pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     if (args.len < 2) return null;
@@ -17,7 +16,7 @@ pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     return null;
 }
 
-fn loadPackageManifest(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io, usage: []const u8) !?manifest.Manifest {
+fn openPackage(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io, usage: []const u8) !?package_mod.Package {
     if (args.len != 3) {
         std.debug.print("Usage: {s}\n", .{usage});
         return null;
@@ -29,14 +28,8 @@ fn loadPackageManifest(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.I
         return null;
     }
 
-    const package = std.Io.Dir.cwd().readFileAlloc(io, source_path, alloc, .limited(max_package_size)) catch |err| {
-        std.debug.print("zlx: could not read {s}: {}\n", .{ source_path, err });
-        return null;
-    };
-    defer alloc.free(package);
-
-    return manifest.parse(alloc, package) catch |err| {
-        std.debug.print("zlx: invalid manifest in {s}: {}\n", .{ source_path, err });
+    return package_mod.open(alloc, io, source_path) catch |err| {
+        std.debug.print("zlx: could not open package {s}: {}\n", .{ source_path, err });
         return null;
     };
 }
@@ -51,16 +44,13 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
         return 1;
     }
 
-    const package = std.Io.Dir.cwd().readFileAlloc(io, args[2], alloc, .limited(max_package_size)) catch |err| {
-        std.debug.print("zlx: could not read {s}: {}\n", .{ args[2], err });
+    var pkg = package_mod.open(alloc, io, args[2]) catch |err| {
+        std.debug.print("zlx: could not open package {s}: {}\n", .{ args[2], err });
         return 1;
     };
-    defer alloc.free(package);
-    const parsed = manifest.parse(alloc, package) catch |err| {
-        std.debug.print("zlx: invalid manifest in {s}: {}\n", .{ args[2], err });
-        return 1;
-    };
-    defer manifest.free(alloc, parsed);
+    defer pkg.deinit(alloc);
+    const parsed = pkg.manifest;
+    const package = pkg.manifestSource();
     const registration_diagnostics = registry.validateManifest(alloc, parsed) catch |err| {
         std.debug.print("zlx: could not validate extension registrations: {}\n", .{err});
         return 1;
@@ -292,8 +282,9 @@ fn delModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
 }
 
 fn validateModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
-    const parsed = (try loadPackageManifest(args, alloc, io, "zlang validate-module <file.zlx>")) orelse return 1;
-    defer manifest.free(alloc, parsed);
+    var pkg = (try openPackage(args, alloc, io, "zlang validate-module <file.zlx>")) orelse return 1;
+    defer pkg.deinit(alloc);
+    const parsed = pkg.manifest;
     const registration_diagnostics = registry.validateManifest(alloc, parsed) catch |err| {
         std.debug.print("zlx: could not validate extension registrations: {}\n", .{err});
         return 1;
@@ -307,12 +298,14 @@ fn validateModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u
 }
 
 fn moduleInfo(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
-    const parsed = (try loadPackageManifest(args, alloc, io, "zlang module-info <file.zlx>")) orelse return 1;
-    defer manifest.free(alloc, parsed);
+    var pkg = (try openPackage(args, alloc, io, "zlang module-info <file.zlx>")) orelse return 1;
+    defer pkg.deinit(alloc);
+    const parsed = pkg.manifest;
 
     std.debug.print("name: {s}\n", .{parsed.name});
     std.debug.print("version: {s}\n", .{parsed.version});
     std.debug.print("format: {d}\n", .{parsed.format_version});
+    std.debug.print("layout: {s}\n", .{package_mod.layoutName(pkg.layout)});
     std.debug.print("api: {d}-{d}\n", .{ parsed.api_min, parsed.api_max });
     std.debug.print("current_target: {s}\n", .{manifest.currentTargetName()});
     std.debug.print("target_compatible: {}\n", .{manifest.supportsCurrentTarget(parsed)});
