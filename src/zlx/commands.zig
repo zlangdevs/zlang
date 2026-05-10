@@ -10,6 +10,7 @@ pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     if (args.len < 2) return null;
     if (std.mem.eql(u8, args[1], "install")) return try install(args, alloc, io);
     if (std.mem.eql(u8, args[1], "list-modules")) return try listModules(args, alloc, io);
+    if (std.mem.eql(u8, args[1], "module-load-order")) return try moduleLoadOrder(args, alloc, io);
     if (std.mem.eql(u8, args[1], "del-module")) return try delModule(args, alloc, io);
     if (std.mem.eql(u8, args[1], "validate-module")) return try validateModule(args, alloc, io);
     if (std.mem.eql(u8, args[1], "module-info")) return try moduleInfo(args, alloc, io);
@@ -134,7 +135,10 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
             .status_reason = status_reason,
         });
     }
-    index_mod.applyDependencyStatuses(next_entries.items);
+    index_mod.applyDependencyStatuses(alloc, next_entries.items) catch |err| {
+        std.debug.print("zlx: could not validate dependency graph: {}\n", .{err});
+        return 1;
+    };
     index_mod.write(alloc, io, store, next_entries.items) catch |err| {
         std.debug.print("zlx: could not update module index: {}\n", .{err});
         return 1;
@@ -188,6 +192,49 @@ fn listModules(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     return 0;
 }
 
+fn moduleLoadOrder(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
+    if (args.len != 2) {
+        std.debug.print("Usage: zlang module-load-order\n", .{});
+        return 1;
+    }
+
+    var store = store_mod.Store.init(alloc) catch |err| {
+        std.debug.print("zlx: could not locate module store: {}\n", .{err});
+        return 1;
+    };
+    defer store.deinit(alloc);
+
+    const loaded_index = index_mod.load(alloc, io, store) catch |err| {
+        std.debug.print("zlx: could not read module index: {}\n", .{err});
+        return 1;
+    };
+    defer loaded_index.deinit(alloc);
+
+    var rebuilt_entries: ?std.ArrayList(index_mod.Entry) = null;
+    defer if (rebuilt_entries) |*entries| index_mod.deinitEntries(entries, alloc);
+    const modules = if (!loaded_index.parsed) blk: {
+        rebuilt_entries = index_mod.rebuild(alloc, io, store) catch |err| {
+            std.debug.print("zlx: could not rebuild module index: {}\n", .{err});
+            return 1;
+        };
+        break :blk rebuilt_entries.?.items;
+    } else loaded_index.value.modules;
+
+    var order = index_mod.loadOrder(alloc, modules) catch |err| {
+        std.debug.print("zlx: could not compute module load order: {}\n", .{err});
+        return 1;
+    };
+    defer order.deinit(alloc);
+    if (order.items.len == 0) {
+        std.debug.print("No loadable modules\n", .{});
+        return 0;
+    }
+    for (order.items) |module_index| {
+        std.debug.print("{s}\n", .{modules[module_index].name});
+    }
+    return 0;
+}
+
 fn delModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     if (args.len != 3) {
         std.debug.print("Usage: zlang del-module <name>\n", .{});
@@ -231,7 +278,10 @@ fn delModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     for (loaded_index.value.modules) |entry| {
         if (!std.mem.eql(u8, entry.name, args[2])) try next_entries.append(alloc, entry);
     }
-    index_mod.applyDependencyStatuses(next_entries.items);
+    index_mod.applyDependencyStatuses(alloc, next_entries.items) catch |err| {
+        std.debug.print("zlx: could not validate dependency graph: {}\n", .{err});
+        return 1;
+    };
     index_mod.write(alloc, io, store, next_entries.items) catch |err| {
         std.debug.print("zlx: could not update module index: {}\n", .{err});
         return 1;
