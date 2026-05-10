@@ -7,6 +7,7 @@ const max_package_size = 16 * 1024 * 1024;
 
 pub const Status = enum {
     installed,
+    incompatible,
     missing,
     broken,
 };
@@ -108,7 +109,7 @@ pub fn rebuild(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store) !st
             .path = package_path,
             .api_min = parsed.api_min,
             .api_max = parsed.api_max,
-            .status = .installed,
+            .status = if (manifest_mod.supportsCurrentTarget(parsed)) .installed else .incompatible,
         });
     }
 
