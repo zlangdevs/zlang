@@ -48,7 +48,7 @@ Done on branch `zlx`:
 - Extension-block dispatch (RFC §5.2 + Phase 5 codegen bridge MVP) implemented at the preprocessor layer in `src/zlx/preprocess.zig`: scans input `.zl` files for `IDENTIFIER { ... }` whose IDENTIFIER matches a plugin-registered syntax block, brace-counts the raw payload, invokes the registered handler via the v1 ABI, splices the handler's `generated_zlang_source` back into the source, and writes the rewritten file to a temp path that replaces the original in `ctx.input_files`. `SyntaxRegistration` now retains the registered `BlockHandler` so the preprocessor can dispatch directly. The dummy plugin's `dummy_block { ... }` is expanded into a real zlang statement; full compile-link-run works.
 - Extension-block expansion now also runs on dependency `.zl` files loaded via `use`: `loadModulesFromPaths` swaps any file containing a matched block for its rewritten temp copy before parsing, so plugin-shipped modules can themselves use extension blocks. Verified by placing `dummy_block { ... }` inside the plugin's own `std/dummy.zl`; the main file's `use dummy; dummy.dummy_say()` still returns 42.
 - `zlang help` now lists every `.zlx` command (`install`, `del-module`, `list-modules`, `module-info`, `module-abi`, `module-load`, `module-loadall`, `module-dryrun`, `module-load-order`, `validate-module`) under a dedicated `Extension commands (.zlx)` section so the extension story is discoverable from the main entry point.
-- Phase 9 trust flags shipped: `--no-extensions` skips `dlopen` of native plugins while still loading manifest-declared module paths through a new `loadManifestModulesOnly`, and `--isolated` disables both for reproducible builds. Both flags appear under Options in `zlang help`. Verified: default loads `.so` + module; `--no-extensions` resolves `use dummy` without link-flag activation; `--isolated` fails to resolve plugin modules.
+- Phase 9 trust flags shipped: `-no-extensions` skips `dlopen` of native plugins while still loading manifest-declared module paths through a new `loadManifestModulesOnly`, and `-isolated` disables both for reproducible builds. Both flags appear under Options in `zlang help`. Verified: default loads `.so` + module; `-no-extensions` resolves `use dummy` without link-flag activation; `-isolated` fails to resolve plugin modules.
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
 
 Not done yet:
@@ -62,7 +62,7 @@ Not done yet:
 Next planned increments:
 - Begin extracting the built-in brainfuck path into a `brainfuck.zlx` extension now that syntax-block dispatch works end-to-end (Phase 7 entry).
 - Add a real container layout to the package abstraction so `entry` and `std/*.zl` are extracted from a single `.zlx` archive instead of relying on a sidecar `.so` and an adjacent `std/` directory at install time.
-- Add Phase 9 security hooks: `--no-extensions` (skip dlopen), `--isolated` (also skip extension module paths), and `zlang doctor-modules` diagnostics.
+- Add Phase 9 security hooks: `-no-extensions` (skip dlopen), `-isolated` (also skip extension module paths), and `zlang doctor-modules` diagnostics.
 - Extend the package layout abstraction with a real container layout (archive extraction) so `entry`/`std/*.zl` paths are extracted from the `.zlx` instead of relying on a manifest-side sidecar `.so`.
 
 ---
@@ -433,8 +433,8 @@ Important security note:
 - They run in the compiler process and can do anything the current user can do.
 - v1 does not sandbox native plugins.
 - Safety is based on install-time trust, manifest validation, hashes/signatures, and clear diagnostics.
-- `--no-extensions` disables native `.so` plugin loading but keeps pure `.zl` extension module paths available.
-- `--isolated` disables native plugins and extension module paths for fully reproducible builds.
+- `-no-extensions` disables native `.so` plugin loading but keeps pure `.zl` extension module paths available.
+- `-isolated` disables native plugins and extension module paths for fully reproducible builds.
 
 ## Phase 10: Stabilization and compatibility policy (ongoing)
 - ABI semver policy.
@@ -457,7 +457,7 @@ Risk: plugin can destabilize compiler.
 - Mitigation: constrained host API + strict handshake + diagnostics isolation.
 
 Risk: native plugin is malicious or buggy.
-- Mitigation: treat installed `.zlx` native code as trusted; add hashes/signatures and `--no-extensions` for reproducible/debug builds.
+- Mitigation: treat installed `.zlx` native code as trusted; add hashes/signatures and `-no-extensions` for reproducible/debug builds.
 
 Risk: linking differences across distros.
 - Mitigation: extension-declared native requirements + host resolver utilities.
@@ -473,8 +473,8 @@ Risk: linking differences across distros.
 - `threading.zlx` validates modules + link flags + native runtime integration.
 - `zlang list-modules` shows compatibility status and reasons.
 - `zlang del-module brainfuck` cleanly removes feature.
-- `zlang --no-extensions ...` disables native plugins but keeps pure extension modules available.
-- `zlang --isolated ...` disables native plugins and extension module paths.
+- `zlang -no-extensions ...` disables native plugins but keeps pure extension modules available.
+- `zlang -isolated ...` disables native plugins and extension module paths.
 - Existing non-extension builds continue to work.
 
 Explicitly not in v1:
