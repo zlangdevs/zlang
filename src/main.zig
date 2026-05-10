@@ -2396,12 +2396,12 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     try context.extra_args.append(allocator, combined);
                 } else if (std.mem.startsWith(u8, flag, "-Wl,")) {
                     try context.extra_args.append(allocator, flag);
-                } else if (std.mem.eql(u8, flag, "--no-extensions")) {
+                } else if (std.mem.eql(u8, flag, "-no-extensions")) {
                     context.no_extensions = true;
-                } else if (std.mem.eql(u8, flag, "--isolated")) {
+                } else if (std.mem.eql(u8, flag, "-isolated")) {
                     context.isolated = true;
                     context.no_extensions = true;
-                } else if (std.mem.eql(u8, flag, "-help") or std.mem.eql(u8, flag, "--help")) {
+                } else if (std.mem.eql(u8, flag, "-help")) {
                     return errors.CLIError.NoHelp;
                 } else {
                     try context.extra_args.append(allocator, flag);
@@ -3645,7 +3645,7 @@ pub fn main(init: std.process.Init) !u8 {
         if (ctx.isolated) {
             std.debug.print("zlx: isolated mode, plugins and extension modules disabled\n", .{});
         } else {
-            std.debug.print("zlx: --no-extensions, native plugins disabled\n", .{});
+            std.debug.print("zlx: -no-extensions, native plugins disabled\n", .{});
         }
     }
 
