@@ -45,6 +45,7 @@ Done on branch `zlx`:
 - Host registrations now record the owning plugin: every syntax block, module, CLI flag, link flag, and help section carries an `owner` field set by the loader before `register_plugin` and cleared after. Plugin link flags are now activated by feature use (RFC §5.4): they enter the linker invocation only when one of the owning plugin's CLI flags appeared on the command line. Verified: dummy plugin without `-dummy` injects 0 link flags; with `-dummy`, 1 link flag is activated.
 - Extended feature-use detection: `zlx_runtime.scanUseImports` lightly scans input `.zl` files for `use NAME` statements; if `NAME` matches a plugin-registered module, that module's owner joins the used-owners set. A `.zl` with `use dummy` now activates the `dummy` plugin's link flags without needing `-dummy` on the CLI.
 - Plugin stdlib modules now resolve at compile time (RFC §5.3): install copies every manifest-declared module file from `<input_dir>/<module.path>` to `<store>/<name>.modules/<module.path>`, `del-module` removes that tree, and the main pipeline builds an absolute-path map from the loaded host's `modules` list. The dependency loader pulls plugin module files into the modules array just like std modules, so `use dummy` now compiles and runs against the plugin-shipped `.zl`.
+- Extension-block dispatch (RFC §5.2 + Phase 5 codegen bridge MVP) implemented at the preprocessor layer in `src/zlx/preprocess.zig`: scans input `.zl` files for `IDENTIFIER { ... }` whose IDENTIFIER matches a plugin-registered syntax block, brace-counts the raw payload, invokes the registered handler via the v1 ABI, splices the handler's `generated_zlang_source` back into the source, and writes the rewritten file to a temp path that replaces the original in `ctx.input_files`. `SyntaxRegistration` now retains the registered `BlockHandler` so the preprocessor can dispatch directly. The dummy plugin's `dummy_block { ... }` is expanded into a real zlang statement; full compile-link-run works.
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
 
 Not done yet:
@@ -56,8 +57,9 @@ Not done yet:
 - Link flag activation by feature usage.
 
 Next planned increments:
-- Add a parser dispatch path for `IDENTIFIER { ... }` extension blocks (Phase 4) and route the captured raw bytes to the registered handler.
-- Extend the package layout abstraction with a real container layout so `entry` and `std/*.zl` are extracted from a single `.zlx` archive instead of relying on sidecar `.so` and adjacent `std/` directory at install time.
+- Extension-block expansion is currently only applied to top-level input files; extend it to dependency `.zl` files loaded via `use` so plugin-shipped modules can themselves contain extension blocks.
+- Add a real container layout to the package abstraction so `entry` and `std/*.zl` are extracted from a single `.zlx` archive instead of relying on a sidecar `.so` and an adjacent `std/` directory at install time.
+- Begin extracting the built-in brainfuck path into a `brainfuck.zlx` extension now that syntax-block dispatch works end-to-end (Phase 7 entry).
 - Extend the package layout abstraction with a real container layout (archive extraction) so `entry`/`std/*.zl` paths are extracted from the `.zlx` instead of relying on a manifest-side sidecar `.so`.
 
 ---

@@ -75,10 +75,15 @@ var desc_singleton: PluginDesc = .{
     .register_plugin = registerPlugin,
 };
 
+const dummy_block_expansion: []const u8 = "i32 __dummy_block_marker = 42;";
+
 fn dummyHandler(host: *HostApi, input: *const BlockInput, output: *BlockOutput) callconv(.c) c_int {
     _ = host;
     _ = input;
-    output.* = .{ .generated_zlang_source = "", .generated_zlang_source_len = 0 };
+    output.* = .{
+        .generated_zlang_source = dummy_block_expansion.ptr,
+        .generated_zlang_source_len = @intCast(dummy_block_expansion.len),
+    };
     return 0;
 }
 
