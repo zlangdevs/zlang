@@ -1,6 +1,7 @@
 const std = @import("std");
 const index_mod = @import("index.zig");
 const manifest = @import("manifest.zig");
+const registry = @import("registry.zig");
 const store_mod = @import("store.zig");
 
 const max_package_size = 16 * 1024 * 1024;
@@ -59,6 +60,14 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
         return 1;
     };
     defer manifest.free(alloc, parsed);
+    const registration_diagnostics = registry.validateManifest(alloc, parsed) catch |err| {
+        std.debug.print("zlx: could not validate extension registrations: {}\n", .{err});
+        return 1;
+    };
+    if (registration_diagnostics.conflicts != 0) {
+        std.debug.print("zlx: manifest has {d} duplicate registration(s)\n", .{registration_diagnostics.conflicts});
+        return 1;
+    }
 
     var store = store_mod.Store.init(alloc) catch |err| {
         std.debug.print("zlx: could not locate module store: {}\n", .{err});
@@ -224,6 +233,14 @@ fn delModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
 fn validateModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     const parsed = (try loadPackageManifest(args, alloc, io, "zlang validate-module <file.zlx>")) orelse return 1;
     defer manifest.free(alloc, parsed);
+    const registration_diagnostics = registry.validateManifest(alloc, parsed) catch |err| {
+        std.debug.print("zlx: could not validate extension registrations: {}\n", .{err});
+        return 1;
+    };
+    if (registration_diagnostics.conflicts != 0) {
+        std.debug.print("zlx: manifest has {d} duplicate registration(s)\n", .{registration_diagnostics.conflicts});
+        return 1;
+    }
     std.debug.print("Valid module: {s} {s}\n", .{ parsed.name, parsed.version });
     return 0;
 }
@@ -238,6 +255,13 @@ fn moduleInfo(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     std.debug.print("api: {d}-{d}\n", .{ parsed.api_min, parsed.api_max });
     std.debug.print("current_target: {s}\n", .{manifest.currentTargetName()});
     std.debug.print("target_compatible: {}\n", .{manifest.supportsCurrentTarget(parsed)});
+    const registration_diagnostics = try registry.validateManifest(alloc, parsed);
+    std.debug.print("registrations: modules={d}, syntax_blocks={d}, cli_flags={d}, conflicts={d}\n", .{
+        registration_diagnostics.modules,
+        registration_diagnostics.syntax_blocks,
+        registration_diagnostics.cli_flags,
+        registration_diagnostics.conflicts,
+    });
     if (parsed.entry) |entry| {
         std.debug.print("entry: {s}\n", .{entry});
     } else {
@@ -247,6 +271,8 @@ fn moduleInfo(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     printStringList("targets", parsed.targets);
     printStringList("dependencies", parsed.dependencies);
     printModules(parsed.modules);
+    printSyntaxBlocks(parsed.syntax_blocks);
+    printCliFlags(parsed.cli_flags);
     printStringList("native_libs", parsed.native_libs);
     printStringList("link_flags", parsed.link_flags);
     std.debug.print("expose.global_syntax: {}\n", .{parsed.expose.global_syntax});
@@ -263,6 +289,34 @@ fn printModules(modules: []const manifest.Module) void {
     std.debug.print("\n", .{});
     for (modules) |module| {
         std.debug.print("  - {s}: {s}\n", .{ module.name, module.path });
+    }
+}
+
+fn printSyntaxBlocks(blocks: []const manifest.SyntaxBlock) void {
+    std.debug.print("syntax_blocks:", .{});
+    if (blocks.len == 0) {
+        std.debug.print(" none\n", .{});
+        return;
+    }
+    std.debug.print("\n", .{});
+    for (blocks) |block| {
+        std.debug.print("  - {s}: {s}, mandatory={}\n", .{ block.name, @tagName(block.delimiter_mode), block.mandatory });
+    }
+}
+
+fn printCliFlags(flags: []const manifest.CliFlag) void {
+    std.debug.print("cli_flags:", .{});
+    if (flags.len == 0) {
+        std.debug.print(" none\n", .{});
+        return;
+    }
+    std.debug.print("\n", .{});
+    for (flags) |flag| {
+        if (flag.value) |value| {
+            std.debug.print("  - {s}={s}, mandatory={}\n", .{ flag.name, value, flag.mandatory });
+        } else {
+            std.debug.print("  - {s}, mandatory={}\n", .{ flag.name, flag.mandatory });
+        }
     }
 }
 

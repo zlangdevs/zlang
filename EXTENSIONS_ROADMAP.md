@@ -96,6 +96,18 @@ brainfuck.zlx
         .{ .name = "brainfuck", .path = "std/brainfuck.zl" },
     },
 
+    .syntax_blocks = .{
+        .{ .name = "brainfuck", .delimiter_mode = .brace_counting, .mandatory = true },
+    },
+
+    .cli_flags = .{
+        .{ .name = "-b", .value = "cell_size=8", .mandatory = true },
+        .{ .name = "-b8", .value = "cell_size=8", .mandatory = true },
+        .{ .name = "-b16", .value = "cell_size=16", .mandatory = true },
+        .{ .name = "-b32", .value = "cell_size=32", .mandatory = true },
+        .{ .name = "-b64", .value = "cell_size=64", .mandatory = true },
+    },
+
     // Optional native libraries shipped in package
     .native_libs = .{},
     .link_flags = .{},
@@ -359,6 +371,14 @@ Deliverable: both `brainfuck.zlx` and `threading.zlx` work as external extension
 ## Phase 7: Brainfuck extraction (1-2 weeks)
 - Move current built-in brainfuck integration to `brainfuck.zlx`.
 - Keep temporary backward compatibility shim for one release if needed.
+
+No-loss acceptance criteria before removing built-in Brainfuck from clean zlang:
+- `brainfuck { ... }` inside `.zl` works through `brainfuck.zlx` with the same directives currently supported by core codegen.
+- Standalone `.b/.bf` compilation works through extension CLI flags `-b`, `-b8`, `-b16`, `-b32`, `-b64`.
+- Cell size behavior is unchanged for 8/16/32/64-bit modes.
+- Existing BF optimization behavior behind `-optimize` has an equivalent extension path or is explicitly preserved through a host API hook.
+- Existing examples/tests that cover embedded and standalone BF pass against `brainfuck.zlx`.
+- Built-in AST/parser/codegen BF branches are removed only after `brainfuck.zlx` and at least one non-BF extension validate the extension architecture.
 
 Deliverable: brainfuck works as external extension.
 

@@ -12,6 +12,8 @@ pub const Manifest = struct {
     targets: []const []const u8 = &.{},
     dependencies: []const []const u8 = &.{},
     modules: []const Module = &.{},
+    syntax_blocks: []const SyntaxBlock = &.{},
+    cli_flags: []const CliFlag = &.{},
     native_libs: []const []const u8 = &.{},
     link_flags: []const []const u8 = &.{},
     expose: Expose = .{},
@@ -25,6 +27,23 @@ pub const Module = struct {
 pub const Expose = struct {
     global_syntax: bool = false,
     global_modules: bool = false,
+};
+
+pub const SyntaxBlock = struct {
+    name: []const u8,
+    delimiter_mode: DelimiterMode = .brace_counting,
+    mandatory: bool = true,
+};
+
+pub const DelimiterMode = enum {
+    brace_counting,
+    custom_terminator,
+};
+
+pub const CliFlag = struct {
+    name: []const u8,
+    value: ?[]const u8 = null,
+    mandatory: bool = false,
 };
 
 pub const Error = error{
@@ -64,6 +83,12 @@ pub fn validate(manifest: Manifest) Error!void {
         if (!isValidModuleName(module.name)) return error.InvalidName;
         if (module.path.len == 0) return error.InvalidName;
     }
+    for (manifest.syntax_blocks) |block| {
+        if (!isValidName(block.name)) return error.InvalidName;
+    }
+    for (manifest.cli_flags) |flag| {
+        if (!isValidCliFlag(flag.name)) return error.InvalidName;
+    }
 }
 
 pub fn supportsCurrentTarget(manifest: Manifest) bool {
@@ -92,6 +117,15 @@ fn isValidModuleName(name: []const u8) bool {
     if (name.len == 0) return false;
     for (name) |ch| {
         if (std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '-' or ch == '.') continue;
+        return false;
+    }
+    return true;
+}
+
+fn isValidCliFlag(name: []const u8) bool {
+    if (name.len < 2 or name[0] != '-') return false;
+    for (name[1..]) |ch| {
+        if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_') continue;
         return false;
     }
     return true;
