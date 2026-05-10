@@ -1,4 +1,5 @@
 const std = @import("std");
+const index_mod = @import("index.zig");
 const manifest = @import("manifest.zig");
 const store_mod = @import("store.zig");
 
@@ -62,6 +63,44 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     try out_writer.interface.writeAll(package);
     try out_writer.interface.flush();
 
+    const loaded_index = index_mod.load(alloc, io, store) catch |err| {
+        std.debug.print("zlx: could not read module index: {}\n", .{err});
+        return 1;
+    };
+    defer loaded_index.deinit(alloc);
+    var next_entries: std.ArrayList(index_mod.Entry) = .empty;
+    defer next_entries.deinit(alloc);
+    var replaced = false;
+    for (loaded_index.value.modules) |entry| {
+        if (std.mem.eql(u8, entry.name, parsed.name)) {
+            try next_entries.append(alloc, .{
+                .name = parsed.name,
+                .version = parsed.version,
+                .path = dest_path,
+                .api_min = parsed.api_min,
+                .api_max = parsed.api_max,
+                .status = .installed,
+            });
+            replaced = true;
+        } else {
+            try next_entries.append(alloc, entry);
+        }
+    }
+    if (!replaced) {
+        try next_entries.append(alloc, .{
+            .name = parsed.name,
+            .version = parsed.version,
+            .path = dest_path,
+            .api_min = parsed.api_min,
+            .api_max = parsed.api_max,
+            .status = .installed,
+        });
+    }
+    index_mod.write(alloc, io, store, next_entries.items) catch |err| {
+        std.debug.print("zlx: could not update module index: {}\n", .{err});
+        return 1;
+    };
+
     std.debug.print("Installed {s} {s}\n", .{ parsed.name, parsed.version });
     return 0;
 }
@@ -78,33 +117,27 @@ fn listModules(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     };
     defer store.deinit(alloc);
 
-    var dir = std.Io.Dir.openDirAbsolute(io, store.root, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound => {
-            std.debug.print("No modules installed\n", .{});
-            return 0;
-        },
-        else => {
-            std.debug.print("zlx: could not open module store {s}: {}\n", .{ store.root, err });
-            return 1;
-        },
+    const loaded_index = index_mod.load(alloc, io, store) catch |err| {
+        std.debug.print("zlx: could not read module index: {}\n", .{err});
+        return 1;
     };
-    defer dir.close(io);
+    defer loaded_index.deinit(alloc);
 
-    var count: usize = 0;
-    var it = dir.iterate();
-    while (try it.next(io)) |entry| {
-        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".zlx")) continue;
-        const path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ store.root, entry.name });
-        defer alloc.free(path);
-        const package = std.Io.Dir.cwd().readFileAlloc(io, path, alloc, .limited(max_package_size)) catch continue;
-        defer alloc.free(package);
-        const parsed = manifest.parse(alloc, package) catch continue;
-        defer manifest.free(alloc, parsed);
-        std.debug.print("{s} {s} (api {d}-{d})\n", .{ parsed.name, parsed.version, parsed.api_min, parsed.api_max });
-        count += 1;
+    var rebuilt_entries: ?std.ArrayList(index_mod.Entry) = null;
+    defer if (rebuilt_entries) |*entries| index_mod.deinitEntries(entries, alloc);
+    const modules = if (!loaded_index.parsed) blk: {
+        rebuilt_entries = index_mod.rebuild(alloc, io, store) catch |err| {
+            std.debug.print("zlx: could not rebuild module index: {}\n", .{err});
+            return 1;
+        };
+        break :blk rebuilt_entries.?.items;
+    } else loaded_index.value.modules;
+
+    for (modules) |entry| {
+        std.debug.print("{s} {s} (api {d}-{d}, {s})\n", .{ entry.name, entry.version, entry.api_min, entry.api_max, @tagName(entry.status) });
     }
 
-    if (count == 0) std.debug.print("No modules installed\n", .{});
+    if (modules.len == 0) std.debug.print("No modules installed\n", .{});
     return 0;
 }
 
@@ -139,6 +172,21 @@ fn delModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
             std.debug.print("zlx: could not delete {s}: {}\n", .{ path, err });
             return 1;
         },
+    };
+
+    const loaded_index = index_mod.load(alloc, io, store) catch |err| {
+        std.debug.print("zlx: could not read module index: {}\n", .{err});
+        return 1;
+    };
+    defer loaded_index.deinit(alloc);
+    var next_entries: std.ArrayList(index_mod.Entry) = .empty;
+    defer next_entries.deinit(alloc);
+    for (loaded_index.value.modules) |entry| {
+        if (!std.mem.eql(u8, entry.name, args[2])) try next_entries.append(alloc, entry);
+    }
+    index_mod.write(alloc, io, store, next_entries.items) catch |err| {
+        std.debug.print("zlx: could not update module index: {}\n", .{err});
+        return 1;
     };
 
     std.debug.print("Deleted {s}\n", .{args[2]});
