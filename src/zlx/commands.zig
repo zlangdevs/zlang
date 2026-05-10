@@ -1,4 +1,5 @@
 const std = @import("std");
+const abi = @import("abi.zig");
 const index_mod = @import("index.zig");
 const manifest = @import("manifest.zig");
 const package_mod = @import("package.zig");
@@ -13,7 +14,21 @@ pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     if (std.mem.eql(u8, args[1], "del-module")) return try delModule(args, alloc, io);
     if (std.mem.eql(u8, args[1], "validate-module")) return try validateModule(args, alloc, io);
     if (std.mem.eql(u8, args[1], "module-info")) return try moduleInfo(args, alloc, io);
+    if (std.mem.eql(u8, args[1], "module-abi")) return try moduleAbi(args);
     return null;
+}
+
+fn moduleAbi(args: []const [:0]u8) !u8 {
+    if (args.len != 2) {
+        std.debug.print("Usage: zlang module-abi\n", .{});
+        return 1;
+    }
+    std.debug.print("host_api_version: {d}\n", .{abi.api_version});
+    std.debug.print("supported_range: {d}-{d}\n", .{ abi.api_min_supported, abi.api_max_supported });
+    std.debug.print("probe_symbol: {s}\n", .{abi.probe_symbol});
+    std.debug.print("init_symbol: {s}\n", .{abi.init_symbol});
+    std.debug.print("header: include/zlang_plugin_api_v1.h\n", .{});
+    return 0;
 }
 
 fn openPackage(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io, usage: []const u8) !?package_mod.Package {
