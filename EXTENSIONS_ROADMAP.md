@@ -49,6 +49,7 @@ Done on branch `zlx`:
 - Extension-block expansion now also runs on dependency `.zl` files loaded via `use`: `loadModulesFromPaths` swaps any file containing a matched block for its rewritten temp copy before parsing, so plugin-shipped modules can themselves use extension blocks. Verified by placing `dummy_block { ... }` inside the plugin's own `std/dummy.zl`; the main file's `use dummy; dummy.dummy_say()` still returns 42.
 - `zlang help` now lists every `.zlx` command (`install`, `del-module`, `list-modules`, `module-info`, `module-abi`, `module-load`, `module-loadall`, `module-dryrun`, `module-load-order`, `validate-module`) under a dedicated `Extension commands (.zlx)` section so the extension story is discoverable from the main entry point.
 - Phase 9 trust flags shipped: `-no-extensions` skips `dlopen` of native plugins while still loading manifest-declared module paths through a new `loadManifestModulesOnly`, and `-isolated` disables both for reproducible builds. Both flags appear under Options in `zlang help`. Verified: default loads `.so` + module; `-no-extensions` resolves `use dummy` without link-flag activation; `-isolated` fails to resolve plugin modules.
+- Added `zlang doctor-modules`: prints host API range and store root, then per-module status, api compatibility, and sidecar `.so` presence. Reports `OK`/`WARN`, exits non-zero if any problems found.
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
 
 Not done yet:
