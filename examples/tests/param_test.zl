@@ -9,7 +9,7 @@ fun change_val(n: i32) >> i32 { ?? in fact not change val, lol
 
 fun sub_bytes(n: u16) >> u16 {
     brainfuck{
-        ?load n:u16 0?
+        ?load n 0?
         [->-<]
     };
     return n;
