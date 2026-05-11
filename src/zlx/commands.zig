@@ -10,23 +10,56 @@ const store_mod = @import("store.zig");
 
 pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     if (args.len < 2) return null;
-    if (std.mem.eql(u8, args[1], "install")) return try install(args, alloc, io);
-    if (std.mem.eql(u8, args[1], "list-modules")) return try listModules(args, alloc, io);
-    if (std.mem.eql(u8, args[1], "module-load-order")) return try moduleLoadOrder(args, alloc, io);
-    if (std.mem.eql(u8, args[1], "del-module")) return try delModule(args, alloc, io);
-    if (std.mem.eql(u8, args[1], "validate-module")) return try validateModule(args, alloc, io);
-    if (std.mem.eql(u8, args[1], "module-info")) return try moduleInfo(args, alloc, io);
-    if (std.mem.eql(u8, args[1], "module-abi")) return try moduleAbi(args);
-    if (std.mem.eql(u8, args[1], "module-dryrun")) return try moduleDryrun(args, alloc, io);
-    if (std.mem.eql(u8, args[1], "module-load")) return try moduleLoad(args, alloc);
-    if (std.mem.eql(u8, args[1], "module-loadall")) return try moduleLoadAll(args, alloc, io);
-    if (std.mem.eql(u8, args[1], "doctor-modules")) return try doctorModules(args, alloc, io);
-    return null;
+    if (!std.mem.eql(u8, args[1], "module")) return null;
+    if (args.len < 3) {
+        printModuleHelp();
+        return 0;
+    }
+    const sub_args = args[1..];
+    const cmd = args[2];
+    if (std.mem.eql(u8, cmd, "help")) {
+        printModuleHelp();
+        return 0;
+    }
+    if (std.mem.eql(u8, cmd, "install")) return try install(sub_args, alloc, io);
+    if (std.mem.eql(u8, cmd, "list")) return try listModules(sub_args, alloc, io);
+    if (std.mem.eql(u8, cmd, "load-order")) return try moduleLoadOrder(sub_args, alloc, io);
+    if (std.mem.eql(u8, cmd, "delete")) return try delModule(sub_args, alloc, io);
+    if (std.mem.eql(u8, cmd, "validate")) return try validateModule(sub_args, alloc, io);
+    if (std.mem.eql(u8, cmd, "info")) return try moduleInfo(sub_args, alloc, io);
+    if (std.mem.eql(u8, cmd, "abi")) return try moduleAbi(sub_args);
+    if (std.mem.eql(u8, cmd, "dryrun")) return try moduleDryrun(sub_args, alloc, io);
+    if (std.mem.eql(u8, cmd, "load")) return try moduleLoad(sub_args, alloc);
+    if (std.mem.eql(u8, cmd, "loadall")) return try moduleLoadAll(sub_args, alloc, io);
+    if (std.mem.eql(u8, cmd, "doctor")) return try doctorModules(sub_args, alloc, io);
+    std.debug.print("zlx: unknown module subcommand '{s}'. Try 'zlang module help'.\n", .{cmd});
+    return 1;
+}
+
+fn printModuleHelp() void {
+    std.debug.print(
+        \\Usage: zlang module <subcommand> [args]
+        \\
+        \\Subcommands:
+        \\  install <file.zlx>    Install a .zlx extension package
+        \\  delete <name>         Remove an installed extension
+        \\  list                  List installed extensions and their status
+        \\  info <file.zlx>       Print metadata of a .zlx package
+        \\  validate <file.zlx>   Validate a .zlx package's manifest
+        \\  abi                   Print host plugin ABI version and entry symbols
+        \\  load <file.so>        Load a single plugin .so against the host
+        \\  loadall               Load every installed plugin in topological order
+        \\  dryrun <file.zlx>     Simulate plugin registrations from manifest
+        \\  load-order            Print topological load order of installed modules
+        \\  doctor                Diagnose installed extensions (status, api, hash, sidecar)
+        \\  help                  Show this help
+        \\
+    , .{});
 }
 
 fn doctorModules(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     if (args.len != 2) {
-        std.debug.print("Usage: zlang doctor-modules\n", .{});
+        std.debug.print("Usage: zlang module doctor\n", .{});
         return 1;
     }
 
@@ -126,7 +159,7 @@ fn doctorModules(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8
 
 fn moduleLoadAll(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     if (args.len != 2) {
-        std.debug.print("Usage: zlang module-loadall\n", .{});
+        std.debug.print("Usage: zlang module loadall\n", .{});
         return 1;
     }
 
@@ -214,7 +247,7 @@ fn moduleLoadAll(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8
 
 fn moduleLoad(args: []const [:0]u8, alloc: std.mem.Allocator) !u8 {
     if (args.len != 3) {
-        std.debug.print("Usage: zlang module-load <file.so>\n", .{});
+        std.debug.print("Usage: zlang module load <file.so>\n", .{});
         return 1;
     }
     var host = host_mod.Host.init(alloc);
@@ -236,7 +269,7 @@ fn moduleLoad(args: []const [:0]u8, alloc: std.mem.Allocator) !u8 {
 }
 
 fn moduleDryrun(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
-    var pkg = (try openPackage(args, alloc, io, "zlang module-dryrun <file.zlx>")) orelse return 1;
+    var pkg = (try openPackage(args, alloc, io, "zlang module dryrun <file.zlx>")) orelse return 1;
     defer pkg.deinit(alloc);
 
     switch (abi.checkApiRange(pkg.manifest.api_min, pkg.manifest.api_max)) {
@@ -273,7 +306,7 @@ fn moduleDryrun(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 
 
 fn moduleAbi(args: []const [:0]u8) !u8 {
     if (args.len != 2) {
-        std.debug.print("Usage: zlang module-abi\n", .{});
+        std.debug.print("Usage: zlang module abi\n", .{});
         return 1;
     }
     std.debug.print("host_api_version: {d}\n", .{abi.api_version});
@@ -304,7 +337,7 @@ fn openPackage(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io, usage
 
 fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     if (args.len != 3) {
-        std.debug.print("Usage: zlang install <file.zlx>\n", .{});
+        std.debug.print("Usage: zlang module install <file.zlx>\n", .{});
         return 1;
     }
     if (!std.mem.endsWith(u8, args[2], ".zlx")) {
@@ -490,7 +523,7 @@ fn deleteModulesDir(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store
 
 fn listModules(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     if (args.len != 2) {
-        std.debug.print("Usage: zlang list-modules\n", .{});
+        std.debug.print("Usage: zlang module list\n", .{});
         return 1;
     }
 
@@ -530,7 +563,7 @@ fn listModules(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
 
 fn moduleLoadOrder(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     if (args.len != 2) {
-        std.debug.print("Usage: zlang module-load-order\n", .{});
+        std.debug.print("Usage: zlang module load-order\n", .{});
         return 1;
     }
 
@@ -573,7 +606,7 @@ fn moduleLoadOrder(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !
 
 fn delModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     if (args.len != 3) {
-        std.debug.print("Usage: zlang del-module <name>\n", .{});
+        std.debug.print("Usage: zlang module delete <name>\n", .{});
         return 1;
     }
     if (!manifest.isValidName(args[2])) {
@@ -645,7 +678,7 @@ fn delModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
 }
 
 fn validateModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
-    var pkg = (try openPackage(args, alloc, io, "zlang validate-module <file.zlx>")) orelse return 1;
+    var pkg = (try openPackage(args, alloc, io, "zlang module validate <file.zlx>")) orelse return 1;
     defer pkg.deinit(alloc);
     const parsed = pkg.manifest;
     const registration_diagnostics = registry.validateManifest(alloc, parsed) catch |err| {
@@ -661,7 +694,7 @@ fn validateModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u
 }
 
 fn moduleInfo(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
-    var pkg = (try openPackage(args, alloc, io, "zlang module-info <file.zlx>")) orelse return 1;
+    var pkg = (try openPackage(args, alloc, io, "zlang module info <file.zlx>")) orelse return 1;
     defer pkg.deinit(alloc);
     const parsed = pkg.manifest;
 
