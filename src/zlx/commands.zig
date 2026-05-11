@@ -20,7 +20,90 @@ pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     if (std.mem.eql(u8, args[1], "module-dryrun")) return try moduleDryrun(args, alloc, io);
     if (std.mem.eql(u8, args[1], "module-load")) return try moduleLoad(args, alloc);
     if (std.mem.eql(u8, args[1], "module-loadall")) return try moduleLoadAll(args, alloc, io);
+    if (std.mem.eql(u8, args[1], "doctor-modules")) return try doctorModules(args, alloc, io);
     return null;
+}
+
+fn doctorModules(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
+    if (args.len != 2) {
+        std.debug.print("Usage: zlang doctor-modules\n", .{});
+        return 1;
+    }
+
+    var store = store_mod.Store.init(alloc) catch |err| {
+        std.debug.print("zlx: could not locate module store: {}\n", .{err});
+        return 1;
+    };
+    defer store.deinit(alloc);
+
+    const loaded_index = index_mod.load(alloc, io, store) catch |err| {
+        std.debug.print("zlx: could not read module index: {}\n", .{err});
+        return 1;
+    };
+    defer loaded_index.deinit(alloc);
+
+    var rebuilt: ?std.ArrayList(index_mod.Entry) = null;
+    defer if (rebuilt) |*r| index_mod.deinitEntries(r, alloc);
+    const modules = if (!loaded_index.parsed) blk: {
+        rebuilt = index_mod.rebuild(alloc, io, store) catch |err| {
+            std.debug.print("zlx: could not rebuild module index: {}\n", .{err});
+            return 1;
+        };
+        break :blk rebuilt.?.items;
+    } else loaded_index.value.modules;
+
+    std.debug.print("host_api: {d} (supported {d}-{d})\n", .{ abi.api_version, abi.api_min_supported, abi.api_max_supported });
+    std.debug.print("store: {s}\n", .{store.root});
+    std.debug.print("modules: {d}\n", .{modules.len});
+
+    var problems: usize = 0;
+    for (modules) |entry| {
+        var ok = true;
+        var notes: std.ArrayList(u8) = .empty;
+        defer notes.deinit(alloc);
+
+        if (entry.status != .installed) {
+            ok = false;
+            try notes.appendSlice(alloc, "status=");
+            try notes.appendSlice(alloc, @tagName(entry.status));
+            if (entry.status_reason) |r| {
+                try notes.appendSlice(alloc, " (");
+                try notes.appendSlice(alloc, r);
+                try notes.appendSlice(alloc, ")");
+            }
+            try notes.appendSlice(alloc, "; ");
+        }
+
+        switch (abi.checkApiRange(entry.api_min, entry.api_max)) {
+            .compatible => {},
+            .api_too_old, .api_too_new => {
+                ok = false;
+                try notes.appendSlice(alloc, "api out of host range; ");
+            },
+        }
+
+        const sidecar = store.pluginPath(alloc, entry.name) catch null;
+        defer if (sidecar) |s| alloc.free(s);
+        if (sidecar) |s| {
+            std.Io.Dir.cwd().access(io, s, .{}) catch {
+                try notes.appendSlice(alloc, "no sidecar .so; ");
+            };
+        }
+
+        if (ok and notes.items.len == 0) {
+            std.debug.print("  OK   {s} {s} (api {d}-{d})\n", .{ entry.name, entry.version, entry.api_min, entry.api_max });
+        } else {
+            problems += 1;
+            std.debug.print("  WARN {s} {s}: {s}\n", .{ entry.name, entry.version, notes.items });
+        }
+    }
+
+    if (problems != 0) {
+        std.debug.print("doctor: {d} problem(s)\n", .{problems});
+        return 1;
+    }
+    std.debug.print("doctor: clean\n", .{});
+    return 0;
 }
 
 fn moduleLoadAll(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {

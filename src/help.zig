@@ -73,12 +73,13 @@ pub fn printHelp() void {
         \\  {s}module-dryrun{s}      Simulate plugin registrations from manifest
         \\  {s}module-load-order{s}  Print topological load order
         \\  {s}validate-module{s}    Validate a .zlx package's manifest
+        \\  {s}doctor-modules{s}     Diagnose installed extensions (status, api, sidecar)
         \\
     , .{
         bold, reset,
         cyan, reset, cyan, reset, cyan, reset, cyan, reset,
         cyan, reset, cyan, reset, cyan, reset, cyan, reset,
-        cyan, reset, cyan, reset,
+        cyan, reset, cyan, reset, cyan, reset,
     });
 
     std.debug.print(
