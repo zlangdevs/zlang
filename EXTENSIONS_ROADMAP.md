@@ -22,7 +22,7 @@ Done on branch `zlx`:
 - Added `src/zlx/manifest.zig` with v1 ZON manifest parsing and validation.
 - Added `src/zlx/store.zig` for the user module store at `~/.zlang/modules`.
 - Added `src/zlx/index.zig` for `~/.zlang/modules/index.zon`.
-- Added CLI commands: `install`, `list-modules`, `del-module`, `validate-module`, `module-info`.
+- Added CLI commands under `zlang module <subcommand>`: `install`, `delete`, `list`, `info`, `validate`, `abi`, `load`, `loadall`, `dryrun`, `load-order`, `doctor`, `help`. Top-level `zlang help` shows a single `module` command pointing at `zlang module help`.
 - Added current-target compatibility detection; incompatible packages are indexed as `incompatible`.
 - Added dependency recording in `index.zon`; missing dependencies mark packages as `incompatible` with a reason.
 - Added dependency cycle detection and `module-load-order` for future plugin initialization order.
@@ -30,14 +30,14 @@ Done on branch `zlx`:
 - `module-info` now reports the detected `layout`.
 - Added `include/zlang_plugin_api_v1.h` with the v1 plugin/host C ABI types (no native loading yet).
 - Added `src/zlx/abi.zig`, the Zig mirror of the v1 ABI, exposing `api_version`, supported range, entry-symbol names, and an `checkApiRange` helper.
-- Added `zlang module-abi` to print the host's supported ABI range and entry symbols for plugin authors.
+- Added `zlang module abi` to print the host's supported ABI range and entry symbols for plugin authors.
 - Added `src/zlx/host.zig`: a concrete `HostApi` instance with C-callable stubs that record syntax-block, module, CLI-flag, link-flag, help-section registrations and diagnostics, with duplicate detection.
-- Added `zlang module-dryrun <file.zlx>`: simulates plugin-side registrations from manifest data through the host stubs and reports counts/duplicates. Validates `api_min/api_max` against the host's supported range before simulating.
+- Added `zlang module dryrun <file.zlx>`: simulates plugin-side registrations from manifest data through the host stubs and reports counts/duplicates. Validates `api_min/api_max` against the host's supported range before simulating.
 - Added `src/zlx/loader.zig`: `std.DynLib`-backed loader that opens a `.so`, resolves `zlang_plugin_probe` and `zlang_plugin_init`, validates the probe API range, calls init, checks the desc/probe metadata agree, and invokes `register_plugin` against the host stubs.
-- Added `zlang module-load <file.so>`: loads a plugin and prints registration counts/diagnostics.
+- Added `zlang module load <file.so>`: loads a plugin and prints registration counts/diagnostics.
 - Added `tests/plugins/dummy_plugin.zig`: reference plugin exercising every host stub (compile with `zig build-lib -dynamic -fPIC tests/plugins/dummy_plugin.zig`).
-- `zlang install` now also installs a sidecar `.so` next to the input `.zlx` (same stem) into `~/.zlang/modules/<name>.so`; `del-module` removes it.
-- Added `zlang module-loadall`: walks the index in topological load order, loads every plugin with a sidecar through the host stubs, and reports per-plugin status plus aggregated counts.
+- `zlang module install` now also installs a sidecar `.so` next to the input `.zlx` (same stem) into `~/.zlang/modules/<name>.so`; `del-module` removes it.
+- Added `zlang module loadall`: walks the index in topological load order, loads every plugin with a sidecar through the host stubs, and reports per-plugin status plus aggregated counts.
 - Added `src/zlx/runtime.zig`: `loadAllInstalled` populates a host from every installed plugin sidecar; `printPluginExtensions` formats the host's CLI flags, syntax blocks, modules and help sections.
 - `zlang help` now appends a `Plugin extensions:` section listing what installed plugins register, so plugin authors can see the host saw their registrations without writing tests.
 - Plugin-registered link flags are now merged into `ctx.extra_args` after `parseArgs`, so the linker invocation includes flags contributed by installed plugins (verified with the dummy plugin registering `-lm`).
@@ -49,7 +49,7 @@ Done on branch `zlx`:
 - Extension-block expansion now also runs on dependency `.zl` files loaded via `use`: `loadModulesFromPaths` swaps any file containing a matched block for its rewritten temp copy before parsing, so plugin-shipped modules can themselves use extension blocks. Verified by placing `dummy_block { ... }` inside the plugin's own `std/dummy.zl`; the main file's `use dummy; dummy.dummy_say()` still returns 42.
 - `zlang help` now lists every `.zlx` command (`install`, `del-module`, `list-modules`, `module-info`, `module-abi`, `module-load`, `module-loadall`, `module-dryrun`, `module-load-order`, `validate-module`) under a dedicated `Extension commands (.zlx)` section so the extension story is discoverable from the main entry point.
 - Phase 9 trust flags shipped: `-no-extensions` skips `dlopen` of native plugins while still loading manifest-declared module paths through a new `loadManifestModulesOnly`, and `-isolated` disables both for reproducible builds. Both flags appear under Options in `zlang help`. Verified: default loads `.so` + module; `-no-extensions` resolves `use dummy` without link-flag activation; `-isolated` fails to resolve plugin modules.
-- Added `zlang doctor-modules`: prints host API range and store root, then per-module status, api compatibility, and sidecar `.so` presence. Reports `OK`/`WARN`, exits non-zero if any problems found.
+- Added `zlang module doctor`: prints host API range and store root, then per-module status, api compatibility, and sidecar `.so` presence. Reports `OK`/`WARN`, exits non-zero if any problems found.
 - Index entries now carry an optional `manifest_sha256` (lowercase hex SHA-256 of installed manifest bytes). `install` computes and stores it; `rebuild` recomputes it. `doctor-modules` re-hashes the on-disk manifest and warns on mismatch ("manifest hash mismatch") or absence ("no manifest hash recorded"). Verified: appending bytes to the installed `.zlx` triggers `WARN ... manifest hash mismatch; rc=1`.
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
 
@@ -64,7 +64,7 @@ Not done yet:
 Next planned increments:
 - Begin extracting the built-in brainfuck path into a `brainfuck.zlx` extension now that syntax-block dispatch works end-to-end (Phase 7 entry).
 - Add a real container layout to the package abstraction so `entry` and `std/*.zl` are extracted from a single `.zlx` archive instead of relying on a sidecar `.so` and an adjacent `std/` directory at install time.
-- Add Phase 9 security hooks: `-no-extensions` (skip dlopen), `-isolated` (also skip extension module paths), and `zlang doctor-modules` diagnostics.
+- Add Phase 9 security hooks: `-no-extensions` (skip dlopen), `-isolated` (also skip extension module paths), and `zlang module doctor` diagnostics.
 - Extend the package layout abstraction with a real container layout (archive extraction) so `entry`/`std/*.zl` paths are extracted from the `.zlx` instead of relying on a manifest-side sidecar `.so`.
 
 ---
@@ -155,7 +155,7 @@ Rules:
 - Native plugin packages must declare supported `.targets`.
 - Dependencies in v1 are a flat list of extension names without version constraints. Cycles are invalid. Load order is topological. Versioned dependencies are deferred to v2.
 - Current implementation records flat dependencies in `index.zon`; if any declared dependency is not installed and compatible, the module is indexed as `incompatible: missing dependency`.
-- Current implementation marks dependency cycles as `incompatible: dependency cycle` and exposes a topological order for loadable modules through `zlang module-load-order`.
+- Current implementation marks dependency cycles as `incompatible: dependency cycle` and exposes a topological order for loadable modules through `zlang module load-order`.
 - `native_libs` and `link_flags` are not applied globally just because a package is installed. They are applied only when the extension is used by the current compilation unit or explicitly marks itself as always-required.
 
 ---
@@ -165,16 +165,16 @@ Rules:
 Planned commands:
 
 ```bash
-zlang install ./brainfuck.zlx
-zlang list-modules
-zlang module-load-order
-zlang module-info ./brainfuck.zlx
-zlang module-abi
-zlang module-dryrun ./brainfuck.zlx
-zlang module-load ./libbrainfuck.so
-zlang module-loadall
-zlang validate-module ./brainfuck.zlx
-zlang del-module brainfuck
+zlang module install ./brainfuck.zlx
+zlang module list
+zlang module load-order
+zlang module info ./brainfuck.zlx
+zlang module abi
+zlang module dryrun ./brainfuck.zlx
+zlang module load ./libbrainfuck.so
+zlang module loadall
+zlang module validate ./brainfuck.zlx
+zlang module delete brainfuck
 ```
 
 Install locations:
@@ -426,7 +426,7 @@ Deliverable: first serious feature extension beyond syntax.
 ## Phase 9: Security and trust (1-2 weeks)
 - Module integrity checks (hash/signature optional).
 - Clear trust and loading policy.
-- `zlang doctor-modules` diagnostics.
+- `zlang module doctor` diagnostics.
 
 Deliverable: production-safe extension story.
 
@@ -469,12 +469,12 @@ Risk: linking differences across distros.
 ## 9. MVP acceptance criteria
 
 `v1` is considered successful when:
-- `zlang install brainfuck.zlx` works.
+- `zlang module install brainfuck.zlx` works.
 - `brainfuck { ... }` works without core hardcode.
 - `brainfuck { ... }` is implemented by returning a generated zlang source fragment.
 - `threading.zlx` validates modules + link flags + native runtime integration.
-- `zlang list-modules` shows compatibility status and reasons.
-- `zlang del-module brainfuck` cleanly removes feature.
+- `zlang module list` shows compatibility status and reasons.
+- `zlang module delete brainfuck` cleanly removes feature.
 - `zlang -no-extensions ...` disables native plugins but keeps pure extension modules available.
 - `zlang -isolated ...` disables native plugins and extension module paths.
 - Existing non-extension builds continue to work.
