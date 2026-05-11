@@ -32,6 +32,7 @@ pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     if (std.mem.eql(u8, cmd, "load")) return try moduleLoad(sub_args, alloc);
     if (std.mem.eql(u8, cmd, "loadall")) return try moduleLoadAll(sub_args, alloc, io);
     if (std.mem.eql(u8, cmd, "doctor")) return try doctorModules(sub_args, alloc, io);
+    if (std.mem.eql(u8, cmd, "pack")) return try packModule(sub_args, alloc, io);
     std.debug.print("zlx: unknown module subcommand '{s}'. Try 'zlang module help'.\n", .{cmd});
     return 1;
 }
@@ -52,6 +53,7 @@ fn printModuleHelp() void {
         \\  dryrun <file.zlx>     Simulate plugin registrations from manifest
         \\  load-order            Print topological load order of installed modules
         \\  doctor                Diagnose installed extensions (status, api, hash, sidecar)
+        \\  pack <dir> -o <out>   Pack <dir>/manifest.zon + declared files into <out>.zlx
         \\  help                  Show this help
         \\
     , .{});
@@ -389,12 +391,12 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     try out_writer.interface.writeAll(package);
     try out_writer.interface.flush();
 
-    const sidecar_installed = installSidecar(alloc, io, store, args[2], parsed.name) catch |err| {
+    const sidecar_installed = installSidecar(alloc, io, store, args[2], parsed.name, pkg) catch |err| {
         std.debug.print("zlx: could not install plugin sidecar: {}\n", .{err});
         return 1;
     };
 
-    const modules_installed = installModuleFiles(alloc, io, store, args[2], parsed) catch |err| {
+    const modules_installed = installModuleFiles(alloc, io, store, args[2], parsed, pkg) catch |err| {
         std.debug.print("zlx: could not install plugin modules: {}\n", .{err});
         return 1;
     };
@@ -460,37 +462,145 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     return 0;
 }
 
-fn installSidecar(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store, source_zlx: []const u8, name: []const u8) !bool {
+fn packModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
+    var src_dir: ?[]const u8 = null;
+    var out_path: ?[]const u8 = null;
+    var i: usize = 2;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "-o")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("zlx: -o requires a path\n", .{});
+                return 1;
+            }
+            out_path = args[i];
+        } else if (src_dir == null) {
+            src_dir = args[i];
+        }
+    }
+    const dir = src_dir orelse {
+        std.debug.print("Usage: zlang module pack <dir> -o <out.zlx>\n", .{});
+        return 1;
+    };
+    const out = out_path orelse {
+        std.debug.print("Usage: zlang module pack <dir> -o <out.zlx>\n", .{});
+        return 1;
+    };
+
+    const manifest_path = try std.fs.path.join(alloc, &.{ dir, "manifest.zon" });
+    defer alloc.free(manifest_path);
+    const manifest_bytes = std.Io.Dir.cwd().readFileAlloc(io, manifest_path, alloc, .limited(1024 * 1024)) catch |err| {
+        std.debug.print("zlx: could not read {s}: {}\n", .{ manifest_path, err });
+        return 1;
+    };
+    defer alloc.free(manifest_bytes);
+
+    const parsed = manifest.parse(alloc, manifest_bytes) catch |err| {
+        std.debug.print("zlx: invalid manifest in {s}: {}\n", .{ manifest_path, err });
+        return 1;
+    };
+    defer manifest.free(alloc, parsed);
+
+    var entries: std.ArrayList(package_mod.ArchiveEntry) = .empty;
+    defer entries.deinit(alloc);
+    var owned_bufs: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned_bufs.items) |b| alloc.free(b);
+        owned_bufs.deinit(alloc);
+    }
+
+    try entries.append(alloc, .{ .path = "manifest.zon", .data = manifest_bytes });
+
+    if (parsed.entry) |entry_path| {
+        const full = try std.fs.path.join(alloc, &.{ dir, entry_path });
+        defer alloc.free(full);
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, full, alloc, .limited(64 * 1024 * 1024)) catch |err| {
+            std.debug.print("zlx: could not read plugin entry {s}: {}\n", .{ full, err });
+            return 1;
+        };
+        try owned_bufs.append(alloc, bytes);
+        try entries.append(alloc, .{ .path = "plugin.so", .data = bytes });
+    }
+
+    for (parsed.modules) |module| {
+        const full = try std.fs.path.join(alloc, &.{ dir, module.path });
+        defer alloc.free(full);
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, full, alloc, .limited(16 * 1024 * 1024)) catch |err| {
+            std.debug.print("zlx: could not read module file {s}: {}\n", .{ full, err });
+            return 1;
+        };
+        try owned_bufs.append(alloc, bytes);
+        try entries.append(alloc, .{ .path = module.path, .data = bytes });
+    }
+
+    const archive = package_mod.writeArchive(alloc, entries.items) catch |err| {
+        std.debug.print("zlx: could not build archive: {}\n", .{err});
+        return 1;
+    };
+    defer alloc.free(archive);
+
+    writeFileBytes(io, out, archive) catch |err| {
+        std.debug.print("zlx: could not write {s}: {}\n", .{ out, err });
+        return 1;
+    };
+
+    std.debug.print("Packed {d} entry/entries into {s}\n", .{ entries.items.len, out });
+    return 0;
+}
+
+fn writeFileBytes(io: std.Io, path: []const u8, data: []const u8) !void {
+    if (std.fs.path.dirname(path)) |parent| {
+        try std.Io.Dir.cwd().createDirPath(io, parent);
+    }
+    var out = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
+    defer out.close(io);
+    var buf: [4096]u8 = undefined;
+    var writer = out.writer(io, &buf);
+    try writer.interface.writeAll(data);
+    try writer.interface.flush();
+}
+
+fn installSidecar(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store, source_zlx: []const u8, name: []const u8, pkg: package_mod.Package) !bool {
+    if (pkg.layout == .archive) {
+        const entry = pkg.findEntry("plugin.so") orelse return false;
+        const dest = try store.pluginPath(alloc, name);
+        defer alloc.free(dest);
+        try writeFileBytes(io, dest, entry.data);
+        return true;
+    }
     if (!std.mem.endsWith(u8, source_zlx, ".zlx")) return false;
     const stem = source_zlx[0 .. source_zlx.len - 4];
     const sidecar_src = try std.fmt.allocPrint(alloc, "{s}.so", .{stem});
     defer alloc.free(sidecar_src);
-
     const bytes = std.Io.Dir.cwd().readFileAlloc(io, sidecar_src, alloc, .limited(64 * 1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => return err,
     };
     defer alloc.free(bytes);
-
     const dest = try store.pluginPath(alloc, name);
     defer alloc.free(dest);
-    var out = try std.Io.Dir.cwd().createFile(io, dest, .{ .truncate = true });
-    defer out.close(io);
-    var buf: [4096]u8 = undefined;
-    var writer = out.writer(io, &buf);
-    try writer.interface.writeAll(bytes);
-    try writer.interface.flush();
+    try writeFileBytes(io, dest, bytes);
     return true;
 }
 
-fn installModuleFiles(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store, source_zlx: []const u8, parsed: manifest.Manifest) !usize {
+fn installModuleFiles(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store, source_zlx: []const u8, parsed: manifest.Manifest, pkg: package_mod.Package) !usize {
     if (parsed.modules.len == 0) return 0;
-    const src_dir = std.fs.path.dirname(source_zlx) orelse ".";
     const modules_root = try store.pluginModulesDir(alloc, parsed.name);
     defer alloc.free(modules_root);
 
     var copied: usize = 0;
     for (parsed.modules) |module| {
+        const dest_path = try std.fs.path.join(alloc, &.{ modules_root, module.path });
+        defer alloc.free(dest_path);
+
+        if (pkg.layout == .archive) {
+            const entry = pkg.findEntry(module.path) orelse continue;
+            try writeFileBytes(io, dest_path, entry.data);
+            copied += 1;
+            continue;
+        }
+
+        const src_dir = std.fs.path.dirname(source_zlx) orelse ".";
         const src_path = try std.fs.path.join(alloc, &.{ src_dir, module.path });
         defer alloc.free(src_path);
         const bytes = std.Io.Dir.cwd().readFileAlloc(io, src_path, alloc, .limited(16 * 1024 * 1024)) catch |err| switch (err) {
@@ -498,18 +608,7 @@ fn installModuleFiles(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Sto
             else => return err,
         };
         defer alloc.free(bytes);
-
-        const dest_path = try std.fs.path.join(alloc, &.{ modules_root, module.path });
-        defer alloc.free(dest_path);
-        if (std.fs.path.dirname(dest_path)) |parent| {
-            try std.Io.Dir.cwd().createDirPath(io, parent);
-        }
-        var out = try std.Io.Dir.cwd().createFile(io, dest_path, .{ .truncate = true });
-        defer out.close(io);
-        var buf: [4096]u8 = undefined;
-        var writer = out.writer(io, &buf);
-        try writer.interface.writeAll(bytes);
-        try writer.interface.flush();
+        try writeFileBytes(io, dest_path, bytes);
         copied += 1;
     }
     return copied;
