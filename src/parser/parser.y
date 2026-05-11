@@ -31,7 +31,6 @@ extern void* zig_create_bool_literal(int value);
 extern void* zig_create_null_literal(void);
 extern void* zig_create_stmt_list(void);
 extern void* zig_create_arg_list(void);
-extern void* zig_create_brainfuck(const char* code);
 extern void* zig_create_if_stmt(void* condition, void* then_body, void* else_body);
 extern void* zig_create_for_stmt(void* condition, void* body);
 extern void* zig_create_c_for_stmt(void* init, void* condition, void* increment, void* body);
@@ -113,7 +112,7 @@ void* ast_root = NULL;
     int number;
 }
 
-%token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING TOKEN_BRAINFUCK
+%token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING
 %token <number> TOKEN_CHAR
 %token <number> TOKEN_REASSIGN
 
@@ -154,7 +153,7 @@ void* ast_root = NULL;
 
 %type <node> parameter_list parameters parameter
 %type <node> program function_list function statement_list statement
-%type <node> var_declaration global_variable_declaration function_call return_statement assignment brainfuck_statement
+%type <node> var_declaration global_variable_declaration function_call return_statement assignment
 %type <node> expression logical_or_expression logical_and_expression bitwise_or_expression bitwise_xor_expression bitwise_and_expression shift_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression postfix_expression argument_list arguments
 %type <node> cast_expression expression_block
 %type <node> c_for_statement for_increment
@@ -546,7 +545,6 @@ statement:
    | defer_statement TOKEN_SEMICOLON { $$ = $1; }
    | send_statement TOKEN_SEMICOLON { $$ = $1; }
    | solicit_statement TOKEN_SEMICOLON { $$ = $1; }
-   | brainfuck_statement TOKEN_SEMICOLON { $$ = $1; }
    | if_statement { $$ = $1; }
    | for_statement { $$ = $1; }
    | c_for_statement { $$ = $1; }
@@ -749,13 +747,6 @@ goto_statement:
 label_statement:
     TOKEN_IDENTIFIER TOKEN_COLON {
         zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_label_stmt($1);
-        free($1);
-    }
-;
-
-brainfuck_statement:
-    TOKEN_BRAINFUCK {
-        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_brainfuck($1);
         free($1);
     }
 ;

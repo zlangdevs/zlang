@@ -930,7 +930,6 @@ pub const Analyzer = struct {
             .string_literal,
             .bool_literal,
             .null_literal,
-            .brainfuck,
             .break_stmt,
             .continue_stmt,
             .goto_stmt,

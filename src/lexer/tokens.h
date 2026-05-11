@@ -34,7 +34,6 @@ typedef enum {
     TOKEN_COLON,
     TOKEN_STRING,
     TOKEN_CHAR,
-    TOKEN_BRAINFUCK,
     TOKEN_LESS,
     TOKEN_GREATER,
     TOKEN_EQ_LESS,

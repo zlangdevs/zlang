@@ -116,23 +116,6 @@ pub fn printHelp() void {
     , .{ yellow, reset, yellow, reset });
 
     std.debug.print(
-        \\{s}Brainfuck Mode:{s}
-        \\  {s}-b{s}            Compile pure Brainfuck (.b/.bf files, 8-bit cells)
-        \\  {s}-b8{s}           Compile Brainfuck with 8-bit cells
-        \\  {s}-b16{s}          Compile Brainfuck with 16-bit cells
-        \\  {s}-b32{s}          Compile Brainfuck with 32-bit cells
-        \\  {s}-b64{s}          Compile Brainfuck with 64-bit cells
-        \\
-    , .{
-        bold,   reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-    });
-
-    std.debug.print(
         \\{s}Examples:{s}
         \\  zlang main.zl
         \\  zlang zli
@@ -141,8 +124,6 @@ pub fn printHelp() void {
         \\  zlang wrap-clang SDL2/SDL.h -o sdl.zl -- -I/usr/include/SDL2 -D_REENTRANT
         \\  zlang -o myapp main.zl -lSDL2
         \\  zlang main.zl -DLOGMODE=true -o myapp
-        \\  zlang -b mandelbrot.bf -o mandelbrot
-        \\  zlang -b32 program.b -o output
         \\
         \\{s}For more information, visit:{s} {s}https://github.com/zlang-dev/zlang{s}
         \\
