@@ -33,6 +33,31 @@ pub fn expandExtensionBlocks(
     var i: usize = 0;
     while (i < input.len) {
         const c = input[i];
+        if (c == '?' and i + 1 < input.len and input[i + 1] == '?') {
+            const nl = std.mem.indexOfScalarPos(u8, input, i, '\n') orelse input.len;
+            try out.appendSlice(alloc, input[i..nl]);
+            i = nl;
+            column = 1;
+            continue;
+        }
+        if (c == '"') {
+            const start_str = i;
+            var k = i + 1;
+            while (k < input.len) : (k += 1) {
+                if (input[k] == '\\' and k + 1 < input.len) {
+                    k += 1;
+                    continue;
+                }
+                if (input[k] == '"') {
+                    k += 1;
+                    break;
+                }
+            }
+            try out.appendSlice(alloc, input[start_str..k]);
+            advanceLineCol(input[start_str..k], &line, &column);
+            i = k;
+            continue;
+        }
         if (isIdentStart(c)) {
             const start = i;
             var j = i + 1;
