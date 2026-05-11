@@ -97,8 +97,10 @@ pub fn expandExtensionBlocks(
                     try out.appendSlice(alloc, gen);
                 }
 
-                advanceLineCol(input[i .. end + 1], &line, &column);
-                i = end + 1;
+                var consumed_end = end + 1;
+                if (consumed_end < input.len and input[consumed_end] == ';') consumed_end += 1;
+                advanceLineCol(input[i..consumed_end], &line, &column);
+                i = consumed_end;
                 report.expansions += 1;
                 continue;
             }

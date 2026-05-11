@@ -801,18 +801,6 @@ export fn zig_add_to_arg_list(list_ptr: ?*anyopaque, arg_ptr: ?*anyopaque) void 
     node_list.items.append(global_allocator, arg_node) catch return;
 }
 
-export fn zig_create_brainfuck(code_ptr: [*c]const u8) ?*anyopaque {
-    const code = std.mem.span(code_ptr);
-    const code_copy = utils.dupe(u8, global_allocator, code);
-    const brainfuck_data = ast.NodeData{
-        .brainfuck = ast.Brainfuck{
-            .code = code_copy,
-        },
-    };
-    const node = ast.Node.create(global_allocator, brainfuck_data);
-    return @as(*anyopaque, @ptrCast(node));
-}
-
 export fn zig_create_if_stmt(condition_ptr: ?*anyopaque, then_body_ptr: ?*anyopaque, else_body_ptr: ?*anyopaque) ?*anyopaque {
     if (condition_ptr == null or then_body_ptr == null) return null;
 
@@ -1538,7 +1526,6 @@ const token_labels = [_]TokenLabel{
     .{ .token = "TOKEN_ON", .label = "'on'" },
     .{ .token = "TOKEN_UNDERSCORE", .label = "'_'" },
     .{ .token = "TOKEN_AT", .label = "'@'" },
-    .{ .token = "TOKEN_BRAINFUCK", .label = "brainfuck block" },
 };
 
 fn isTokenNameChar(ch: u8) bool {

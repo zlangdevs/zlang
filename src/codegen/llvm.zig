@@ -5,7 +5,6 @@ const utils = @import("utils.zig");
 const structs = @import("structs.zig");
 const strings = @import("strings.zig");
 const modules = @import("modules.zig");
-const bfck = @import("bf.zig");
 const control_flow = @import("control_flow.zig");
 const variables = @import("variables.zig");
 const functions = @import("functions.zig");
@@ -76,7 +75,6 @@ pub const CodeGenerator = struct {
     current_token_text: ?[]const u8,
     emitted_error: bool,
     optimize_enabled: bool,
-    enable_comptime_bf_opt: bool,
     template_substitutions: ?std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     function_overloads: std.HashMap([]const u8, std.ArrayList(structs.FunctionOverload), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     pending_template_instantiations: std.ArrayList(structs.TemplateInstantiation),
@@ -223,7 +221,6 @@ pub const CodeGenerator = struct {
             .current_token_text = null,
             .emitted_error = false,
             .optimize_enabled = false,
-            .enable_comptime_bf_opt = false,
             .template_substitutions = null,
             .function_overloads = std.HashMap([]const u8, std.ArrayList(structs.FunctionOverload), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .pending_template_instantiations = .empty,
@@ -1630,9 +1627,6 @@ pub const CodeGenerator = struct {
                     try self.runDeferredActions();
                     _ = c.LLVMBuildRetVoid(self.builder);
                 }
-            },
-            .brainfuck => |bf| {
-                _ = try bfck.generateBrainfuck(self, bf, self.enable_comptime_bf_opt);
             },
             .if_stmt => |if_stmt| {
                 try self.generateIfStatement(if_stmt);
