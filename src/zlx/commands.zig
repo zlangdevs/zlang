@@ -90,6 +90,24 @@ fn doctorModules(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8
             };
         }
 
+        if (entry.manifest_sha256) |recorded| {
+            const bytes = std.Io.Dir.cwd().readFileAlloc(io, entry.path, alloc, .limited(16 * 1024 * 1024)) catch null;
+            if (bytes) |b| {
+                defer alloc.free(b);
+                const fresh = index_mod.hashHex(alloc, b) catch null;
+                if (fresh) |f| {
+                    defer alloc.free(f);
+                    if (!std.mem.eql(u8, f, recorded)) {
+                        try notes.appendSlice(alloc, "manifest hash mismatch; ");
+                    }
+                }
+            } else {
+                try notes.appendSlice(alloc, "manifest unreadable; ");
+            }
+        } else {
+            try notes.appendSlice(alloc, "no manifest hash recorded; ");
+        }
+
         if (ok and notes.items.len == 0) {
             std.debug.print("  OK   {s} {s} (api {d}-{d})\n", .{ entry.name, entry.version, entry.api_min, entry.api_max });
         } else {
@@ -354,6 +372,8 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
         return 1;
     };
     defer loaded_index.deinit(alloc);
+    const manifest_hash = index_mod.hashHex(alloc, package) catch null;
+    defer if (manifest_hash) |h| alloc.free(h);
     var next_entries: std.ArrayList(index_mod.Entry) = .empty;
     defer next_entries.deinit(alloc);
     var replaced = false;
@@ -368,6 +388,7 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
                 .dependencies = parsed.dependencies,
                 .status = status,
                 .status_reason = status_reason,
+                .manifest_sha256 = manifest_hash,
             });
             replaced = true;
         } else {
@@ -384,6 +405,7 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
             .dependencies = parsed.dependencies,
             .status = status,
             .status_reason = status_reason,
+            .manifest_sha256 = manifest_hash,
         });
     }
     index_mod.applyDependencyStatuses(alloc, next_entries.items) catch |err| {
