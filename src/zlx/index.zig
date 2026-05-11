@@ -21,7 +21,20 @@ pub const Entry = struct {
     dependencies: []const []const u8 = &.{},
     status: Status = .installed,
     status_reason: ?[]const u8 = null,
+    manifest_sha256: ?[]const u8 = null,
 };
+
+pub fn hashHex(alloc: std.mem.Allocator, bytes: []const u8) ![]u8 {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    var out = try alloc.alloc(u8, 64);
+    const hex = "0123456789abcdef";
+    for (digest, 0..) |b, i| {
+        out[i * 2] = hex[b >> 4];
+        out[i * 2 + 1] = hex[b & 0xf];
+    }
+    return out;
+}
 
 pub const Index = struct {
     format_version: u32 = 1,
@@ -84,6 +97,10 @@ pub fn write(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store, entri
             try writer.interface.writeAll(", .status_reason = ");
             try writeString(&writer.interface, reason);
         }
+        if (entry.manifest_sha256) |hash| {
+            try writer.interface.writeAll(", .manifest_sha256 = ");
+            try writeString(&writer.interface, hash);
+        }
         try writer.interface.writeAll(" },\n");
     }
     try writer.interface.writeAll("    },\n}\n");
@@ -111,6 +128,7 @@ pub fn rebuild(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store) !st
         };
         defer pkg.deinit(alloc);
         const parsed = pkg.manifest;
+        const sha = hashHex(alloc, pkg.manifestSource()) catch null;
         try entries.append(alloc, .{
             .name = try alloc.dupe(u8, parsed.name),
             .version = try alloc.dupe(u8, parsed.version),
@@ -120,6 +138,7 @@ pub fn rebuild(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store) !st
             .dependencies = try dupeStringList(alloc, parsed.dependencies),
             .status = if (manifest_mod.supportsCurrentTarget(parsed)) .installed else .incompatible,
             .status_reason = if (manifest_mod.supportsCurrentTarget(parsed)) null else "unsupported target",
+            .manifest_sha256 = sha,
         });
     }
 
@@ -238,6 +257,7 @@ pub fn deinitEntries(entries: *std.ArrayList(Entry), alloc: std.mem.Allocator) v
         alloc.free(entry.version);
         alloc.free(entry.path);
         freeStringList(alloc, entry.dependencies);
+        if (entry.manifest_sha256) |h| alloc.free(h);
     }
     entries.deinit(alloc);
 }

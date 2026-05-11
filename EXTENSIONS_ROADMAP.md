@@ -50,6 +50,7 @@ Done on branch `zlx`:
 - `zlang help` now lists every `.zlx` command (`install`, `del-module`, `list-modules`, `module-info`, `module-abi`, `module-load`, `module-loadall`, `module-dryrun`, `module-load-order`, `validate-module`) under a dedicated `Extension commands (.zlx)` section so the extension story is discoverable from the main entry point.
 - Phase 9 trust flags shipped: `-no-extensions` skips `dlopen` of native plugins while still loading manifest-declared module paths through a new `loadManifestModulesOnly`, and `-isolated` disables both for reproducible builds. Both flags appear under Options in `zlang help`. Verified: default loads `.so` + module; `-no-extensions` resolves `use dummy` without link-flag activation; `-isolated` fails to resolve plugin modules.
 - Added `zlang doctor-modules`: prints host API range and store root, then per-module status, api compatibility, and sidecar `.so` presence. Reports `OK`/`WARN`, exits non-zero if any problems found.
+- Index entries now carry an optional `manifest_sha256` (lowercase hex SHA-256 of installed manifest bytes). `install` computes and stores it; `rebuild` recomputes it. `doctor-modules` re-hashes the on-disk manifest and warns on mismatch ("manifest hash mismatch") or absence ("no manifest hash recorded"). Verified: appending bytes to the installed `.zlx` triggers `WARN ... manifest hash mismatch; rc=1`.
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
 
 Not done yet:
