@@ -73,9 +73,65 @@ pub fn expandExtensionBlocks(
             }
 
             if (matched_block) |block_ptr| brace_path: {
+                if (!atStatementStart(input, start)) break :brace_path;
                 var k = j;
                 while (k < input.len and (input[k] == ' ' or input[k] == '\t' or input[k] == '\r' or input[k] == '\n')) : (k += 1) {}
-                if (k >= input.len or input[k] != '{') break :brace_path;
+                if (k >= input.len or input[k] != '{') {
+                    const stmt_start = j;
+                    var stmt_end = stmt_start;
+                    var nested_depth: usize = 0;
+                    while (stmt_end < input.len) : (stmt_end += 1) {
+                        const stmt_ch = input[stmt_end];
+                        if (stmt_ch == ';' and nested_depth == 0) break;
+                        if (stmt_ch == '}' and nested_depth == 0) break;
+                        if (stmt_ch == '{' or stmt_ch == '(' or stmt_ch == '[') {
+                            nested_depth += 1;
+                        } else if ((stmt_ch == '}' or stmt_ch == ')' or stmt_ch == ']') and nested_depth != 0) {
+                            nested_depth -= 1;
+                        } else if (stmt_ch == '"') {
+                            stmt_end += 1;
+                            while (stmt_end < input.len) : (stmt_end += 1) {
+                                if (input[stmt_end] == '\\' and stmt_end + 1 < input.len) {
+                                    stmt_end += 1;
+                                    continue;
+                                }
+                                if (input[stmt_end] == '"') break;
+                            }
+                        }
+                    }
+                    const raw = std.mem.trim(u8, input[stmt_start..stmt_end], " \t\r\n");
+                    if (raw.len == 0) break :brace_path;
+
+                    const file_z = try alloc.dupeZ(u8, file_label);
+                    defer alloc.free(file_z);
+                    const input_struct = abi.BlockInput{
+                        .file = file_z.ptr,
+                        .line = line,
+                        .column = column,
+                        .raw_source = raw.ptr,
+                        .raw_source_len = @intCast(raw.len),
+                    };
+                    var output_struct: abi.BlockOutput = .{
+                        .generated_zlang_source = @as([*]const u8, @ptrCast(&[_]u8{})),
+                        .generated_zlang_source_len = 0,
+                    };
+
+                    const handler = block_ptr.handler orelse break :brace_path;
+                    const rc = handler(&host.api, &input_struct, &output_struct);
+                    if (rc != 0) return error.HandlerFailed;
+
+                    const generated_len: usize = @intCast(output_struct.generated_zlang_source_len);
+                    if (generated_len != 0) {
+                        const gen = output_struct.generated_zlang_source[0..generated_len];
+                        try out.appendSlice(alloc, gen);
+                    }
+
+                    const consumed_end = if (stmt_end < input.len and input[stmt_end] == ';') stmt_end + 1 else stmt_end;
+                    advanceLineCol(input[i..consumed_end], &line, &column);
+                    i = consumed_end;
+                    report.expansions += 1;
+                    continue;
+                }
 
                 const block_start = k + 1;
                 var depth: usize = 1;
@@ -168,3 +224,15 @@ fn isIdentCont(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '_';
 }
 
+fn atStatementStart(input: []const u8, start: usize) bool {
+    var p = start;
+    while (p > 0) {
+        p -= 1;
+        switch (input[p]) {
+            ' ', '\t', '\r' => continue,
+            '\n', ';', '{' => return true,
+            else => return false,
+        }
+    }
+    return true;
+}

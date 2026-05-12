@@ -402,6 +402,12 @@ fn install(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     };
     _ = modules_installed;
 
+    const native_libs_installed = installNativeLibs(alloc, io, store, args[2], parsed, pkg) catch |err| {
+        std.debug.print("zlx: could not install native libraries: {}\n", .{err});
+        return 1;
+    };
+    _ = native_libs_installed;
+
     const loaded_index = index_mod.load(alloc, io, store) catch |err| {
         std.debug.print("zlx: could not read module index: {}\n", .{err});
         return 1;
@@ -533,6 +539,17 @@ fn packModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
         try entries.append(alloc, .{ .path = module.path, .data = bytes });
     }
 
+    for (parsed.native_libs) |native_lib| {
+        const full = try std.fs.path.join(alloc, &.{ dir, native_lib });
+        defer alloc.free(full);
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, full, alloc, .limited(64 * 1024 * 1024)) catch |err| {
+            std.debug.print("zlx: could not read native library {s}: {}\n", .{ full, err });
+            return 1;
+        };
+        try owned_bufs.append(alloc, bytes);
+        try entries.append(alloc, .{ .path = native_lib, .data = bytes });
+    }
+
     const archive = package_mod.writeArchive(alloc, entries.items) catch |err| {
         std.debug.print("zlx: could not build archive: {}\n", .{err});
         return 1;
@@ -614,8 +631,45 @@ fn installModuleFiles(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Sto
     return copied;
 }
 
+fn installNativeLibs(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store, source_zlx: []const u8, parsed: manifest.Manifest, pkg: package_mod.Package) !usize {
+    if (parsed.native_libs.len == 0) return 0;
+    const native_root = try store.pluginNativeDir(alloc, parsed.name);
+    defer alloc.free(native_root);
+
+    var copied: usize = 0;
+    for (parsed.native_libs) |native_lib| {
+        const dest_path = try std.fs.path.join(alloc, &.{ native_root, native_lib });
+        defer alloc.free(dest_path);
+
+        if (pkg.layout == .archive) {
+            const entry = pkg.findEntry(native_lib) orelse continue;
+            try writeFileBytes(io, dest_path, entry.data);
+            copied += 1;
+            continue;
+        }
+
+        const src_dir = std.fs.path.dirname(source_zlx) orelse ".";
+        const src_path = try std.fs.path.join(alloc, &.{ src_dir, native_lib });
+        defer alloc.free(src_path);
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, src_path, alloc, .limited(64 * 1024 * 1024)) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        defer alloc.free(bytes);
+        try writeFileBytes(io, dest_path, bytes);
+        copied += 1;
+    }
+    return copied;
+}
+
 fn deleteModulesDir(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store, name: []const u8) !void {
     const dir = try store.pluginModulesDir(alloc, name);
+    defer alloc.free(dir);
+    std.Io.Dir.cwd().deleteTree(io, dir) catch |err| return err;
+}
+
+fn deleteNativeDir(alloc: std.mem.Allocator, io: std.Io, store: store_mod.Store, name: []const u8) !void {
+    const dir = try store.pluginNativeDir(alloc, name);
     defer alloc.free(dir);
     std.Io.Dir.cwd().deleteTree(io, dir) catch |err| return err;
 }
@@ -750,6 +804,10 @@ fn delModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     };
     deleteModulesDir(alloc, io, store, args[2]) catch |err| {
         std.debug.print("zlx: could not delete plugin modules dir: {}\n", .{err});
+        return 1;
+    };
+    deleteNativeDir(alloc, io, store, args[2]) catch |err| {
+        std.debug.print("zlx: could not delete plugin native dir: {}\n", .{err});
         return 1;
     };
 
