@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
+rm -rf examples/source_map_plugin/lib
+mkdir -p examples/source_map_plugin/lib
 clang -shared -fPIC -Iinclude -o examples/source_map_plugin/lib/plugin.so examples/source_map_plugin/plugin.c
 ./zig-out/bin/zlang module pack examples/source_map_plugin -o /tmp/source_map_test.zlx >/dev/null
 ./zig-out/bin/zlang module install /tmp/source_map_test.zlx >/dev/null

@@ -13,3 +13,4 @@ examples/multi_file_c/multi_file_c_example.ll
 *.ll
 /ignore
 .omx/
+examples/source_map_plugin/lib/
