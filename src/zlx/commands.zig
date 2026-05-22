@@ -13,6 +13,23 @@ extern fn inotify_add_watch(fd: c_int, pathname: [*:0]const u8, mask: u32) c_int
 extern fn close(fd: c_int) c_int;
 extern fn usleep(usec: c_uint) c_int;
 
+// Linux inotify constants used by `zlang module dev`.
+const IN_MODIFY: u32 = 0x00000002;
+const IN_CLOSE_WRITE: u32 = 0x00000008;
+const IN_MOVED_FROM: u32 = 0x00000040;
+const IN_MOVED_TO: u32 = 0x00000080;
+const IN_CREATE: u32 = 0x00000100;
+const IN_DELETE: u32 = 0x00000200;
+const IN_ISDIR: u32 = 0x40000000;
+const IN_NONBLOCK: c_int = 0x800;
+const dev_watch_mask: u32 = IN_MODIFY | IN_CLOSE_WRITE | IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE | IN_DELETE;
+
+var dev_stop_requested = false;
+
+fn handleDevSigint(_: std.posix.SIG) callconv(.c) void {
+    dev_stop_requested = true;
+}
+
 pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     if (args.len < 2) return null;
     if (!std.mem.eql(u8, args[1], "module")) return null;
@@ -578,27 +595,32 @@ fn devModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
         return 1;
     }
     const dir = args[2];
-    const dir_z = try alloc.dupeZ(u8, dir);
-    defer alloc.free(dir_z);
 
     std.debug.print("zlx: watching {s}\n", .{dir});
     _ = try buildAndInstallDevModule(dir, alloc, io);
 
-    const fd = inotify_init1(0x800);
+    dev_stop_requested = false;
+    const sigint_action: std.posix.Sigaction = .{
+        .handler = .{ .handler = handleDevSigint },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(.INT, &sigint_action, null);
+
+    const fd = inotify_init1(IN_NONBLOCK);
     if (fd < 0) {
         std.debug.print("zlx: inotify_init1 failed\n", .{});
         return 1;
     }
     defer _ = close(fd);
 
-    const mask: u32 = 0x00000002 | 0x00000008 | 0x00000040 | 0x00000080 | 0x00000100 | 0x00000200;
-    if ((try addWatchRecursive(fd, dir, mask, alloc, io)) == 0) {
+    if ((try addWatchRecursive(fd, dir, dev_watch_mask, alloc, io)) == 0) {
         std.debug.print("zlx: inotify_add_watch failed under {s}\n", .{dir});
         return 1;
     }
 
     var buf: [8192]u8 align(@alignOf(usize)) = undefined;
-    while (true) {
+    while (!dev_stop_requested) {
         const n = std.posix.read(fd, &buf) catch |err| {
             if (err == error.WouldBlock) {
                 _ = usleep(100_000);
@@ -608,6 +630,7 @@ fn devModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
             return 1;
         };
         if (n == 0) continue;
+        if (!hasRelevantDevEvent(buf[0..n])) continue;
         _ = usleep(150_000);
         drainInotify(fd);
         _ = buildAndInstallDevModule(dir, alloc, io) catch |err| {
@@ -616,6 +639,8 @@ fn devModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
         };
         drainInotify(fd);
     }
+    std.debug.print("zlx: stopped watching {s}\n", .{dir});
+    return 0;
 }
 
 fn drainInotify(fd: c_int) void {
@@ -624,6 +649,29 @@ fn drainInotify(fd: c_int) void {
         const n = std.posix.read(fd, &buf) catch return;
         if (n == 0) return;
     }
+}
+
+fn hasRelevantDevEvent(events: []const u8) bool {
+    var offset: usize = 0;
+    while (offset + 16 <= events.len) {
+        const mask = std.mem.readInt(u32, events[offset + 4 ..][0..4], .little);
+        const name_len = std.mem.readInt(u32, events[offset + 12 ..][0..4], .little);
+        const name_start = offset + 16;
+        const name_end = @min(name_start + @as(usize, @intCast(name_len)), events.len);
+        const raw_name = events[name_start..name_end];
+        const nul = std.mem.indexOfScalar(u8, raw_name, 0) orelse raw_name.len;
+        const name = raw_name[0..nul];
+        if ((mask & IN_ISDIR) == 0 and !isDevBuildOutput(name)) return true;
+        offset = name_start + @as(usize, @intCast(name_len));
+    }
+    return false;
+}
+
+fn isDevBuildOutput(name: []const u8) bool {
+    return std.mem.endsWith(u8, name, ".so") or
+        std.mem.endsWith(u8, name, ".a") or
+        std.mem.endsWith(u8, name, ".o") or
+        std.mem.endsWith(u8, name, ".zlx");
 }
 
 fn addWatchRecursive(fd: c_int, dir: []const u8, mask: u32, alloc: std.mem.Allocator, io: std.Io) !usize {
