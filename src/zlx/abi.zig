@@ -1,8 +1,8 @@
 const std = @import("std");
 
-pub const api_version: u32 = 2;
+pub const api_version: u32 = 3;
 pub const api_min_supported: u32 = 1;
-pub const api_max_supported: u32 = 2;
+pub const api_max_supported: u32 = 3;
 
 pub const DiagnosticLevel = enum(c_int) {
     err = 1,
@@ -38,6 +38,15 @@ pub const BlockInput = extern struct {
 pub const BlockOutput = extern struct {
     generated_zlang_source: [*]const u8,
     generated_zlang_source_len: u32,
+    // api v3
+    source_map: ?[*]const SourceMapEntry,
+    source_map_len: u32,
+};
+
+pub const SourceMapEntry = extern struct {
+    generated_offset: u32,
+    original_line: u32,
+    original_column: u32,
 };
 
 pub const BlockHandler = *const fn (

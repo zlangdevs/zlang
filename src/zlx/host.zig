@@ -428,7 +428,12 @@ fn noopHandler(host: *abi.HostApi, input: *const abi.BlockInput, output: *abi.Bl
     _ = host;
     _ = input;
     const empty: []const u8 = &[_]u8{};
-    output.* = .{ .generated_zlang_source = empty.ptr, .generated_zlang_source_len = 0 };
+    output.* = .{
+        .generated_zlang_source = empty.ptr,
+        .generated_zlang_source_len = 0,
+        .source_map = null,
+        .source_map_len = 0,
+    };
     return 0;
 }
 

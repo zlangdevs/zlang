@@ -24,6 +24,31 @@ const allocator = std.heap.page_allocator;
 var process_io: std.Io = undefined;
 var plugin_module_paths: ?std.StringHashMap([]const u8) = null;
 var plugin_host_ptr: ?*zlx_host.Host = null;
+var zlx_source_maps: std.ArrayList(ZlxSourceMap) = .empty;
+
+const ZlxSourceMapEntry = struct {
+    generated_offset: usize,
+    original_file: []u8,
+    original_line: u32,
+    original_column: u32,
+};
+
+const ZlxSourceMap = struct {
+    generated_path: []u8,
+    entries: std.ArrayList(ZlxSourceMapEntry),
+
+    fn deinit(self: *ZlxSourceMap, alloc: std.mem.Allocator) void {
+        alloc.free(self.generated_path);
+        for (self.entries.items) |entry| alloc.free(entry.original_file);
+        self.entries.deinit(alloc);
+    }
+};
+
+const DiagnosticLocation = struct {
+    file_path: []const u8,
+    line: usize,
+    column: usize,
+};
 
 fn nanoTimestamp() i96 {
     return std.Io.Timestamp.now(process_io, .real).toNanoseconds();
@@ -724,6 +749,46 @@ fn parseErrorHint(message: []const u8) ?[]const u8 {
     return null;
 }
 
+fn clearZlxSourceMaps(alloc: std.mem.Allocator) void {
+    for (zlx_source_maps.items) |*map| map.deinit(alloc);
+    zlx_source_maps.clearRetainingCapacity();
+}
+
+fn sourceOffsetAtLineColumn(source: []const u8, line: usize, column: usize) usize {
+    var current_line: usize = 1;
+    var current_column: usize = 1;
+    for (source, 0..) |ch, idx| {
+        if (current_line == line and current_column == column) return idx;
+        if (ch == '\n') {
+            current_line += 1;
+            current_column = 1;
+        } else {
+            current_column += 1;
+        }
+    }
+    return source.len;
+}
+
+fn remapZlxDiagnosticLocation(file_path: []const u8, line: usize, column: usize, parser_text: []const u8) DiagnosticLocation {
+    const generated_offset = sourceOffsetAtLineColumn(parser_text, line, column);
+    for (zlx_source_maps.items) |map| {
+        if (!std.mem.eql(u8, map.generated_path, file_path)) continue;
+        var best: ?ZlxSourceMapEntry = null;
+        for (map.entries.items) |entry| {
+            if (entry.generated_offset > generated_offset) continue;
+            if (best == null or entry.generated_offset >= best.?.generated_offset) best = entry;
+        }
+        if (best) |entry| {
+            return .{
+                .file_path = entry.original_file,
+                .line = entry.original_line,
+                .column = entry.original_column,
+            };
+        }
+    }
+    return .{ .file_path = file_path, .line = line, .column = column };
+}
+
 fn countLinesInText(text: []const u8) usize {
     if (text.len == 0) return 0;
     var count: usize = 1;
@@ -843,10 +908,11 @@ fn parseModuleFromPrepared(file_path: []const u8, arena: std.mem.Allocator, back
         const parse_errors = parser.getParseErrors();
         if (parse_errors.len > 0) {
             for (parse_errors) |parse_err| {
+                const remapped = remapZlxDiagnosticLocation(file_path, parse_err.line, if (parse_err.column == 0) 1 else parse_err.column, prep.parser_text);
                 diagnostics.printDiagnostic(backing_alloc, .{
-                    .file_path = file_path,
-                    .line = parse_err.line,
-                    .column = if (parse_err.column == 0) 1 else parse_err.column,
+                    .file_path = remapped.file_path,
+                    .line = remapped.line,
+                    .column = remapped.column,
                     .message = parse_err.message,
                     .severity = .Error,
                     .hint = parseErrorHint(parse_err.message),
@@ -855,10 +921,11 @@ fn parseModuleFromPrepared(file_path: []const u8, arena: std.mem.Allocator, back
         } else {
             const loc = parser.lastParseErrorLocation();
             if (loc) |l| {
+                const remapped = remapZlxDiagnosticLocation(file_path, l.line, l.column, prep.parser_text);
                 diagnostics.printDiagnostic(backing_alloc, .{
-                    .file_path = file_path,
-                    .line = l.line,
-                    .column = l.column,
+                    .file_path = remapped.file_path,
+                    .line = remapped.line,
+                    .column = remapped.column,
                     .message = "Parse error",
                     .severity = .Error,
                 });
@@ -1879,7 +1946,8 @@ fn expandPathIfNeeded(original: []const u8, idx: usize, alloc: std.mem.Allocator
     if (host.syntax_blocks.items.len == 0) return null;
     const bytes = std.Io.Dir.cwd().readFileAlloc(process_io, original, alloc, .limited(64 * 1024 * 1024)) catch return null;
     defer alloc.free(bytes);
-    const result = try zlx_preprocess.expandExtensionBlocks(alloc, host, original, bytes);
+    var result = try zlx_preprocess.expandExtensionBlocks(alloc, host, original, bytes);
+    defer result.report.deinit(alloc);
     if (result.report.expansions == 0) {
         alloc.free(result.source);
         return null;
@@ -1896,6 +1964,25 @@ fn expandPathIfNeeded(original: []const u8, idx: usize, alloc: std.mem.Allocator
     writer.interface.writeAll(result.source) catch {};
     writer.interface.flush() catch {};
     alloc.free(result.source);
+    if (result.report.source_map.items.len != 0) {
+        var entries: std.ArrayList(ZlxSourceMapEntry) = .empty;
+        errdefer {
+            for (entries.items) |entry| alloc.free(entry.original_file);
+            entries.deinit(alloc);
+        }
+        for (result.report.source_map.items) |entry| {
+            try entries.append(alloc, .{
+                .generated_offset = entry.generated_offset,
+                .original_file = try alloc.dupe(u8, entry.original_file),
+                .original_line = entry.original_line,
+                .original_column = entry.original_column,
+            });
+        }
+        try zlx_source_maps.append(alloc, .{
+            .generated_path = try alloc.dupe(u8, tmp_path),
+            .entries = entries,
+        });
+    }
     return .{ .path = tmp_path, .expansions = result.report.expansions };
 }
 
@@ -3685,6 +3772,7 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     if (plugin_host.syntax_blocks.items.len != 0) {
+        clearZlxSourceMaps(allocator);
         var total_expansions: usize = 0;
         for (ctx.input_files.items, 0..) |path, idx| {
             if (expandPathIfNeeded(path, idx, allocator)) |maybe| {
