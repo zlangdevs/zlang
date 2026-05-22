@@ -3639,6 +3639,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     var plugin_host = zlx_host.Host.init(allocator);
     defer plugin_host.deinit();
+    plugin_host.setCliArgs(ctx.extra_args.items) catch {};
     if (!ctx.no_extensions) {
         _ = zlx_runtime.loadAllInstalled(allocator, process_io, &plugin_host) catch {};
         plugin_host_ptr = &plugin_host;
@@ -3692,15 +3693,17 @@ pub fn main(init: std.process.Init) !u8 {
         var ei: usize = 0;
         while (ei < ctx.extra_args.items.len) {
             const arg = ctx.extra_args.items[ei];
-            var matched = false;
+            var matched_flag: ?[]const u8 = null;
             for (plugin_host.cli_flags.items) |flag| {
-                if (std.mem.eql(u8, flag.name, arg)) {
-                    matched = true;
+                if (std.mem.eql(u8, flag.name, arg) or
+                    (arg.len > flag.name.len and arg[flag.name.len] == '=' and std.mem.eql(u8, flag.name, arg[0..flag.name.len])))
+                {
+                    matched_flag = flag.name;
                     break;
                 }
             }
-            if (matched) {
-                try ctx.plugin_flags.append(allocator, try allocator.dupe(u8, arg));
+            if (matched_flag) |flag_name| {
+                try ctx.plugin_flags.append(allocator, try allocator.dupe(u8, flag_name));
                 _ = ctx.extra_args.orderedRemove(ei);
             } else {
                 ei += 1;

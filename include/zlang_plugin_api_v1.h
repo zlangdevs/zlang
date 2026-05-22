@@ -117,6 +117,11 @@ struct ZlangHostApi {
         const char* file,
         const char* type_name
     );
+    /* api v3: returns NULL if absent, "" for bare flags, or the --flag=value value. */
+    const char* (*get_cli_flag)(
+        ZlangHostApi* host,
+        const char* name
+    );
 };
 
 struct ZlangProbeResult {
