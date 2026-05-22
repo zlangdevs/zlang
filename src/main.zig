@@ -28,18 +28,18 @@ var zlx_source_maps: std.ArrayList(ZlxSourceMap) = .empty;
 
 const ZlxSourceMapEntry = struct {
     generated_offset: usize,
-    original_file: []u8,
     original_line: u32,
     original_column: u32,
 };
 
 const ZlxSourceMap = struct {
     generated_path: []u8,
+    original_file: []u8,
     entries: std.ArrayList(ZlxSourceMapEntry),
 
     fn deinit(self: *ZlxSourceMap, alloc: std.mem.Allocator) void {
         alloc.free(self.generated_path);
-        for (self.entries.items) |entry| alloc.free(entry.original_file);
+        alloc.free(self.original_file);
         self.entries.deinit(alloc);
     }
 };
@@ -780,7 +780,7 @@ fn remapZlxDiagnosticLocation(file_path: []const u8, line: usize, column: usize,
         }
         if (best) |entry| {
             return .{
-                .file_path = entry.original_file,
+                .file_path = map.original_file,
                 .line = entry.original_line,
                 .column = entry.original_column,
             };
@@ -1966,20 +1966,17 @@ fn expandPathIfNeeded(original: []const u8, idx: usize, alloc: std.mem.Allocator
     alloc.free(result.source);
     if (result.report.source_map.items.len != 0) {
         var entries: std.ArrayList(ZlxSourceMapEntry) = .empty;
-        errdefer {
-            for (entries.items) |entry| alloc.free(entry.original_file);
-            entries.deinit(alloc);
-        }
+        errdefer entries.deinit(alloc);
         for (result.report.source_map.items) |entry| {
             try entries.append(alloc, .{
                 .generated_offset = entry.generated_offset,
-                .original_file = try alloc.dupe(u8, entry.original_file),
                 .original_line = entry.original_line,
                 .original_column = entry.original_column,
             });
         }
         try zlx_source_maps.append(alloc, .{
             .generated_path = try alloc.dupe(u8, tmp_path),
+            .original_file = try alloc.dupe(u8, original),
             .entries = entries,
         });
     }
