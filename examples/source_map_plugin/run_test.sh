@@ -10,6 +10,11 @@ clang -shared -fPIC -Iinclude -o examples/source_map_plugin/lib/plugin.so exampl
 ./zig-out/bin/zlang module pack examples/source_map_plugin -o /tmp/source_map_test.zlx >/dev/null
 ./zig-out/bin/zlang module install /tmp/source_map_test.zlx >/dev/null
 
+print_failure_log() {
+    printf '%s\n' "--- last 20 diagnostic lines ---"
+    printf '%s\n' "$OUTPUT" | tail -n 20
+}
+
 set +e
 OUTPUT=$(./zig-out/bin/zlang examples/source_map_plugin/source_map_error.zl -o /tmp/source_map_error_bin 2>&1)
 STATUS=$?
@@ -17,18 +22,19 @@ set -e
 
 if [ "$STATUS" -eq 0 ]; then
     printf '%s\n' "expected compilation to fail"
+    print_failure_log
     exit 1
 fi
 
 if ! printf '%s\n' "$OUTPUT" | grep -q "examples/source_map_plugin/source_map_error.zl:7:3"; then
-    printf '%s\n' "$OUTPUT"
     printf '%s\n' "expected diagnostic at source_map_error.zl:7:3"
+    print_failure_log
     exit 1
 fi
 
 if printf '%s\n' "$OUTPUT" | grep -q "/tmp/zlang-zlx-"; then
-    printf '%s\n' "$OUTPUT"
     printf '%s\n' "diagnostic leaked generated temp path"
+    print_failure_log
     exit 1
 fi
 
