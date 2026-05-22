@@ -8,6 +8,11 @@ const package_mod = @import("package.zig");
 const registry = @import("registry.zig");
 const store_mod = @import("store.zig");
 
+extern fn inotify_init1(flags: c_int) c_int;
+extern fn inotify_add_watch(fd: c_int, pathname: [*:0]const u8, mask: u32) c_int;
+extern fn close(fd: c_int) c_int;
+extern fn usleep(usec: c_uint) c_int;
+
 pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     if (args.len < 2) return null;
     if (!std.mem.eql(u8, args[1], "module")) return null;
@@ -33,6 +38,7 @@ pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     if (std.mem.eql(u8, cmd, "loadall")) return try moduleLoadAll(sub_args, alloc, io);
     if (std.mem.eql(u8, cmd, "doctor")) return try doctorModules(sub_args, alloc, io);
     if (std.mem.eql(u8, cmd, "pack")) return try packModule(sub_args, alloc, io);
+    if (std.mem.eql(u8, cmd, "dev")) return try devModule(sub_args, alloc, io);
     std.debug.print("zlx: unknown module subcommand '{s}'. Try 'zlang module help'.\n", .{cmd});
     return 1;
 }
@@ -54,6 +60,7 @@ fn printModuleHelp() void {
         \\  load-order            Print topological load order of installed modules
         \\  doctor                Diagnose installed extensions (status, api, hash, sidecar)
         \\  pack <dir> -o <out>   Pack <dir>/manifest.zon + declared files into <out>.zlx
+        \\  dev <dir>             Watch, rebuild, and install an extension package
         \\  help                  Show this help
         \\
     , .{});
@@ -563,6 +570,155 @@ fn packModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
 
     std.debug.print("Packed {d} entry/entries into {s}\n", .{ entries.items.len, out });
     return 0;
+}
+
+fn devModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
+    if (args.len != 3) {
+        std.debug.print("Usage: zlang module dev <dir>\n", .{});
+        return 1;
+    }
+    const dir = args[2];
+    const dir_z = try alloc.dupeZ(u8, dir);
+    defer alloc.free(dir_z);
+
+    std.debug.print("zlx: watching {s}\n", .{dir});
+    _ = try buildAndInstallDevModule(dir, alloc, io);
+
+    const fd = inotify_init1(0x800);
+    if (fd < 0) {
+        std.debug.print("zlx: inotify_init1 failed\n", .{});
+        return 1;
+    }
+    defer _ = close(fd);
+
+    const mask: u32 = 0x00000002 | 0x00000008 | 0x00000040 | 0x00000080 | 0x00000100 | 0x00000200;
+    if ((try addWatchRecursive(fd, dir, mask, alloc, io)) == 0) {
+        std.debug.print("zlx: inotify_add_watch failed under {s}\n", .{dir});
+        return 1;
+    }
+
+    var buf: [8192]u8 align(@alignOf(usize)) = undefined;
+    while (true) {
+        const n = std.posix.read(fd, &buf) catch |err| {
+            if (err == error.WouldBlock) {
+                _ = usleep(100_000);
+                continue;
+            }
+            std.debug.print("zlx: inotify read failed: {}\n", .{err});
+            return 1;
+        };
+        if (n == 0) continue;
+        _ = usleep(150_000);
+        drainInotify(fd);
+        _ = buildAndInstallDevModule(dir, alloc, io) catch |err| {
+            std.debug.print("zlx: dev rebuild failed: {}\n", .{err});
+            continue;
+        };
+        drainInotify(fd);
+    }
+}
+
+fn drainInotify(fd: c_int) void {
+    var buf: [8192]u8 align(@alignOf(usize)) = undefined;
+    while (true) {
+        const n = std.posix.read(fd, &buf) catch return;
+        if (n == 0) return;
+    }
+}
+
+fn addWatchRecursive(fd: c_int, dir: []const u8, mask: u32, alloc: std.mem.Allocator, io: std.Io) !usize {
+    const dir_z = try alloc.dupeZ(u8, dir);
+    defer alloc.free(dir_z);
+    var count: usize = if (inotify_add_watch(fd, dir_z.ptr, mask) >= 0) 1 else 0;
+
+    var opened = std.Io.Dir.cwd().openDir(io, dir, .{ .iterate = true }) catch return count;
+    defer opened.close(io);
+    var it = opened.iterate();
+    while (try it.next(io)) |entry| {
+        if (entry.kind != .directory) continue;
+        if (std.mem.eql(u8, entry.name, ".git") or std.mem.eql(u8, entry.name, "build")) continue;
+        const child = try std.fs.path.join(alloc, &.{ dir, entry.name });
+        defer alloc.free(child);
+        count += try addWatchRecursive(fd, child, mask, alloc, io);
+    }
+    return count;
+}
+
+fn buildAndInstallDevModule(dir: []const u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
+    const start = std.Io.Timestamp.now(io, .real).toNanoseconds();
+    const manifest_path = try std.fs.path.join(alloc, &.{ dir, "manifest.zon" });
+    defer alloc.free(manifest_path);
+    const manifest_bytes = try std.Io.Dir.cwd().readFileAlloc(io, manifest_path, alloc, .limited(1024 * 1024));
+    defer alloc.free(manifest_bytes);
+    const parsed = try manifest.parse(alloc, manifest_bytes);
+    defer manifest.free(alloc, parsed);
+
+    const build_sh = try std.fs.path.join(alloc, &.{ dir, "build.sh" });
+    defer alloc.free(build_sh);
+    const has_build_sh = blk: {
+        std.Io.Dir.cwd().access(io, build_sh, .{}) catch break :blk false;
+        break :blk true;
+    };
+
+    if (has_build_sh) {
+        try runCommand(io, &.{ "sh", "build.sh" }, dir);
+    } else {
+        const entry = parsed.entry orelse "plugin.so";
+        const out_so = try std.fs.path.join(alloc, &.{ dir, entry });
+        defer alloc.free(out_so);
+        if (std.fs.path.dirname(out_so)) |parent| try std.Io.Dir.cwd().createDirPath(io, parent);
+        const src_plugin_c = try std.fs.path.join(alloc, &.{ dir, "src/plugin.c" });
+        defer alloc.free(src_plugin_c);
+        const fallback_plugin_c = try std.fs.path.join(alloc, &.{ dir, "plugin.c" });
+        defer alloc.free(fallback_plugin_c);
+        const plugin_c = blk: {
+            std.Io.Dir.cwd().access(io, src_plugin_c, .{}) catch break :blk fallback_plugin_c;
+            break :blk src_plugin_c;
+        };
+        try runCommand(io, &.{ "clang", "-shared", "-fPIC", "-Iinclude", "-o", out_so, plugin_c }, null);
+    }
+
+    const zlx_name = try std.fmt.allocPrint(alloc, "{s}.zlx", .{parsed.name});
+    defer alloc.free(zlx_name);
+    const out_zlx = try std.fs.path.join(alloc, &.{ dir, zlx_name });
+    defer alloc.free(out_zlx);
+
+    if (!has_build_sh) {
+        const module_z = try alloc.dupeZ(u8, "module");
+        defer alloc.free(module_z);
+        const pack_z = try alloc.dupeZ(u8, "pack");
+        defer alloc.free(pack_z);
+        const dash_o_z = try alloc.dupeZ(u8, "-o");
+        defer alloc.free(dash_o_z);
+        const out_zlx_z = try alloc.dupeZ(u8, out_zlx);
+        defer alloc.free(out_zlx_z);
+        const dir_z = try alloc.dupeZ(u8, dir);
+        defer alloc.free(dir_z);
+        const pack_args = [_][:0]u8{ module_z, pack_z, dir_z, dash_o_z, out_zlx_z };
+        if (try packModule(&pack_args, alloc, io) != 0) return 1;
+    }
+
+    const module_z = try alloc.dupeZ(u8, "module");
+    defer alloc.free(module_z);
+    const install_cmd_z = try alloc.dupeZ(u8, "install");
+    defer alloc.free(install_cmd_z);
+    const install_z = try alloc.dupeZ(u8, out_zlx);
+    defer alloc.free(install_z);
+    const install_args = [_][:0]u8{ module_z, install_cmd_z, install_z };
+    const rc = try install(&install_args, alloc, io);
+    const elapsed_ms = @as(f64, @floatFromInt(std.Io.Timestamp.now(io, .real).toNanoseconds() - start)) / 1_000_000.0;
+    std.debug.print("zlx: dev rebuild installed {s} in {d:.2} ms\n", .{ out_zlx, elapsed_ms });
+    return rc;
+}
+
+fn runCommand(io: std.Io, argv: []const []const u8, cwd: ?[]const u8) !void {
+    const child_cwd: std.process.Child.Cwd = if (cwd) |path| .{ .path = path } else .inherit;
+    var child = try std.process.spawn(io, .{ .argv = argv, .cwd = child_cwd });
+    const term = try child.wait(io);
+    switch (term) {
+        .exited => |code| if (code != 0) return error.CommandFailed,
+        else => return error.CommandFailed,
+    }
 }
 
 fn writeFileBytes(io: std.Io, path: []const u8, data: []const u8) !void {
