@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define ZLANG_PLUGIN_API_VERSION 2u
+#define ZLANG_PLUGIN_API_VERSION 3u
 
 typedef struct ZlangHostApi ZlangHostApi;
 typedef struct ZlangPluginDesc ZlangPluginDesc;
@@ -15,6 +15,7 @@ typedef struct ZlangProbeResult ZlangProbeResult;
 typedef struct ZlangBlockSyntax ZlangBlockSyntax;
 typedef struct ZlangBlockInput ZlangBlockInput;
 typedef struct ZlangBlockOutput ZlangBlockOutput;
+typedef struct ZlangSourceMapEntry ZlangSourceMapEntry;
 
 typedef enum {
     ZLANG_DIAGNOSTIC_ERROR = 1,
@@ -50,6 +51,15 @@ struct ZlangBlockInput {
 struct ZlangBlockOutput {
     const char* generated_zlang_source;
     uint32_t generated_zlang_source_len;
+    /* api v3: optional mapping from generated source byte offsets to original source locations. */
+    const ZlangSourceMapEntry* source_map;
+    uint32_t source_map_len;
+};
+
+struct ZlangSourceMapEntry {
+    uint32_t generated_offset;
+    uint32_t original_line;
+    uint32_t original_column;
 };
 
 typedef int (*ZlangBlockHandler)(
