@@ -114,6 +114,9 @@ pub const PluginDesc = extern struct {
     name: [*:0]const u8,
     version: [*:0]const u8,
     register_plugin: *const fn (host: *HostApi) callconv(.c) c_int,
+    // api v3
+    session_begin: ?*const fn (host: *HostApi) callconv(.c) void,
+    session_end: ?*const fn (host: *HostApi) callconv(.c) void,
 };
 
 pub const ProbeFn = *const fn (host_api_version: u32) callconv(.c) ?*ProbeResult;
