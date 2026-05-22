@@ -133,6 +133,9 @@ struct ZlangPluginDesc {
     const char* name;
     const char* version;
     int (*register_plugin)(ZlangHostApi* host);
+    /* api v3: optional per-compilation lifecycle callbacks. */
+    void (*session_begin)(ZlangHostApi* host);
+    void (*session_end)(ZlangHostApi* host);
 };
 
 ZlangProbeResult* zlang_plugin_probe(uint32_t host_api_version);

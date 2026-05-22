@@ -33,6 +33,12 @@ pub const LinkFlagRegistration = struct {
     owner: ?[]u8,
 };
 
+pub const LoadedPlugin = struct {
+    name: []u8,
+    session_begin: ?*const fn (host: *abi.HostApi) callconv(.c) void,
+    session_end: ?*const fn (host: *abi.HostApi) callconv(.c) void,
+};
+
 pub const Diagnostic = struct {
     level: abi.DiagnosticLevel,
     file: ?[]u8,
@@ -64,6 +70,7 @@ pub const Host = struct {
     cli_flags: std.ArrayList(CliFlagRegistration) = .empty,
     link_flags: std.ArrayList(LinkFlagRegistration) = .empty,
     help_sections: std.ArrayList(HelpSection) = .empty,
+    loaded_plugins: std.ArrayList(LoadedPlugin) = .empty,
     diagnostics: std.ArrayList(Diagnostic) = .empty,
     counts: Counts = .{},
     current_owner: ?[]u8 = null,
@@ -129,6 +136,8 @@ pub const Host = struct {
             if (item.owner) |o| self.alloc.free(o);
         }
         self.help_sections.deinit(self.alloc);
+        for (self.loaded_plugins.items) |item| self.alloc.free(item.name);
+        self.loaded_plugins.deinit(self.alloc);
         for (self.diagnostics.items) |item| {
             if (item.file) |f| self.alloc.free(f);
             self.alloc.free(item.message);
@@ -140,6 +149,33 @@ pub const Host = struct {
 
     fn fromApi(api: *abi.HostApi) *Host {
         return @fieldParentPtr("api", api);
+    }
+
+    pub fn addLoadedPlugin(
+        self: *Host,
+        name: []const u8,
+        session_begin: ?*const fn (host: *abi.HostApi) callconv(.c) void,
+        session_end: ?*const fn (host: *abi.HostApi) callconv(.c) void,
+    ) !void {
+        try self.loaded_plugins.append(self.alloc, .{
+            .name = try self.alloc.dupe(u8, name),
+            .session_begin = session_begin,
+            .session_end = session_end,
+        });
+    }
+
+    pub fn sessionBegin(self: *Host) void {
+        for (self.loaded_plugins.items) |plugin| {
+            if (plugin.session_begin) |callback| callback(&self.api);
+        }
+    }
+
+    pub fn sessionEnd(self: *Host) void {
+        var i = self.loaded_plugins.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.loaded_plugins.items[i].session_end) |callback| callback(&self.api);
+        }
     }
 };
 

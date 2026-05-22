@@ -3744,6 +3744,13 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
+    var zlx_session_started = false;
+    if (plugin_host_ptr) |host| {
+        host.sessionBegin();
+        zlx_session_started = true;
+    }
+    defer if (zlx_session_started) plugin_host.sessionEnd();
+
     for (ctx.input_files.items, 0..) |path, idx| {
         if (!(std.mem.endsWith(u8, path, ".b") or std.mem.endsWith(u8, path, ".bf"))) continue;
         const bytes = std.Io.Dir.cwd().readFileAlloc(process_io, path, allocator, .limited(64 * 1024 * 1024)) catch continue;

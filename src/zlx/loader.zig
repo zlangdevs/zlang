@@ -57,6 +57,10 @@ pub fn loadAndRegister(alloc: std.mem.Allocator, host: *host_mod.Host, so_path: 
     host.clearCurrentOwner();
     if (rc != 0) return error.RegisterFailed;
 
+    const session_begin = if (desc.api_max >= 3) desc.session_begin else null;
+    const session_end = if (desc.api_max >= 3) desc.session_end else null;
+    host.addLoadedPlugin(desc_name, session_begin, session_end) catch return error.RegisterFailed;
+
     return .{
         .name = alloc.dupe(u8, desc_name) catch return error.RegisterFailed,
         .version = alloc.dupe(u8, desc_version) catch return error.RegisterFailed,
