@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define ZLANG_PLUGIN_API_VERSION 1u
+#define ZLANG_PLUGIN_API_VERSION 2u
 
 typedef struct ZlangHostApi ZlangHostApi;
 typedef struct ZlangPluginDesc ZlangPluginDesc;
@@ -100,6 +100,12 @@ struct ZlangHostApi {
         uint32_t column,
         const char* message,
         const char* hint
+    );
+    /* api v2: resolve type size for given file context. Returns -1 if unknown. */
+    int32_t (*resolve_type_size)(
+        ZlangHostApi* host,
+        const char* file,
+        const char* type_name
     );
 };
 

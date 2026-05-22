@@ -93,6 +93,7 @@ pub const Host = struct {
                 .register_module = registerModule,
                 .register_link_flag = registerLinkFlag,
                 .diagnostic = recordDiagnostic,
+                .resolve_type_size = resolveTypeSize,
             },
             .alloc = alloc,
         };
@@ -262,6 +263,128 @@ fn recordDiagnostic(
         .hint = hint_owned,
     }) catch return;
     host.counts.diagnostics += 1;
+}
+
+fn primitiveSize(t: []const u8) i32 {
+    if (std.mem.eql(u8, t, "bool") or std.mem.eql(u8, t, "i8") or std.mem.eql(u8, t, "u8")) return 1;
+    if (std.mem.eql(u8, t, "i16") or std.mem.eql(u8, t, "u16") or std.mem.eql(u8, t, "f16")) return 2;
+    if (std.mem.eql(u8, t, "i32") or std.mem.eql(u8, t, "u32") or std.mem.eql(u8, t, "f32")) return 4;
+    if (std.mem.eql(u8, t, "i64") or std.mem.eql(u8, t, "u64") or std.mem.eql(u8, t, "f64")) return 8;
+    if (std.mem.startsWith(u8, t, "ptr<")) return 8;
+    return -1;
+}
+
+fn typeAlign(size: i32) i32 {
+    if (size >= 8) return 8;
+    if (size >= 4) return 4;
+    if (size >= 2) return 2;
+    return 1;
+}
+
+fn alignTo(v: i32, a: i32) i32 {
+    return @divTrunc(v + a - 1, a) * a;
+}
+
+fn splitTopComma(s: []const u8) ?usize {
+    var depth: i32 = 0;
+    for (s, 0..) |c, i| {
+        if (c == '<' or c == '(' or c == '[') depth += 1
+        else if (c == '>' or c == ')' or c == ']') { if (depth > 0) depth -= 1; }
+        else if (c == ',' and depth == 0) return i;
+    }
+    return null;
+}
+
+fn computeArrSize(alloc: std.mem.Allocator, src: []const u8, type_str: []const u8) i32 {
+    if (!std.mem.startsWith(u8, type_str, "arr<") or !std.mem.endsWith(u8, type_str, ">")) return -1;
+    const inner = type_str[4 .. type_str.len - 1];
+    const comma = splitTopComma(inner) orelse return -1;
+    const elem = std.mem.trim(u8, inner[0..comma], " \t");
+    const cnt_s = std.mem.trim(u8, inner[comma + 1 ..], " \t");
+    const cnt = std.fmt.parseInt(i32, cnt_s, 10) catch return -1;
+    if (cnt <= 0) return -1;
+    const es = resolveSize(alloc, src, elem);
+    if (es <= 0) return -1;
+    return es * cnt;
+}
+
+fn computeStructSize(alloc: std.mem.Allocator, src: []const u8, name: []const u8) i32 {
+    var needle_buf: [256]u8 = undefined;
+    const needle = std.fmt.bufPrint(&needle_buf, "struct {s}", .{name}) catch return -1;
+    var pos: usize = 0;
+    const found_at = std.mem.indexOf(u8, src, needle) orelse return -1;
+    pos = found_at + needle.len;
+    if (pos < src.len) {
+        const c = src[pos];
+        if (std.ascii.isAlphanumeric(c) or c == '_') return -1;
+    }
+    const open_rel = std.mem.indexOfScalar(u8, src[pos..], '{') orelse return -1;
+    const open = pos + open_rel;
+    var depth: i32 = 0;
+    var close: usize = open;
+    while (close < src.len) : (close += 1) {
+        if (src[close] == '{') depth += 1
+        else if (src[close] == '}') { depth -= 1; if (depth == 0) break; }
+    }
+    if (close >= src.len) return -1;
+    var body = alloc.dupe(u8, src[open + 1 .. close]) catch return -1;
+    defer alloc.free(body);
+    // strip ?? comments
+    var i: usize = 0;
+    while (i + 1 < body.len) : (i += 1) {
+        if (body[i] == '?' and body[i + 1] == '?') {
+            while (i < body.len and body[i] != '\n') : (i += 1) body[i] = ' ';
+        }
+    }
+    var total: i32 = 0;
+    var max_align: i32 = 1;
+    var it = std.mem.tokenizeAny(u8, body, ",\n");
+    while (it.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (line.len == 0) continue;
+        var sp_idx: usize = 0;
+        while (sp_idx < line.len and !std.ascii.isWhitespace(line[sp_idx])) : (sp_idx += 1) {}
+        if (sp_idx >= line.len) continue;
+        const field_type = std.mem.trim(u8, line[sp_idx..], " \t\r");
+        const fs = resolveSize(alloc, src, field_type);
+        if (fs <= 0) return -1;
+        const a = typeAlign(fs);
+        if (a > max_align) max_align = a;
+        total = alignTo(total, a) + fs;
+    }
+    return alignTo(total, max_align);
+}
+
+fn resolveSize(alloc: std.mem.Allocator, src: []const u8, type_str_raw: []const u8) i32 {
+    const t = std.mem.trim(u8, type_str_raw, " \t\r");
+    const prim = primitiveSize(t);
+    if (prim >= 0) return prim;
+    if (std.mem.startsWith(u8, t, "arr<")) return computeArrSize(alloc, src, t);
+    return computeStructSize(alloc, src, t);
+}
+
+const libc = struct {
+    extern fn fopen(path: [*:0]const u8, mode: [*:0]const u8) ?*anyopaque;
+    extern fn fclose(f: ?*anyopaque) c_int;
+    extern fn fseek(f: ?*anyopaque, off: c_long, whence: c_int) c_int;
+    extern fn ftell(f: ?*anyopaque) c_long;
+    extern fn fread(ptr: [*]u8, size: usize, n: usize, f: ?*anyopaque) usize;
+};
+
+fn resolveTypeSize(host_api: *abi.HostApi, file: [*:0]const u8, type_name: [*:0]const u8) callconv(.c) i32 {
+    const host = Host.fromApi(host_api);
+    const type_s = std.mem.span(type_name);
+    const f = libc.fopen(file, "rb") orelse return -1;
+    defer _ = libc.fclose(f);
+    if (libc.fseek(f, 0, 2) != 0) return -1;
+    const n = libc.ftell(f);
+    if (n <= 0 or n > 64 * 1024 * 1024) return -1;
+    if (libc.fseek(f, 0, 0) != 0) return -1;
+    const sz: usize = @intCast(n);
+    const buf = host.alloc.alloc(u8, sz) catch return -1;
+    defer host.alloc.free(buf);
+    const got = libc.fread(buf.ptr, 1, sz, f);
+    return resolveSize(host.alloc, buf[0..got], type_s);
 }
 
 const manifest_mod = @import("manifest.zig");
