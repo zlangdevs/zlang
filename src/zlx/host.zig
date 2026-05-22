@@ -195,6 +195,16 @@ pub const Host = struct {
         }
     }
 
+    pub fn clearDiagnostics(self: *Host) void {
+        for (self.diagnostics.items) |item| {
+            if (item.file) |f| self.alloc.free(f);
+            self.alloc.free(item.message);
+            if (item.hint) |h| self.alloc.free(h);
+        }
+        self.diagnostics.clearRetainingCapacity();
+        self.counts.diagnostics = 0;
+    }
+
     pub fn sessionBegin(self: *Host) void {
         for (self.loaded_plugins.items) |plugin| {
             if (plugin.session_begin) |callback| callback(&self.api);

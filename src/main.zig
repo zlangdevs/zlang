@@ -749,6 +749,34 @@ fn parseErrorHint(message: []const u8) ?[]const u8 {
     return null;
 }
 
+fn printPluginDiagnostics(alloc: std.mem.Allocator, host: *const zlx_host.Host) void {
+    for (host.diagnostics.items) |diag| {
+        const severity: diagnostics.Severity = switch (diag.level) {
+            .err => .Error,
+            .warning => .Warning,
+            .note => .Note,
+        };
+        if (diag.file) |file| {
+            diagnostics.printDiagnostic(alloc, .{
+                .file_path = file,
+                .line = if (diag.line == 0) 1 else diag.line,
+                .column = if (diag.column == 0) 1 else diag.column,
+                .message = diag.message,
+                .hint = diag.hint,
+                .severity = severity,
+            });
+        } else {
+            const label = switch (severity) {
+                .Error => "error",
+                .Warning => "warning",
+                .Note => "note",
+            };
+            std.debug.print("zlx plugin {s}: {s}\n", .{ label, diag.message });
+            if (diag.hint) |hint| std.debug.print("  hint: {s}\n", .{hint});
+        }
+    }
+}
+
 fn clearZlxSourceMaps(alloc: std.mem.Allocator) void {
     for (zlx_source_maps.items) |*map| map.deinit(alloc);
     zlx_source_maps.clearRetainingCapacity();
@@ -3746,10 +3774,14 @@ pub fn main(init: std.process.Init) !u8 {
 
     var zlx_session_started = false;
     if (plugin_host_ptr) |host| {
+        host.clearDiagnostics();
         host.sessionBegin();
         zlx_session_started = true;
     }
-    defer if (zlx_session_started) plugin_host.sessionEnd();
+    defer if (zlx_session_started) {
+        plugin_host.sessionEnd();
+        printPluginDiagnostics(allocator, &plugin_host);
+    };
 
     for (ctx.input_files.items, 0..) |path, idx| {
         if (!(std.mem.endsWith(u8, path, ".b") or std.mem.endsWith(u8, path, ".bf"))) continue;
