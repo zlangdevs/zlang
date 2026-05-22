@@ -98,6 +98,11 @@ pub const HostApi = extern struct {
         file: [*:0]const u8,
         type_name: [*:0]const u8,
     ) callconv(.c) i32,
+    // api v3
+    get_cli_flag: *const fn (
+        host: *HostApi,
+        name: [*:0]const u8,
+    ) callconv(.c) ?[*:0]const u8,
 };
 
 pub const ProbeResult = extern struct {

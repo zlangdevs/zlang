@@ -22,6 +22,11 @@ pub const CliFlagRegistration = struct {
     owner: ?[]u8,
 };
 
+pub const CliFlagValue = struct {
+    name: []u8,
+    value_z: [:0]u8,
+};
+
 pub const HelpSection = struct {
     section_id: []u8,
     text: []u8,
@@ -68,6 +73,7 @@ pub const Host = struct {
     syntax_blocks: std.ArrayList(SyntaxRegistration) = .empty,
     modules: std.ArrayList(ModuleRegistration) = .empty,
     cli_flags: std.ArrayList(CliFlagRegistration) = .empty,
+    cli_flag_values: std.ArrayList(CliFlagValue) = .empty,
     link_flags: std.ArrayList(LinkFlagRegistration) = .empty,
     help_sections: std.ArrayList(HelpSection) = .empty,
     loaded_plugins: std.ArrayList(LoadedPlugin) = .empty,
@@ -101,6 +107,7 @@ pub const Host = struct {
                 .register_link_flag = registerLinkFlag,
                 .diagnostic = recordDiagnostic,
                 .resolve_type_size = resolveTypeSize,
+                .get_cli_flag = getCliFlag,
             },
             .alloc = alloc,
         };
@@ -125,6 +132,11 @@ pub const Host = struct {
             if (item.owner) |o| self.alloc.free(o);
         }
         self.cli_flags.deinit(self.alloc);
+        for (self.cli_flag_values.items) |item| {
+            self.alloc.free(item.name);
+            self.alloc.free(item.value_z);
+        }
+        self.cli_flag_values.deinit(self.alloc);
         for (self.link_flags.items) |item| {
             self.alloc.free(item.flag);
             if (item.owner) |o| self.alloc.free(o);
@@ -162,6 +174,25 @@ pub const Host = struct {
             .session_begin = session_begin,
             .session_end = session_end,
         });
+    }
+
+    pub fn setCliArgs(self: *Host, args: []const []const u8) !void {
+        for (self.cli_flag_values.items) |item| {
+            self.alloc.free(item.name);
+            self.alloc.free(item.value_z);
+        }
+        self.cli_flag_values.clearRetainingCapacity();
+
+        for (args) |arg| {
+            if (arg.len == 0 or arg[0] != '-') continue;
+            const eq = std.mem.indexOfScalar(u8, arg, '=');
+            const name = if (eq) |idx| arg[0..idx] else arg;
+            const value = if (eq) |idx| arg[idx + 1 ..] else "";
+            try self.cli_flag_values.append(self.alloc, .{
+                .name = try self.alloc.dupe(u8, name),
+                .value_z = try self.alloc.dupeZ(u8, value),
+            });
+        }
     }
 
     pub fn sessionBegin(self: *Host) void {
@@ -244,6 +275,15 @@ fn registerCliFlag(host_api: *abi.HostApi, flag_name: [*:0]const u8, help_text: 
     host.cli_flags.append(host.alloc, .{ .name = name_owned, .help = help_owned, .mandatory = mandatory != 0, .owner = host.dupeOwner() }) catch return @intFromEnum(abi.RegisterResult.invalid);
     host.counts.cli_flags += 1;
     return @intFromEnum(abi.RegisterResult.ok);
+}
+
+fn getCliFlag(host_api: *abi.HostApi, name: [*:0]const u8) callconv(.c) ?[*:0]const u8 {
+    const host = Host.fromApi(host_api);
+    const name_slice = std.mem.span(name);
+    for (host.cli_flag_values.items) |item| {
+        if (std.mem.eql(u8, item.name, name_slice)) return item.value_z.ptr;
+    }
+    return null;
 }
 
 fn registerModule(host_api: *abi.HostApi, module_name: [*:0]const u8, package_relative_path: [*:0]const u8) callconv(.c) c_int {
