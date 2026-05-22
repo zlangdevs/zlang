@@ -1,8 +1,8 @@
 const std = @import("std");
 
-pub const api_version: u32 = 1;
+pub const api_version: u32 = 2;
 pub const api_min_supported: u32 = 1;
-pub const api_max_supported: u32 = 1;
+pub const api_max_supported: u32 = 2;
 
 pub const DiagnosticLevel = enum(c_int) {
     err = 1,
@@ -83,6 +83,12 @@ pub const HostApi = extern struct {
         message: [*:0]const u8,
         hint: ?[*:0]const u8,
     ) callconv(.c) void,
+    // api v2
+    resolve_type_size: *const fn (
+        host: *HostApi,
+        file: [*:0]const u8,
+        type_name: [*:0]const u8,
+    ) callconv(.c) i32,
 };
 
 pub const ProbeResult = extern struct {
