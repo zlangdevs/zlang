@@ -10,7 +10,6 @@ pub const Error = error{
 
 pub const SourceMapEntry = struct {
     generated_offset: usize,
-    original_file: []u8,
     original_line: u32,
     original_column: u32,
 };
@@ -20,7 +19,6 @@ pub const ExpandReport = struct {
     source_map: std.ArrayList(SourceMapEntry) = .empty,
 
     pub fn deinit(self: *ExpandReport, alloc: std.mem.Allocator) void {
-        for (self.source_map.items) |entry| alloc.free(entry.original_file);
         self.source_map.deinit(alloc);
     }
 };
@@ -140,7 +138,7 @@ pub fn expandExtensionBlocks(
                         const base_offset = out.items.len;
                         const gen = output_struct.generated_zlang_source[0..generated_len];
                         try out.appendSlice(alloc, gen);
-                        try appendSourceMap(alloc, &report, file_label, base_offset, &output_struct, generated_len);
+                        try appendSourceMap(alloc, &report, base_offset, &output_struct, generated_len);
                     }
 
                     const consumed_end = if (stmt_end < input.len and input[stmt_end] == ';') stmt_end + 1 else stmt_end;
@@ -196,7 +194,7 @@ pub fn expandExtensionBlocks(
                     const base_offset = out.items.len;
                     const gen = output_struct.generated_zlang_source[0..generated_len];
                     try out.appendSlice(alloc, gen);
-                    try appendSourceMap(alloc, &report, file_label, base_offset, &output_struct, generated_len);
+                    try appendSourceMap(alloc, &report, base_offset, &output_struct, generated_len);
                 }
 
                 var consumed_end = end + 1;
@@ -229,7 +227,6 @@ pub fn expandExtensionBlocks(
 fn appendSourceMap(
     alloc: std.mem.Allocator,
     report: *ExpandReport,
-    file_label: []const u8,
     base_offset: usize,
     output: *const abi.BlockOutput,
     generated_len: usize,
@@ -240,7 +237,6 @@ fn appendSourceMap(
         if (entry.generated_offset > generated_len) continue;
         try report.source_map.append(alloc, .{
             .generated_offset = base_offset + @as(usize, @intCast(entry.generated_offset)),
-            .original_file = try alloc.dupe(u8, file_label),
             .original_line = entry.original_line,
             .original_column = entry.original_column,
         });
