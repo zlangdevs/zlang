@@ -16,6 +16,7 @@ const preprocessor = @import("preprocessor/preprocessor.zig");
 const llvm_tools = @import("llvm_tools.zig");
 const zlx_commands = @import("zlx/commands.zig");
 const zlx_host = @import("zlx/host.zig");
+const zlx_abi = @import("zlx/abi.zig");
 const zlx_runtime = @import("zlx/runtime.zig");
 const zlx_store = @import("zlx/store.zig");
 const zlx_preprocess = @import("zlx/preprocess.zig");
@@ -2506,6 +2507,8 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     try context.input_files.append(allocator, arg);
                 } else if (std.mem.endsWith(u8, arg, ".b") or std.mem.endsWith(u8, arg, ".bf")) {
                     try context.input_files.append(allocator, arg);
+                } else if (std.mem.endsWith(u8, arg, ".zlb")) {
+                    try context.input_files.append(allocator, arg);
                 } else {
                     const stat = std.Io.Dir.cwd().statFile(process_io, arg, .{}) catch |err| {
                         if (err == error.FileNotFound) {
@@ -3782,6 +3785,61 @@ pub fn main(init: std.process.Init) !u8 {
         plugin_host.sessionEnd();
         printPluginDiagnostics(allocator, &plugin_host);
     };
+
+    // api v4: plugin-registered file extensions.
+    // Iterate inputs, dispatch matching files to handlers. If a handler returns
+    // a continue_path we replace the input; otherwise we drop the file from the
+    // pipeline (the plugin already produced its final artifact).
+    {
+        var want_continue: c_int = 0;
+        for (ctx.extra_args.items) |a| if (std.mem.eql(u8, a, "-c")) { want_continue = 1; };
+
+        var write_idx: usize = 0;
+        var i: usize = 0;
+        while (i < ctx.input_files.items.len) : (i += 1) {
+            const path = ctx.input_files.items[i];
+            var matched: ?zlx_abi.FileExtensionHandler = null;
+            for (plugin_host.file_extensions.items) |reg| {
+                if (std.mem.endsWith(u8, path, reg.extension)) { matched = reg.handler; break; }
+            }
+            if (matched) |handler| {
+                const in_z = allocator.dupeZ(u8, path) catch {
+                    ctx.input_files.items[write_idx] = path;
+                    write_idx += 1;
+                    continue;
+                };
+                defer allocator.free(in_z);
+                const out_z: ?[:0]u8 = if (ctx.output.len != 0) (allocator.dupeZ(u8, ctx.output) catch null) else null;
+                defer if (out_z) |o| allocator.free(o);
+                const req = zlx_abi.FileExtensionRequest{
+                    .input_path = in_z.ptr,
+                    .output_path = if (out_z) |o| o.ptr else null,
+                    .want_continue = want_continue,
+                };
+                var result = zlx_abi.FileExtensionResult{ .continue_path = null };
+                const rc = handler(&plugin_host.api, &req, &result);
+                if (rc != 0) {
+                    std.debug.print("zlx: file extension handler failed for {s} (rc={d})\n", .{ path, rc });
+                    return 1;
+                }
+                if (result.continue_path) |cp| {
+                    const owned = allocator.dupe(u8, std.mem.span(cp)) catch {
+                        ctx.input_files.items[write_idx] = path;
+                        write_idx += 1;
+                        continue;
+                    };
+                    ctx.input_files.items[write_idx] = owned;
+                    write_idx += 1;
+                }
+                // else: file consumed, do not advance write_idx
+                continue;
+            }
+            ctx.input_files.items[write_idx] = path;
+            write_idx += 1;
+        }
+        ctx.input_files.shrinkRetainingCapacity(write_idx);
+        if (ctx.input_files.items.len == 0) return 0;
+    }
 
     for (ctx.input_files.items, 0..) |path, idx| {
         if (!(std.mem.endsWith(u8, path, ".b") or std.mem.endsWith(u8, path, ".bf"))) continue;

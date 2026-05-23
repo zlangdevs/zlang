@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define ZLANG_PLUGIN_API_VERSION 3u
+#define ZLANG_PLUGIN_API_VERSION 4u
 
 typedef struct ZlangHostApi ZlangHostApi;
 typedef struct ZlangPluginDesc ZlangPluginDesc;
@@ -16,6 +16,8 @@ typedef struct ZlangBlockSyntax ZlangBlockSyntax;
 typedef struct ZlangBlockInput ZlangBlockInput;
 typedef struct ZlangBlockOutput ZlangBlockOutput;
 typedef struct ZlangSourceMapEntry ZlangSourceMapEntry;
+typedef struct ZlangFileExtensionRequest ZlangFileExtensionRequest;
+typedef struct ZlangFileExtensionResult ZlangFileExtensionResult;
 
 typedef enum {
     ZLANG_DIAGNOSTIC_ERROR = 1,
@@ -122,6 +124,24 @@ struct ZlangHostApi {
         ZlangHostApi* host,
         const char* name
     );
+    /* api v4: register handler for a custom file extension (e.g. ".zlb"). */
+    int (*register_file_extension)(
+        ZlangHostApi* host,
+        const char* extension,
+        int (*handler)(ZlangHostApi* host,
+                       const struct ZlangFileExtensionRequest* req,
+                       struct ZlangFileExtensionResult* res)
+    );
+};
+
+struct ZlangFileExtensionRequest {
+    const char* input_path;
+    const char* output_path;     /* user's -o, or NULL */
+    int32_t want_continue;       /* 1 if -c was passed */
+};
+
+struct ZlangFileExtensionResult {
+    const char* continue_path;   /* if set, replaces input in pipeline */
 };
 
 struct ZlangProbeResult {

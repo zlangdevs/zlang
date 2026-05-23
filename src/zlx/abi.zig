@@ -1,8 +1,8 @@
 const std = @import("std");
 
-pub const api_version: u32 = 3;
+pub const api_version: u32 = 4;
 pub const api_min_supported: u32 = 1;
-pub const api_max_supported: u32 = 3;
+pub const api_max_supported: u32 = 4;
 
 pub const DiagnosticLevel = enum(c_int) {
     err = 1,
@@ -103,7 +103,32 @@ pub const HostApi = extern struct {
         host: *HostApi,
         name: [*:0]const u8,
     ) callconv(.c) ?[*:0]const u8,
+    // api v4: file extension handlers
+    register_file_extension: *const fn (
+        host: *HostApi,
+        extension: [*:0]const u8,
+        handler: FileExtensionHandler,
+    ) callconv(.c) c_int,
 };
+
+pub const FileExtensionRequest = extern struct {
+    input_path: [*:0]const u8,
+    output_path: ?[*:0]const u8,      // user's -o, or null (plugin picks default)
+    want_continue: c_int,             // 1 if -c was passed
+};
+
+pub const FileExtensionResult = extern struct {
+    // If set (non-null), zlang replaces the input file in the compilation
+    // pipeline with this path. Plugin owns the string until session_end or
+    // process exit (must outlive the handler call).
+    continue_path: ?[*:0]const u8,
+};
+
+pub const FileExtensionHandler = *const fn (
+    host: *HostApi,
+    request: *const FileExtensionRequest,
+    result: *FileExtensionResult,
+) callconv(.c) c_int;
 
 pub const ProbeResult = extern struct {
     api_min: u32,
