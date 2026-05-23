@@ -3786,10 +3786,6 @@ pub fn main(init: std.process.Init) !u8 {
         printPluginDiagnostics(allocator, &plugin_host);
     };
 
-    // api v4: plugin-registered file extensions.
-    // Iterate inputs, dispatch matching files to handlers. If a handler returns
-    // a continue_path we replace the input; otherwise we drop the file from the
-    // pipeline (the plugin already produced its final artifact).
     {
         var want_continue: c_int = 0;
         var ext_handler_fired = false;
@@ -3833,16 +3829,12 @@ pub fn main(init: std.process.Init) !u8 {
                     ctx.input_files.items[write_idx] = owned;
                     write_idx += 1;
                 }
-                // else: file consumed, do not advance write_idx
                 continue;
             }
             ctx.input_files.items[write_idx] = path;
             write_idx += 1;
         }
         ctx.input_files.shrinkRetainingCapacity(write_idx);
-        // When an ext handler fired with -c, strip -c from extra_args and
-        // restore output default — the handler's -c semantic is "produce
-        // a final native binary", not the usual "compile to .o only".
         if (ext_handler_fired and want_continue == 1) {
             var j: usize = 0;
             while (j < ctx.extra_args.items.len) {

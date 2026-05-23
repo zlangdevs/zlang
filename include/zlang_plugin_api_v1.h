@@ -53,7 +53,7 @@ struct ZlangBlockInput {
 struct ZlangBlockOutput {
     const char* generated_zlang_source;
     uint32_t generated_zlang_source_len;
-    /* api v3: optional mapping from generated source byte offsets to original source locations. */
+
     const ZlangSourceMapEntry* source_map;
     uint32_t source_map_len;
 };
@@ -113,18 +113,18 @@ struct ZlangHostApi {
         const char* message,
         const char* hint
     );
-    /* api v2: resolve type size for given file context. Returns -1 if unknown. */
+
     int32_t (*resolve_type_size)(
         ZlangHostApi* host,
         const char* file,
         const char* type_name
     );
-    /* api v3: returns NULL if absent, "" for bare flags, or the --flag=value value. */
+
     const char* (*get_cli_flag)(
         ZlangHostApi* host,
         const char* name
     );
-    /* api v4: register handler for a custom file extension (e.g. ".zlb"). */
+
     int (*register_file_extension)(
         ZlangHostApi* host,
         const char* extension,
@@ -136,12 +136,12 @@ struct ZlangHostApi {
 
 struct ZlangFileExtensionRequest {
     const char* input_path;
-    const char* output_path;     /* user's -o, or NULL */
-    int32_t want_continue;       /* 1 if -c was passed */
+    const char* output_path;
+    int32_t want_continue;
 };
 
 struct ZlangFileExtensionResult {
-    const char* continue_path;   /* if set, replaces input in pipeline */
+    const char* continue_path;
 };
 
 struct ZlangProbeResult {
@@ -158,7 +158,7 @@ struct ZlangPluginDesc {
     const char* name;
     const char* version;
     int (*register_plugin)(ZlangHostApi* host);
-    /* api v3: optional per-compilation lifecycle callbacks. */
+
     void (*session_begin)(ZlangHostApi* host);
     void (*session_end)(ZlangHostApi* host);
 };
