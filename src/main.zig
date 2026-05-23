@@ -247,6 +247,78 @@ fn cleanupBackendUnits(units: []const BackendUnit) void {
     }
 }
 
+fn findClangTool(alloc: std.mem.Allocator) ?[]const u8 {
+    return llvm_tools.getLLVMToolPath(alloc, .clang) catch null;
+}
+
+fn compileLLViaClang(alloc: std.mem.Allocator, clang_tool: []const u8, ir_path: []const u8, obj_path: []const u8, optimize: bool) !void {
+    var args: std.ArrayList([]const u8) = .empty;
+    defer args.deinit(alloc);
+    try args.append(alloc, clang_tool);
+    try args.append(alloc, "-x");
+    try args.append(alloc, "ir");
+    try args.append(alloc, "-c");
+    if (optimize) try args.append(alloc, "-O3");
+    try args.append(alloc, "-fPIC");
+    try args.append(alloc, ir_path);
+    try args.append(alloc, "-o");
+    try args.append(alloc, obj_path);
+    var threaded: std.Io.Threaded = .init(alloc, .{});
+    defer threaded.deinit();
+    const r = std.process.run(alloc, threaded.io(), .{ .argv = args.items }) catch return error.CompilationFailed;
+    if (r.term != .exited or r.term.exited != 0) {
+        std.debug.print("clang -x ir failed: {s}\n", .{r.stderr});
+        return error.CompilationFailed;
+    }
+}
+
+fn compilePrebuiltLLVMIR(
+    alloc: std.mem.Allocator,
+    ctx: *const Context,
+    ir_paths: []const []const u8,
+) !u8 {
+    var code_generator = try codegen.CodeGenerator.init(alloc);
+    defer code_generator.deinit();
+
+    var obj_files: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (obj_files.items) |o| {
+            std.Io.Dir.cwd().deleteFile(process_io, o) catch {};
+            alloc.free(o);
+        }
+        obj_files.deinit(alloc);
+    }
+
+    const clang_tool_opt = findClangTool(alloc);
+    const nonce: u64 = @intCast(nanoTimestamp());
+    for (ir_paths, 0..) |ir, idx| {
+        const obj = try std.fmt.allocPrint(alloc, "{s}.prebuilt.{d}.{d}.o", .{ ctx.output, nonce, idx });
+        try obj_files.append(alloc, obj);
+        if (clang_tool_opt) |clang_tool| {
+            try compileLLViaClang(alloc, clang_tool, ir, obj, ctx.optimize);
+        } else {
+            var llc_ns: u64 = 0;
+            try code_generator.compileIRToObjectFile(ir, obj, ctx.arch, ctx.optimize, ctx.max_threads, &llc_ns);
+        }
+    }
+
+    var timing = codegen.CodeGenerator.BackendTiming{};
+    try code_generator.linkObjectFilesToExecutable(
+        ctx.output,
+        ctx.arch,
+        obj_files.items,
+        ctx.link_objects.items,
+        ctx.extra_args.items,
+        ctx.max_threads,
+        &timing,
+    );
+
+    if (ctx.verbose and !ctx.quiet) {
+        std.debug.print("Executable compiled to {s} (pre-built LLVM IR fast path)\n", .{ctx.output});
+    }
+    return 0;
+}
+
 fn backendSplitUnitCount(max_threads: usize) usize {
     if (max_threads <= 1) return 1;
     return max_threads;
@@ -3786,6 +3858,8 @@ pub fn main(init: std.process.Init) !u8 {
         printPluginDiagnostics(allocator, &plugin_host);
     };
 
+    var prebuilt_llvm_ir: std.ArrayList([]const u8) = .empty;
+    defer prebuilt_llvm_ir.deinit(allocator);
     {
         var want_continue: c_int = 0;
         var ext_handler_fired = false;
@@ -3813,13 +3887,22 @@ pub fn main(init: std.process.Init) !u8 {
                     .output_path = if (out_z) |o| o.ptr else null,
                     .want_continue = want_continue,
                 };
-                var result = zlx_abi.FileExtensionResult{ .continue_path = null };
+                var result = zlx_abi.FileExtensionResult{ .continue_path = null, .llvm_ir_path = null };
                 const rc = handler(&plugin_host.api, &req, &result);
                 if (rc != 0) {
                     std.debug.print("zlx: file extension handler failed for {s} (rc={d})\n", .{ path, rc });
                     return 1;
                 }
                 ext_handler_fired = true;
+                if (result.llvm_ir_path) |lp| {
+                    const owned = allocator.dupe(u8, std.mem.span(lp)) catch {
+                        ctx.input_files.items[write_idx] = path;
+                        write_idx += 1;
+                        continue;
+                    };
+                    prebuilt_llvm_ir.append(allocator, owned) catch {};
+                    continue;
+                }
                 if (result.continue_path) |cp| {
                     const owned = allocator.dupe(u8, std.mem.span(cp)) catch {
                         ctx.input_files.items[write_idx] = path;
@@ -3843,6 +3926,12 @@ pub fn main(init: std.process.Init) !u8 {
                 } else j += 1;
             }
             if (std.mem.eql(u8, ctx.output, "output.o")) ctx.output = "a.out";
+        }
+        if (ctx.input_files.items.len == 0 and prebuilt_llvm_ir.items.len > 0) {
+            return compilePrebuiltLLVMIR(allocator, &ctx, prebuilt_llvm_ir.items) catch |err| blk: {
+                std.debug.print("Error compiling pre-built LLVM IR: {}\n", .{err});
+                break :blk 1;
+            };
         }
         if (ctx.input_files.items.len == 0) return 0;
     }
