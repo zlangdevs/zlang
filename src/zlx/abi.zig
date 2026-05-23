@@ -38,7 +38,6 @@ pub const BlockInput = extern struct {
 pub const BlockOutput = extern struct {
     generated_zlang_source: [*]const u8,
     generated_zlang_source_len: u32,
-    // api v3
     source_map: ?[*]const SourceMapEntry,
     source_map_len: u32,
 };
@@ -92,18 +91,15 @@ pub const HostApi = extern struct {
         message: [*:0]const u8,
         hint: ?[*:0]const u8,
     ) callconv(.c) void,
-    // api v2
     resolve_type_size: *const fn (
         host: *HostApi,
         file: [*:0]const u8,
         type_name: [*:0]const u8,
     ) callconv(.c) i32,
-    // api v3
     get_cli_flag: *const fn (
         host: *HostApi,
         name: [*:0]const u8,
     ) callconv(.c) ?[*:0]const u8,
-    // api v4: file extension handlers
     register_file_extension: *const fn (
         host: *HostApi,
         extension: [*:0]const u8,
@@ -113,14 +109,11 @@ pub const HostApi = extern struct {
 
 pub const FileExtensionRequest = extern struct {
     input_path: [*:0]const u8,
-    output_path: ?[*:0]const u8,      // user's -o, or null (plugin picks default)
-    want_continue: c_int,             // 1 if -c was passed
+    output_path: ?[*:0]const u8,
+    want_continue: c_int,
 };
 
 pub const FileExtensionResult = extern struct {
-    // If set (non-null), zlang replaces the input file in the compilation
-    // pipeline with this path. Plugin owns the string until session_end or
-    // process exit (must outlive the handler call).
     continue_path: ?[*:0]const u8,
 };
 
@@ -144,7 +137,6 @@ pub const PluginDesc = extern struct {
     name: [*:0]const u8,
     version: [*:0]const u8,
     register_plugin: *const fn (host: *HostApi) callconv(.c) c_int,
-    // api v3
     session_begin: ?*const fn (host: *HostApi) callconv(.c) void,
     session_end: ?*const fn (host: *HostApi) callconv(.c) void,
 };
