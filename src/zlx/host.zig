@@ -44,6 +44,12 @@ pub const LoadedPlugin = struct {
     session_end: ?*const fn (host: *abi.HostApi) callconv(.c) void,
 };
 
+pub const FileExtensionRegistration = struct {
+    extension: []u8,
+    handler: abi.FileExtensionHandler,
+    owner: ?[]u8,
+};
+
 pub const Diagnostic = struct {
     level: abi.DiagnosticLevel,
     file: ?[]u8,
@@ -77,6 +83,7 @@ pub const Host = struct {
     link_flags: std.ArrayList(LinkFlagRegistration) = .empty,
     help_sections: std.ArrayList(HelpSection) = .empty,
     loaded_plugins: std.ArrayList(LoadedPlugin) = .empty,
+    file_extensions: std.ArrayList(FileExtensionRegistration) = .empty,
     diagnostics: std.ArrayList(Diagnostic) = .empty,
     counts: Counts = .{},
     current_owner: ?[]u8 = null,
@@ -108,6 +115,7 @@ pub const Host = struct {
                 .diagnostic = recordDiagnostic,
                 .resolve_type_size = resolveTypeSize,
                 .get_cli_flag = getCliFlag,
+                .register_file_extension = registerFileExtension,
             },
             .alloc = alloc,
         };
@@ -150,6 +158,11 @@ pub const Host = struct {
         self.help_sections.deinit(self.alloc);
         for (self.loaded_plugins.items) |item| self.alloc.free(item.name);
         self.loaded_plugins.deinit(self.alloc);
+        for (self.file_extensions.items) |item| {
+            self.alloc.free(item.extension);
+            if (item.owner) |o| self.alloc.free(o);
+        }
+        self.file_extensions.deinit(self.alloc);
         for (self.diagnostics.items) |item| {
             if (item.file) |f| self.alloc.free(f);
             self.alloc.free(item.message);
@@ -294,6 +307,27 @@ fn getCliFlag(host_api: *abi.HostApi, name: [*:0]const u8) callconv(.c) ?[*:0]co
         if (std.mem.eql(u8, item.name, name_slice)) return item.value_z.ptr;
     }
     return null;
+}
+
+fn registerFileExtension(
+    host_api: *abi.HostApi,
+    extension: [*:0]const u8,
+    handler: abi.FileExtensionHandler,
+) callconv(.c) c_int {
+    const host = Host.fromApi(host_api);
+    const ext_slice = std.mem.span(extension);
+    for (host.file_extensions.items) |item| {
+        if (std.mem.eql(u8, item.extension, ext_slice)) {
+            return @intFromEnum(abi.RegisterResult.duplicate);
+        }
+    }
+    const ext_owned = host.alloc.dupe(u8, ext_slice) catch return @intFromEnum(abi.RegisterResult.invalid);
+    host.file_extensions.append(host.alloc, .{
+        .extension = ext_owned,
+        .handler = handler,
+        .owner = host.dupeOwner(),
+    }) catch return @intFromEnum(abi.RegisterResult.invalid);
+    return @intFromEnum(abi.RegisterResult.ok);
 }
 
 fn registerModule(host_api: *abi.HostApi, module_name: [*:0]const u8, package_relative_path: [*:0]const u8) callconv(.c) c_int {
