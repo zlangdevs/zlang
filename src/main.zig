@@ -3792,6 +3792,7 @@ pub fn main(init: std.process.Init) !u8 {
     // pipeline (the plugin already produced its final artifact).
     {
         var want_continue: c_int = 0;
+        var ext_handler_fired = false;
         for (ctx.extra_args.items) |a| if (std.mem.eql(u8, a, "-c")) { want_continue = 1; };
 
         var write_idx: usize = 0;
@@ -3822,6 +3823,7 @@ pub fn main(init: std.process.Init) !u8 {
                     std.debug.print("zlx: file extension handler failed for {s} (rc={d})\n", .{ path, rc });
                     return 1;
                 }
+                ext_handler_fired = true;
                 if (result.continue_path) |cp| {
                     const owned = allocator.dupe(u8, std.mem.span(cp)) catch {
                         ctx.input_files.items[write_idx] = path;
@@ -3838,6 +3840,18 @@ pub fn main(init: std.process.Init) !u8 {
             write_idx += 1;
         }
         ctx.input_files.shrinkRetainingCapacity(write_idx);
+        // When an ext handler fired with -c, strip -c from extra_args and
+        // restore output default — the handler's -c semantic is "produce
+        // a final native binary", not the usual "compile to .o only".
+        if (ext_handler_fired and want_continue == 1) {
+            var j: usize = 0;
+            while (j < ctx.extra_args.items.len) {
+                if (std.mem.eql(u8, ctx.extra_args.items[j], "-c")) {
+                    _ = ctx.extra_args.orderedRemove(j);
+                } else j += 1;
+            }
+            if (std.mem.eql(u8, ctx.output, "output.o")) ctx.output = "a.out";
+        }
         if (ctx.input_files.items.len == 0) return 0;
     }
 
