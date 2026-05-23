@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define ZLANG_PLUGIN_API_VERSION 4u
+#define ZLANG_PLUGIN_API_VERSION 5u
 
 typedef struct ZlangHostApi ZlangHostApi;
 typedef struct ZlangPluginDesc ZlangPluginDesc;
@@ -142,6 +142,9 @@ struct ZlangFileExtensionRequest {
 
 struct ZlangFileExtensionResult {
     const char* continue_path;
+    /* If non-NULL, treat as a pre-generated LLVM IR (.ll) file to feed directly
+     * to llc/linker, bypassing parse/sem/codegen. Added in API v5. */
+    const char* llvm_ir_path;
 };
 
 struct ZlangProbeResult {

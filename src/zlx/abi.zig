@@ -1,8 +1,8 @@
 const std = @import("std");
 
-pub const api_version: u32 = 4;
+pub const api_version: u32 = 5;
 pub const api_min_supported: u32 = 1;
-pub const api_max_supported: u32 = 4;
+pub const api_max_supported: u32 = 5;
 
 pub const DiagnosticLevel = enum(c_int) {
     err = 1,
@@ -115,6 +115,7 @@ pub const FileExtensionRequest = extern struct {
 
 pub const FileExtensionResult = extern struct {
     continue_path: ?[*:0]const u8,
+    llvm_ir_path: ?[*:0]const u8 = null,
 };
 
 pub const FileExtensionHandler = *const fn (
