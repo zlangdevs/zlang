@@ -41,6 +41,10 @@ jobs:
           so=$(find /usr/lib -name 'libLLVM-22.so*' -o -name 'libLLVM.so.22*' 2>/dev/null | sort | tail -1)
           echo "libLLVM: $so"
           [ -n "$so" ] && sudo ln -sf "$so" /usr/lib/libLLVM-22.so
+          inc=$(llvm-config-22 --includedir 2>/dev/null || echo /usr/lib/llvm-22/include)
+          echo "llvm includedir: $inc"
+          sudo ln -sf "$inc/llvm-c" /usr/include/llvm-c
+          sudo ln -sf "$inc/llvm" /usr/include/llvm
       - name: Build
         run: zig build -Doptimize=ReleaseFast
       - name: Run integration suite
