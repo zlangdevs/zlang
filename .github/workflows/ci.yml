@@ -25,13 +25,16 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
-      - name: Install flex, bison, LLVM/Clang
+      - name: Install flex, bison, LLVM/Clang 22
         run: |
           sudo apt-get update
-          sudo apt-get install -y flex bison llvm clang lld llvm-dev libclang-dev
+          sudo apt-get install -y flex bison
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22 all
           for t in llc opt clang lld ld.lld lli llvm-config; do
             if ! command -v "$t" >/dev/null; then
-              v=$(ls /usr/bin/${t}-* 2>/dev/null | sort -V | tail -1 || true)
+              v=$(ls /usr/bin/${t}-22 2>/dev/null || true)
               [ -n "$v" ] && sudo ln -sf "$v" /usr/bin/$t
             fi
           done
