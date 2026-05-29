@@ -275,3 +275,85 @@ fn atStatementStart(input: []const u8, start: usize) bool {
     }
     return true;
 }
+
+const testing = std.testing;
+
+fn testMarkerHandler(host: *abi.HostApi, input: *const abi.BlockInput, output: *abi.BlockOutput) callconv(.c) c_int {
+    _ = host;
+    _ = input;
+    const marker: []const u8 = "MARK";
+    output.* = .{
+        .generated_zlang_source = marker.ptr,
+        .generated_zlang_source_len = @intCast(marker.len),
+        .source_map = null,
+        .source_map_len = 0,
+    };
+    return 0;
+}
+
+fn expandForTest(alloc: std.mem.Allocator, host: *host_mod.Host, input: []const u8) ![]u8 {
+    var res = try expandExtensionBlocks(alloc, host, "test.zl", input);
+    res.report.deinit(alloc);
+    return res.source;
+}
+
+fn hostWithBlock(host: *host_mod.Host) void {
+    const syntax = abi.BlockSyntax{ .mode = .brace_counting, .terminator = null };
+    _ = host.api.register_syntax_block(&host.api, "blk", &syntax, testMarkerHandler);
+}
+
+test "expand: brace and statement forms invoke the handler" {
+    const alloc = testing.allocator;
+    var host = host_mod.Host.init(alloc);
+    defer host.deinit();
+    hostWithBlock(&host);
+
+    const brace = try expandForTest(alloc, &host, "blk { body }");
+    defer alloc.free(brace);
+    try testing.expect(std.mem.indexOf(u8, brace, "MARK") != null);
+
+    const stmt = try expandForTest(alloc, &host, "blk foo;");
+    defer alloc.free(stmt);
+    try testing.expect(std.mem.indexOf(u8, stmt, "MARK") != null);
+}
+
+test "expand: function-call form is not hijacked by an extension keyword" {
+    const alloc = testing.allocator;
+    var host = host_mod.Host.init(alloc);
+    defer host.deinit();
+    hostWithBlock(&host);
+
+    const call = try expandForTest(alloc, &host, "blk(x);");
+    defer alloc.free(call);
+    try testing.expect(std.mem.indexOf(u8, call, "MARK") == null);
+    try testing.expect(std.mem.indexOf(u8, call, "blk(x);") != null);
+
+    const spaced = try expandForTest(alloc, &host, "blk (x);");
+    defer alloc.free(spaced);
+    try testing.expect(std.mem.indexOf(u8, spaced, "MARK") == null);
+}
+
+test "expand: keywords inside strings and comments are left alone" {
+    const alloc = testing.allocator;
+    var host = host_mod.Host.init(alloc);
+    defer host.deinit();
+    hostWithBlock(&host);
+
+    const in_str = try expandForTest(alloc, &host, "\"blk { x }\"");
+    defer alloc.free(in_str);
+    try testing.expect(std.mem.indexOf(u8, in_str, "MARK") == null);
+
+    const in_comment = try expandForTest(alloc, &host, "?? blk { x }\n");
+    defer alloc.free(in_comment);
+    try testing.expect(std.mem.indexOf(u8, in_comment, "MARK") == null);
+}
+
+test "expand: input is unchanged when no blocks are registered" {
+    const alloc = testing.allocator;
+    var host = host_mod.Host.init(alloc);
+    defer host.deinit();
+    const src = "fun main() >> i32 { return 0; }";
+    const out = try expandForTest(alloc, &host, src);
+    defer alloc.free(out);
+    try testing.expectEqualStrings(src, out);
+}

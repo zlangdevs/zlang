@@ -161,7 +161,8 @@ pub fn checkApiRange(plugin_min: u32, plugin_max: u32) Compatibility {
 }
 
 test "api range compatibility" {
-    try std.testing.expectEqual(Compatibility.compatible, checkApiRange(1, 1));
-    try std.testing.expectEqual(Compatibility.api_too_new, checkApiRange(2, 3));
-    try std.testing.expectEqual(Compatibility.api_too_old, checkApiRange(0, 0));
+    try std.testing.expectEqual(Compatibility.compatible, checkApiRange(api_min_supported, api_max_supported));
+    try std.testing.expectEqual(Compatibility.compatible, checkApiRange(api_max_supported, api_max_supported));
+    try std.testing.expectEqual(Compatibility.api_too_new, checkApiRange(api_max_supported + 1, api_max_supported + 2));
+    try std.testing.expectEqual(Compatibility.api_too_old, checkApiRange(0, api_min_supported - 1));
 }
