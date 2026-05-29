@@ -19,7 +19,6 @@ jobs:
   build-and-integration:
     name: Build + integration suite
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -47,7 +46,8 @@ jobs:
           sudo ln -sf "$inc/llvm" /usr/include/llvm
       - name: Build
         run: zig build -Doptimize=ReleaseFast
-      - name: Run integration suite
+      - name: Run integration suite (informational)
+        continue-on-error: true
         run: ./run_tests.sh
         env:
           ZSTDPATH: ${{ github.workspace }}/stdlib
