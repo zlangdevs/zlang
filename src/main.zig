@@ -1120,7 +1120,7 @@ fn printToolVersion(alloc: std.mem.Allocator, label: []const u8, tool: llvm_tool
 }
 
 fn printVersionInfo() void {
-    std.debug.print("zlang compiler\n", .{});
+    std.debug.print("{s} {s}\n", .{ consts.NAME, consts.VERSION });
     std.debug.print("  Zig: {s}\n", .{@import("builtin").zig_version_string});
     if (build_options.llvm_version_major != 0) {
         std.debug.print("  LLVM linked: {d}\n", .{build_options.llvm_version_major});
@@ -3652,7 +3652,7 @@ pub fn main(init: std.process.Init) !u8 {
         }
         return 0;
     }
-    if (std.mem.eql(u8, args[1], "-version")) {
+    if (std.mem.eql(u8, args[1], "-version") or std.mem.eql(u8, args[1], "--version") or std.mem.eql(u8, args[1], "version")) {
         printVersionInfo();
         return 0;
     }

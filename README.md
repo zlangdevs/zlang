@@ -270,13 +270,16 @@ exercises the more recent features.
 
 ## Building from source
 
-Requires Zig 0.15.2, Flex, Bison 3.x+, LLVM/Clang.
+Requires Zig 0.16.0, Flex, Bison 3.x+, LLVM/Clang 22. Currently
+targets `linux-x86_64`.
 
 ```bash
 git clone https://github.com/zlangdevs/zlang
 cd zlang
 zig build -Doptimize=ReleaseFast
 ```
+
+Check your build with `zlang version`.
 
 ## Editor support
 

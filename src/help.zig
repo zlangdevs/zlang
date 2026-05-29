@@ -1,4 +1,5 @@
 const std = @import("std");
+const consts = @import("consts.zig");
 
 const red = "\x1b[31m";
 const green = "\x1b[32m";
@@ -39,6 +40,7 @@ pub fn printLogo() void {
         cyan,
         reset,
     });
+    std.debug.print("  {s}zlang {s}{s}\n\n", .{ bold, consts.VERSION, reset });
 }
 
 pub fn printHelp() void {
