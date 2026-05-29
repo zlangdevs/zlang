@@ -571,3 +571,33 @@ test "host records registrations and detects duplicates" {
     try std.testing.expectEqual(@as(usize, 1), host.counts.syntax_blocks);
     try std.testing.expectEqual(@as(usize, 1), host.counts.duplicate_syntax_blocks);
 }
+
+test "resolveSize: primitives and pointers" {
+    const a = std.testing.allocator;
+    try std.testing.expectEqual(@as(i32, 1), resolveSize(a, "", "u8"));
+    try std.testing.expectEqual(@as(i32, 1), resolveSize(a, "", "bool"));
+    try std.testing.expectEqual(@as(i32, 4), resolveSize(a, "", "i32"));
+    try std.testing.expectEqual(@as(i32, 8), resolveSize(a, "", "f64"));
+    try std.testing.expectEqual(@as(i32, 8), resolveSize(a, "", "ptr<i32>"));
+    try std.testing.expectEqual(@as(i32, -1), resolveSize(a, "", "nonsense"));
+}
+
+test "resolveSize: fixed arrays" {
+    const a = std.testing.allocator;
+    try std.testing.expectEqual(@as(i32, 16), resolveSize(a, "", "arr<i32, 4>"));
+    try std.testing.expectEqual(@as(i32, 3), resolveSize(a, "", "arr<u8, 3>"));
+}
+
+test "resolveSize: struct layout respects field alignment" {
+    const a = std.testing.allocator;
+    const src = "struct P { x i32, y i64, }";
+    try std.testing.expectEqual(@as(i32, 16), resolveSize(a, src, "P"));
+    const packed_src = "struct Q { a u8, b u8, c u8, }";
+    try std.testing.expectEqual(@as(i32, 3), resolveSize(a, packed_src, "Q"));
+}
+
+test "splitTopComma ignores commas nested in generics" {
+    try std.testing.expectEqual(@as(?usize, 3), splitTopComma("i32, 4"));
+    try std.testing.expectEqual(@as(?usize, 8), splitTopComma("arr<a,b>, x"));
+    try std.testing.expectEqual(@as(?usize, null), splitTopComma("ptr<i32>"));
+}
