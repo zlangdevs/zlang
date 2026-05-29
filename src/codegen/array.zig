@@ -187,6 +187,12 @@ pub fn getArrayElementPtrAndType(self: *CodeGenerator, arr_idx: ast.ArrayIndex) 
         return .{ .ptr = element_ptr, .element_type = element_type, .element_type_name = element_type_name };
     }
 
+    const base_kind = c.LLVMGetTypeKind(base_type);
+    if (base_kind != c.LLVMArrayTypeKind and base_kind != c.LLVMVectorTypeKind) {
+        self.reportErrorFmt("Cannot index value of type '{s}'", .{base_type_name}, "Only arrays, pointers and slices can be indexed");
+        return errors.CodegenError.TypeMismatch;
+    }
+
     index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
     try collected_indices.append(self.allocator, index_value);
     var all_indices: std.ArrayList(c.LLVMValueRef) = .empty;
@@ -656,6 +662,12 @@ pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayInde
         var indices = [_]c.LLVMValueRef{idx};
         const element_ptr = c.LLVMBuildGEP2(self.builder, element_type, loaded_ptr, &indices[0], 1, "slice_element_ptr");
         return c.LLVMBuildLoad2(self.builder, element_type, element_ptr, "slice_element");
+    }
+
+    const base_kind = c.LLVMGetTypeKind(base_type);
+    if (base_kind != c.LLVMArrayTypeKind and base_kind != c.LLVMVectorTypeKind) {
+        self.reportErrorFmt("Cannot index value of type '{s}'", .{base_type_name}, "Only arrays, pointers and slices can be indexed");
+        return errors.CodegenError.TypeMismatch;
     }
 
     index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
