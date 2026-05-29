@@ -1000,6 +1000,10 @@ pub const CodeGenerator = struct {
     }
 
     pub fn generateStatement(self: *CodeGenerator, stmt: *ast.Node) errors.CodegenError!void {
+        const current_block = c.LLVMGetInsertBlock(@ptrCast(self.builder));
+        if (current_block != null and c.LLVMGetBasicBlockTerminator(current_block) != null and stmt.data != .label_stmt) {
+            return;
+        }
         self.setCurrentNodeContext(stmt);
         switch (stmt.data) {
             .assignment => |as| {
