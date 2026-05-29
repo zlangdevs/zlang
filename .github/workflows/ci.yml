@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit-tests:
+    name: Unit tests (pure Zig)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: zig build test
+        run: zig build test --summary all
+
+  build-and-integration:
+    name: Build + integration suite
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install flex, bison, LLVM/Clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flex bison llvm clang lld llvm-dev libclang-dev
+          for t in llc opt clang lld ld.lld lli llvm-config; do
+            if ! command -v "$t" >/dev/null; then
+              v=$(ls /usr/bin/${t}-* 2>/dev/null | sort -V | tail -1 || true)
+              [ -n "$v" ] && sudo ln -sf "$v" /usr/bin/$t
+            fi
+          done
+      - name: Build
+        run: zig build -Doptimize=ReleaseFast
+      - name: Run integration suite
+        run: ./run_tests.sh
+        env:
+          ZSTDPATH: ${{ github.workspace }}/stdlib
