@@ -38,6 +38,9 @@ jobs:
               [ -n "$v" ] && sudo ln -sf "$v" /usr/bin/$t
             fi
           done
+          so=$(find /usr/lib -name 'libLLVM-22.so*' -o -name 'libLLVM.so.22*' 2>/dev/null | sort | tail -1)
+          echo "libLLVM: $so"
+          [ -n "$so" ] && sudo ln -sf "$so" /usr/lib/libLLVM-22.so
       - name: Build
         run: zig build -Doptimize=ReleaseFast
       - name: Run integration suite
