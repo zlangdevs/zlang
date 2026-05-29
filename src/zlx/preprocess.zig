@@ -87,6 +87,7 @@ pub fn expandExtensionBlocks(
                 if (!atStatementStart(input, start)) break :brace_path;
                 var k = j;
                 while (k < input.len and (input[k] == ' ' or input[k] == '\t' or input[k] == '\r' or input[k] == '\n')) : (k += 1) {}
+                if (k < input.len and input[k] == '(') break :brace_path;
                 if (k >= input.len or input[k] != '{') {
                     const stmt_start = j;
                     var stmt_end = stmt_start;
