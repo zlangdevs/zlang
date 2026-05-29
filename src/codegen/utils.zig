@@ -183,9 +183,6 @@ pub fn getDefaultValueForType(cg: *codegen.CodeGenerator, type_name: []const u8)
         }
         return c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0);
     }
-    // Pointers, structs, enums, arrays, etc.: a zeroinitializer of the actual
-    // type, so the implicit epilogue return matches the function signature
-    // (otherwise a non-i32 return emitted a bogus `ret i32 0`).
     if (getLLVMTypeSilent(cg, type_name)) |llvm_type| {
         return c.LLVMConstNull(llvm_type);
     } else |_| {
