@@ -1,8 +1,8 @@
 const std = @import("std");
 
-pub const api_version: u32 = 5;
+pub const api_version: u32 = 6;
 pub const api_min_supported: u32 = 1;
-pub const api_max_supported: u32 = 5;
+pub const api_max_supported: u32 = 6;
 
 pub const DiagnosticLevel = enum(c_int) {
     err = 1,
@@ -20,7 +20,22 @@ pub const RegisterResult = enum(c_int) {
     duplicate = 1,
     invalid = 2,
     unsupported = 3,
+    reserved = 4,
 };
+
+pub const core_keywords = [_][]const u8{
+    "as",    "break", "const",  "continue", "defer", "else",
+    "enum",  "error", "for",    "fun",      "goto",  "if",
+    "match", "null",  "on",     "return",   "send",  "solicit",
+    "struct", "union", "use",   "when",     "wrap",
+};
+
+pub fn isCoreKeyword(name: []const u8) bool {
+    for (core_keywords) |kw| {
+        if (std.mem.eql(u8, kw, name)) return true;
+    }
+    return false;
+}
 
 pub const BlockSyntax = extern struct {
     mode: DelimiterMode,
@@ -104,6 +119,12 @@ pub const HostApi = extern struct {
         host: *HostApi,
         extension: [*:0]const u8,
         handler: FileExtensionHandler,
+    ) callconv(.c) c_int,
+    register_keyword_block: *const fn (
+        host: *HostApi,
+        name: [*:0]const u8,
+        syntax: *const BlockSyntax,
+        handler: BlockHandler,
     ) callconv(.c) c_int,
 };
 

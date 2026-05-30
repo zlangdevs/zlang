@@ -116,6 +116,7 @@ pub const Host = struct {
                 .resolve_type_size = resolveTypeSize,
                 .get_cli_flag = getCliFlag,
                 .register_file_extension = registerFileExtension,
+                .register_keyword_block = registerKeywordBlock,
             },
             .alloc = alloc,
         };
@@ -247,6 +248,27 @@ fn registerSyntaxBlock(
     syntax: *const abi.BlockSyntax,
     handler: abi.BlockHandler,
 ) callconv(.c) c_int {
+    if (abi.isCoreKeyword(std.mem.span(name))) {
+        return @intFromEnum(abi.RegisterResult.reserved);
+    }
+    return doRegisterSyntaxBlock(host_api, name, syntax, handler);
+}
+
+fn registerKeywordBlock(
+    host_api: *abi.HostApi,
+    name: [*:0]const u8,
+    syntax: *const abi.BlockSyntax,
+    handler: abi.BlockHandler,
+) callconv(.c) c_int {
+    return doRegisterSyntaxBlock(host_api, name, syntax, handler);
+}
+
+fn doRegisterSyntaxBlock(
+    host_api: *abi.HostApi,
+    name: [*:0]const u8,
+    syntax: *const abi.BlockSyntax,
+    handler: abi.BlockHandler,
+) c_int {
     const host = Host.fromApi(host_api);
     const name_slice = std.mem.span(name);
     for (host.syntax_blocks.items) |item| {
@@ -600,4 +622,21 @@ test "splitTopComma ignores commas nested in generics" {
     try std.testing.expectEqual(@as(?usize, 3), splitTopComma("i32, 4"));
     try std.testing.expectEqual(@as(?usize, 8), splitTopComma("arr<a,b>, x"));
     try std.testing.expectEqual(@as(?usize, null), splitTopComma("ptr<i32>"));
+}
+
+test "syntax block registration rejects core keywords unless declared explicitly" {
+    const alloc = std.testing.allocator;
+    var host = Host.init(alloc);
+    defer host.deinit();
+    const syntax = abi.BlockSyntax{ .mode = .brace_counting, .terminator = null };
+
+    const reserved = host.api.register_syntax_block(&host.api, "send", &syntax, noopHandler);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(abi.RegisterResult.reserved)), reserved);
+    try std.testing.expectEqual(@as(usize, 0), host.counts.syntax_blocks);
+
+    const ok = host.api.register_syntax_block(&host.api, "chsend", &syntax, noopHandler);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(abi.RegisterResult.ok)), ok);
+
+    const overridden = host.api.register_keyword_block(&host.api, "send", &syntax, noopHandler);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(abi.RegisterResult.ok)), overridden);
 }

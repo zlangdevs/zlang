@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define ZLANG_PLUGIN_API_VERSION 5u
+#define ZLANG_PLUGIN_API_VERSION 6u
 
 typedef struct ZlangHostApi ZlangHostApi;
 typedef struct ZlangPluginDesc ZlangPluginDesc;
@@ -34,7 +34,10 @@ typedef enum {
     ZLANG_REGISTER_OK = 0,
     ZLANG_REGISTER_DUPLICATE = 1,
     ZLANG_REGISTER_INVALID = 2,
-    ZLANG_REGISTER_UNSUPPORTED = 3
+    ZLANG_REGISTER_UNSUPPORTED = 3,
+    /* register_syntax_block refused a name that is a core language keyword.
+     * Use register_keyword_block to override a keyword on purpose. Added v6. */
+    ZLANG_REGISTER_RESERVED = 4
 } ZlangRegisterResult;
 
 struct ZlangBlockSyntax {
@@ -131,6 +134,16 @@ struct ZlangHostApi {
         int (*handler)(ZlangHostApi* host,
                        const struct ZlangFileExtensionRequest* req,
                        struct ZlangFileExtensionResult* res)
+    );
+
+    /* Like register_syntax_block, but explicitly permits a name that collides
+     * with a core language keyword (e.g. `send`). register_syntax_block returns
+     * ZLANG_REGISTER_RESERVED for such names; this is the opt-in path. Added v6. */
+    int (*register_keyword_block)(
+        ZlangHostApi* host,
+        const char* name,
+        const ZlangBlockSyntax* syntax,
+        ZlangBlockHandler handler
     );
 };
 
