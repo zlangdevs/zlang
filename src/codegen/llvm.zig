@@ -830,7 +830,7 @@ pub const CodeGenerator = struct {
                 try self.emitMemcpy(var_info.value, value_raw, var_info.type_ref);
                 return;
             }
-            const final_value = try self.castWithSourceRules(value_raw, @ptrCast(var_info.type_ref), as.value);
+            const final_value = try self.castWithSourceRulesNamed(value_raw, @ptrCast(var_info.type_ref), as.value, var_info.type_name);
             _ = c.LLVMBuildStore(@ptrCast(self.builder), @ptrCast(final_value), @ptrCast(var_info.value));
         }
     }
@@ -960,7 +960,7 @@ pub const CodeGenerator = struct {
             self.setCurrentNodeContext(pending.initializer);
             self.setCurrentModuleByGlobal(pending.global_name);
             const value_raw = try self.generateExpressionWithContext(pending.initializer, pending.type_name);
-            const final_value = try self.castWithSourceRules(value_raw, pending.type_ref, pending.initializer);
+            const final_value = try self.castWithSourceRulesNamed(value_raw, pending.type_ref, pending.initializer, pending.type_name);
             _ = c.LLVMBuildStore(self.builder, final_value, pending.global_var);
         }
 
@@ -1231,12 +1231,12 @@ pub const CodeGenerator = struct {
                                         try self.emitMemcpy(alloca, src_var.value, var_type);
                                     } else {
                                         const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
-                                        const casted_value = try self.castWithSourceRules(init_value, var_type, initializer);
+                                        const casted_value = try self.castWithSourceRulesNamed(init_value, var_type, initializer, decl.type_name);
                                         _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                                     }
                                 } else {
                                     const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
-                                    const casted_value = try self.castWithSourceRules(init_value, var_type, initializer);
+                                    const casted_value = try self.castWithSourceRulesNamed(init_value, var_type, initializer, decl.type_name);
                                     _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                                 }
                             } else {
@@ -1262,12 +1262,12 @@ pub const CodeGenerator = struct {
                                     try self.emitMemcpy(alloca, init_value, var_type);
                                     return;
                                 }
-                                const casted_value = try self.castWithSourceRules(init_value, var_type, initializer);
+                                const casted_value = try self.castWithSourceRulesNamed(init_value, var_type, initializer, decl.type_name);
                                 _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                             }
                         } else {
                             const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
-                            const casted_value = try self.castWithSourceRules(init_value, var_type, initializer);
+                            const casted_value = try self.castWithSourceRulesNamed(init_value, var_type, initializer, decl.type_name);
                             _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                         }
                     } else if (c.LLVMGetTypeKind(var_type) == c.LLVMStructTypeKind) {
@@ -3373,6 +3373,10 @@ pub const CodeGenerator = struct {
     }
 
     pub fn castWithSourceRules(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef, value_node: ?*ast.Node) errors.CodegenError!c.LLVMValueRef {
+        return self.castWithSourceRulesNamed(value, target_type, value_node, null);
+    }
+
+    pub fn castWithSourceRulesNamed(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef, value_node: ?*ast.Node, target_type_name: ?[]const u8) errors.CodegenError!c.LLVMValueRef {
         var val = value;
         var from_ty = c.LLVMTypeOf(val);
         var source_type_name: ?[]const u8 = null;
@@ -3409,6 +3413,17 @@ pub const CodeGenerator = struct {
                     const named_ty = try self.getLLVMType(tn);
                     val = self.castToTypeWithSourceInfo(val, @ptrCast(named_ty), source_type_name);
                     from_ty = @ptrCast(named_ty);
+                }
+            }
+        }
+        if (target_type_name) |tname| {
+            if (source_type_name) |sname| {
+                if (utils.isIntPrimitive(sname) and utils.isIntPrimitive(tname) and
+                    !std.mem.eql(u8, sname, tname) and
+                    utils.isUnsignedType(sname) != utils.isUnsignedType(tname))
+                {
+                    self.reportErrorFmt("Type mismatch: cannot implicitly convert {s} to {s} (signedness differs)", .{ sname, tname }, "Add an explicit cast (as <type> or as _)");
+                    return errors.CodegenError.TypeMismatch;
                 }
             }
         }
