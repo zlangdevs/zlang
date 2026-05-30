@@ -437,6 +437,14 @@ pub fn isUnsignedType(type_name: []const u8) bool {
     return std.mem.startsWith(u8, type_name, "u") or std.mem.eql(u8, type_name, "bool");
 }
 
+pub fn isIntPrimitive(type_name: []const u8) bool {
+    const ints = [_][]const u8{ "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64" };
+    for (ints) |t| {
+        if (std.mem.eql(u8, t, type_name)) return true;
+    }
+    return false;
+}
+
 pub fn isFloatType(type_name: []const u8) bool {
     return std.mem.eql(u8, type_name, "f16") or
         std.mem.eql(u8, type_name, "f32") or
