@@ -7,14 +7,6 @@ fun change_val(n: i32) >> i32 { ?? in fact not change val, lol
     return 0;
 }
 
-fun sub_bytes(n: u16) >> u16 {
-    brainfuck{
-        ?load n 0?
-        [->-<]
-    };
-    return n;
-}
-
 fun none(n:u16)>>u16{return n;}
 
 fun lot_of_args(a: i32, b: i32, c: i32, d: i32,
@@ -37,7 +29,6 @@ fun main() >> i32 {
     @printf("(expected 5):%d\n", five);
     u16 one = 1;
     ?? for some reason if use just 1 as literal autocast doesn't work
-    @printf("(expected 3):%d\n", sub_bytes(260));
     @printf("(expected 1):%d\n", none(none(none(none(none(none(none(none(none(none(none(none(none(one))))))))))))));
     @printf("(expected 20):%d\n", 
         lot_of_args(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
