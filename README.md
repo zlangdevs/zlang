@@ -1,51 +1,40 @@
 # ZLang
 
-A small systems language that compiles to LLVM IR. C-like syntax,
-modern type system, real SIMD, first-class C interop, no runtime.
+A small statically-typed systems language that compiles to LLVM IR and then to
+a native binary. C-like syntax, a modern type system, real SIMD, first-class
+C interop, and no runtime.
 
 ```zl
-fun main() >> i32 {
-    @printf("Empire starts here\n");
-    return 0;
+use std
+fun main() >> void {
+    println("Hello, World!");
 }
 ```
 
-[Full documentation](DOCUMENTATION.md) · [Examples](examples/) · [Extension docs](EXTENSIONS_ROADMAP.md)
+## Why ZLang?
 
-## Features
-
-- C-like syntax with sane defaults — no semicolons-everywhere, no header dance.
-- Native SIMD vectors as first-class types.
-- Direct C interop with the `@` prefix; full `wrap` declarations.
-- Const pointer safety; mutable/const distinction at the type level.
-- Function templates and overloads.
-- Guard clauses (`when (...)`) on function definitions.
-- Expression blocks: `<type> { ... last_expr }` returns a value.
-- Error flow v2: `error`, `send`, `solicit`, `on` handlers (named and numeric).
-- Modular `.zlx` extensions — Brainfuck, Lisp, and friends live outside the core.
-- Zero runtime. The compiler emits LLVM IR straight to a native binary.
+ZLang is small enough to read end to end and ships with the things you actually
+want for real work: a flexible type system, direct C interop, first-class SIMD,
+guard clauses, expression blocks, and a real error flow. LISP in the
+middle of your function as an inline block, because the compiler is built to be
+extended.
 
 ## Quick start
 
-```bash
-zig build
-./zig-out/bin/zlang examples/hello_world.zl
-./zig-out/bin/zlang myprogram.zl -o myprogram -optimize -keepll
-./zig-out/bin/zlang wrap mylib.h -o mylib.zl
+```sh
+zig build install
+zlang examples/hello_world.zl
+zlang examples/hello_world.zl -o hello -optimize
 ```
 
-System install / uninstall via `zig build install` / `zig build uninstall`.
+`zlang run <file.zl>` builds, executes, and cleans up in one step; the
+exit code is propagated to the shell. For exploration, `zlang zli`
+drops you into an interactive REPL with `:load` / `:files` / `:quit`.
 
-### Hello world
+Zig 0.16, Flex, Bison 3.x, and LLVM/Clang 22 are required. Currently targets
+`linux-x86_64`. Check your build with `zlang -version`.
 
-```zl
-fun main() >> i32 {
-    @printf("Hello, World!\n");
-    return 0;
-}
-```
-
-### Factorial
+A short tour of the language, from `examples/`:
 
 ```zl
 fun factorial(n: i32) >> i32 {
@@ -54,259 +43,193 @@ fun factorial(n: i32) >> i32 {
 }
 
 fun main() >> i32 {
-    @printf("5! = %d\n", factorial(5));
+    printf("5! = %d\n", factorial(5));
     return 0;
 }
 ```
 
-## Language tour
-
-### Variables and types
-
-```zl
-i32 count = 42;                   ?? Signed:   i8, i16, i32, i64
-u64 big = 1000000;                ?? Unsigned: u8, u16, u32, u64
-f32 temp = 98.6;                  ?? Floats:   f16, f32, f64
-bool flag = true;
-ptr<i32> p = &count;              ?? Mutable pointer to mutable data
-ptr<const i32> ro = &count;       ?? Read-only through pointer
-const ptr<i32> fixed = &count;    ?? Pointer can't be reassigned
-arr<i32, 100> numbers;            ?? Fixed-size array
-const i32 MAX = 100;
-```
-
-Comments use `??` (yes, really).
-
-### Control flow
-
-```zl
-if temperature > 100.0 {
-    @printf("Too hot\n");
-} else if temperature < 0.0 {
-    @printf("Freezing\n");
-} else {
-    @printf("Just right\n");
-}
-
-for { @printf("forever\n"); break; }       ?? infinite
-for countdown { countdown--; }              ?? while-style
-for (i < 10 && i != 5) { i++; }             ?? while + parens
-for i32 i = 0; i < 10; i++ { ... }          ?? C-style
-```
-
-### Guard clauses
+Pointers, arrays, SIMD, expression blocks, and guard clauses — same shape as
+C, fewer footguns:
 
 ```zl
 fun divide(a: i32, b: i32) when (b != 0) >> i32 {
     return a / b;
 }
-```
 
-### Expression blocks
-
-```zl
 i32 score = <i32> {
     i32 base = 40;
     i32 bonus = 2;
     base + bonus
 };
+
+simd<f32, 4> v = {1.0, 2.0, 3.0, 4.0};
 ```
 
-### Error flow
+C interop is just a `@` prefix or `wrap` declarations:
 
 ```zl
-error FileNotFound = 1;
-error PermissionDenied = 1;
-error FileLocked = _;
-
-fun open(path: ptr<u8>) >> i32 {
-    if path == "missing" { send FileNotFound; return -1; }
-    if path == "protected" { solicit PermissionDenied; }
-    return 1;
-}
-
-fun main() >> i32 {
-    i32 r = open("protected")
-        on 1 { @printf("code 1\n"); }
-        on solicit PermissionDenied { @printf("solicited\n"); }
-        on _ {}
-        on solicit _ {};
-    return 0;
-}
-```
-
-Handler forms: `on Name`, `on N`, `on _`, `on solicit Name`, `on solicit N`, `on solicit _`.
-
-### Structs and enums
-
-```zl
-struct Point { x i32, y i32, }
-
-struct Person {
-    name arr<u8, 50> = "Anonymous",
-    age i32 = 0,
-    active bool = true
-}
-
-enum Status {
-    IDLE,
-    RUNNING = 100,
-    COMPLETED,
-    FAILED = 200
-}
-```
-
-### SIMD
-
-```zl
-simd<f32, 4> v1 = {1.0, 2.0, 3.0, 4.0};
-simd<f32, 4> v2 = {5.0, 6.0, 7.0, 8.0};
-simd<f32, 4> sum = v1 + v2;
-v1[2] = 100.0;
-```
-
-### Casts and pointers
-
-```zl
-i32 x = 42;
-f32 y = x as f32;       ?? explicit
-f64 z = x as _;         ?? infer target
-
-i32 v = 100;
-ptr<i32> p = &v;
-*p = 200;
-p = p + 1;              ?? arithmetic
-
-ptr<const i32> ro = &v; ?? read-only; reassignment OK
-const ptr<i32> kp = &v; ?? mutable value; pointer locked
-```
-
-### C interop
-
-```zl
-fun @printf(format: ptr<u8>) >> i32;
+wrap printf(format: ptr<u8>) >> i32;
 fun @malloc(size: u64) >> ptr<void>;
 
 fun main() >> i32 {
     ptr<i32> buf = @malloc(100) as ptr<i32>;
     *buf = 42;
-    @printf("%d\n", *buf);
+    printf("%d\n", *buf);
+    return 0;
+}
+```
+
+## Error flow
+
+ZLang doesn't have exceptions or `Result` types. It has two explicit,
+resumable signal channels declared at the language level: a callee either
+**notifies** the caller that something happened, or **solicits** the
+caller's help to keep going. The caller can ignore them, handle them, or
+mutate the callee's local state to fix the problem in place.
+
+Errors are named up front:
+
+```zl
+error FileNotFound = 1;
+error FileLocked = _;    ?? _ assigns an automatic unique code
+```
+
+A function `send`s a signal to report an event. The caller catches it with
+`on` at the call site:
+
+```zl
+fun open_file(path: ptr<u8>) >> i32 {
+    if path == null { send FileNotFound; }
     return 0;
 }
 
-wrap @some_c_function(x: i32, y: f32) >> i32;
+fun main() >> i32 {
+    open_file(null)
+        on FileNotFound { println("not found"); }
+        on _            { println("something else"); };
+    return 0;
+}
 ```
 
-### Imports and stdlib
+`solicit` is the unusual one. The callee pauses mid-expression, the caller
+gets to inspect and **rewrite the callee's locals**, and execution continues
+inside the callee — no propagation, no rethrow, no return-trip:
 
 ```zl
-module app.main;
-use net.http;
-use std.math;
+error NeedSeed = _;
+
+fun next_value() >> i32 {
+    i32 seed = 0;
+    solicit NeedSeed;          ?? caller decides what seed should be
+    return seed + 41;
+}
+
+fun main() >> i32 {
+    i32 out = next_value() on solicit NeedSeed {
+        seed = 1;              ?? we reach into next_value's local `seed`
+    };
+    printf("%d\n", out);      ?? 42
+    return 0;
+}
 ```
 
-`std.<module>` resolves under `$ZSTDPATH` or `stdlib/` next to the
-compiler binary. Shipped modules: `std.math`, `std.random`,
-`std.assert`, `std.time`, `std.fs`, `std.io` (and more in
-`stdlib/`).
-
-## Numeric literals
-
-```zl
-i32 million = 1'000'000;
-i64 big = 999'999'999'999;
-f32 pi = 3.141'592'653;
-i32 hex = 0xFF;
-i32 bin = 0b1010;
-i32 oct = 0o755;
-```
+`solicit` is its own channel: `on` doesn't catch it, and `on solicit`
+doesn't catch `send`. Handlers attach at the call expression and match by
+name, by code, or by `_`. See the full reference in
+[DOCUMENTATION.md](DOCUMENTATION.md#error-flow).
 
 ## Extensions (`.zlx`)
 
-ZLang ships with a real extension system. Each extension is a
-single-file archive containing a manifest, a native plugin, and
-optional plugin-shipped `.zl` modules.
+The compiler is modular. Brainfuck, Lisp, threading, file-type handlers —
+all live as separate `.zlx` packages. Install, list, and load them through
+the compiler itself:
 
-```bash
+```sh
 zlang module install ./brainfuck.zlx
 zlang module list
-zlang module doctor
+zlang module load-order    ?? topological order of installed plugins
+zlang module dev ./myext   ?? auto-reload on change (Linux)
 zlang module help
 ```
 
-See `EXTENSIONS_ROADMAP.md` for the full design and v1 ABI. Two
-official extensions live as their own repos:
+Once installed, plugin syntax is just a normal block in your source:
 
-- [brainfuck.zlx](https://github.com/zlangdevs/brainfuck-zlx) — `brainfuck { ... }`
-  blocks with `?len?`, `?cell_size?`, `?load?` directives.
-- [zlisp.zlx](https://github.com/zlangdevs/zlsip) — `lisp { ... }`
-  blocks with `defn`, `let`, `if`, `while`, full bidirectional
-  zlang/lisp calls.
+```zl
+fun main() >> i32 {
+    brainfuck {
+        ++++++++[>++++++++<-]>+.
+    }
+    return 0;
+}
+```
 
-Build a plugin against `include/zlang_plugin_api_v1.h`; install
-with `zlang module install <file.zlx>`. Use `-no-extensions` for a
-build with native plugins disabled, or `-isolated` for a fully
-hermetic build.
+The work's in progress, see [EXTENSIONS_ROADMAP.md](EXTENSIONS_ROADMAP.md).
 
-## Examples
+## Building from source
 
-`examples/` covers the basics — hello world, factorial, math demo,
-assertions, struct/loop/cast/pointer tests, SIMD. `examples/tests/`
-exercises the more recent features.
+```sh
+git clone https://github.com/zlangdevs/zlang
+cd zlang
+zig build install -Doptimize=ReleaseFast
+```
 
 ## Architecture
 
 ```
-.zl source -> Flex lexer -> Bison GLR parser -> AST (Zig)
-           -> zlx preprocessor (extension blocks)
-           -> Zig LLVM IR generator -> clang -> native binary
+.zl source  →  Flex lexer  →  Bison GLR parser  →  AST (Zig)
+            →  zlx preprocessor (extension blocks)
+            →  Zig LLVM IR generator  →  clang/llvm-toolchain  →  native binary
 ```
 
-- Frontend: Flex + Bison GLR.
-- Backend: custom Zig codegen on top of the LLVM C API.
-- ABI: System V (WIP).
-- Extensions: `.zlx` archive, v1 plugin C ABI, host-side dlopen
-  with explicit handshake.
+Frontend is Flex + Bison GLR. Backend is a custom Zig generator on top of
+the LLVM C API. Extensions are `.zlx` packages with a stable C ABI v6 and
+host-side `dlopen` with explicit handshake. Core language keywords are
+reserved by the host; in v6, attempting to `register_syntax_block` a
+core keyword name returns `ZLANG_REGISTER_RESERVED` — use
+`register_keyword_block` to override on purpose.
 
-## Building from source
+## Documentation
 
-Requires Zig 0.16.0, Flex, Bison 3.x+, LLVM/Clang 22. Currently
-targets `linux-x86_64`.
+The full language reference, stdlib, error flow, and codegen internals live
+in [DOCUMENTATION.md](DOCUMENTATION.md).
 
-```bash
-git clone https://github.com/zlangdevs/zlang
-cd zlang
-zig build -Doptimize=ReleaseFast
-```
+For a hands-on walkthrough of the compiler's feature surface as it actually
+ships, see [examples/README.md](examples/README.md). It groups the 29
+example programs and 67 integration tests by topic (getting started,
+stdlib, C interop, modules, the CHIP-8 emulator, plugins) and points at the
+test files that double as small language-references.
 
-Check your build with `zlang version`.
+## In the wild
 
-## Editor support
+ZLang projects under the `zlangdevs` org:
 
-Zed syntax extension: <https://github.com/zlangdevs/zed-zlang>.
-Install it as a dev extension in Zed.
+- [zltris](https://github.com/zlangdevs/zltris) — Tetris on raylib with a
+  network protocol; the largest zlang codebase so far.
+- [brainfuck-zlx](https://github.com/zlangdevs/brainfuck-zlx) — `brainfuck { ... }`
+  blocks and standalone `.b`/`.bf` files.
+- [zlsip](https://github.com/zlangdevs/zlsip) — `lisp { ... }` blocks with
+  bidirectional zlang/lisp calls and template macros.
+- [raylib-zl](https://github.com/zlangdevs/raylib-zl) — Raylib bindings.
+- [ncurses-zl](https://github.com/zlangdevs/ncurses-zl) — ncurses wrapper.
+- [zlib](https://github.com/zlangdevs/zlib) — standard library modules.
+- [zed-zlang](https://github.com/zlangdevs/zed-zlang) — Zed syntax extension.
+- [zlang-vscode](https://github.com/zlangdevs/zlang-vscode) — VS Code syntax
+  highlighting (WIP).
+- [zl-cloc](https://github.com/zlangdevs/zl-cloc) — cloc fork that counts
+  zlang code.
 
 ## Contributing
 
-Active development. Open areas: stdlib coverage, more
-optimization passes, error message polish, IDE plugins,
-documentation. Extensions especially welcome — write a `.zlx`
-against the v1 ABI and link it back.
+Active development. Open areas: stdlib coverage, more optimization passes,
+error message polish, IDE plugins, documentation. Extensions are especially
+welcome — write a `.zlx` against the v1 C ABI in `include/` and ship it.
 
 ## License
 
 GNU GPL v3.0. See [LICENSE](LICENSE).
 
-## Why ZLang
-
-- For learning: small enough to read end to end.
-- For performance: SIMD plus direct LLVM IR.
-- For real work: full C interop, you keep your existing libraries.
-- For fun: drop a `brainfuck { ... }` or `lisp { ... }` block in
-  the middle of your program and ship it.
-
 ---
 
-**Empire starts here** 😈
+Empire starts here 😈
 
 Made with ⚡ by the ZLang team
