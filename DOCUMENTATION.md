@@ -620,7 +620,32 @@ fun process_file(path: ptr<u8>) >> i32 {
 }
 ```
 
-For new code, prefer `send`/`solicit`/`on` — see [§12](#12-the-error-flow-model).
+`goto` is the only control-flow construct that does **not** run
+`defer` statements in scopes it jumps out of, so the
+goto-to-cleanup-label pattern is still the correct idiom when
+cleanup must run on an error path that does not return through
+the rest of the function. For ordinary cleanup where control
+flow does fall through or return, prefer `defer` (see
+[§9.6](#96-defer)) — the same code is much shorter and is
+automatically correct on every exit path:
+
+```zl
+fun process_file(path: ptr<u8>) >> i32 {
+    ptr<void> f = @fopen(path, "r");
+    if f == null { return -1; }
+    defer @fclose(f);
+
+    ptr<void> buf = @malloc(1024);
+    if buf == null { return -1; }
+    defer @free(buf);
+
+    ?? ... work ...
+    return 0;
+}
+```
+
+For error reporting (as opposed to cleanup), use the error flow
+model — see [§12](#12-the-error-flow-model).
 A runnable test of `goto` is in
 [`examples/tests/goto_test.zl`](examples/tests/goto_test.zl).
 
@@ -655,6 +680,87 @@ is an `enum`, the arms must be exhaustive — falling off the end of a
 non-exhaustive `match` over an enum is a compile error. See
 [`examples/tests/match_test.zl`](examples/tests/match_test.zl) for a
 runnable test.
+
+### 9.6 `defer`
+
+A `defer` statement schedules a single expression to run when the
+current scope exits. The syntax is just `defer <expression>;`:
+
+```zl
+fun acquire() >> ptr<void> { ... }
+fun release(p: ptr<void>) >> void { ... }
+
+fun with_resource() >> i32 {
+    ptr<void> r = acquire();
+    defer release(r);
+    ?? ... use r ...
+    if something_went_wrong() {
+        return -1;  ?? release(r) still runs.
+    }
+    ?? ... more work ...
+    return 0;  ?? and here too.
+}
+```
+
+Three rules govern `defer`:
+
+1. **LIFO order.** If multiple defers are registered in the same
+   scope, they fire in reverse order of registration — the last
+   one registered runs first. This is the same rule Go, Zig, and
+   Swift use.
+2. **Capture by reference.** The deferred expression is evaluated
+   at the moment the scope exits, not at the moment the `defer` is
+   reached. The expression sees the current value of every
+   variable it references. The `defer` itself is reached and
+   registered as soon as control flow passes it.
+3. **Scope-bound.** A `defer` only fires when *its* scope ends.
+   A `defer` inside a conditional arm, match arm, or loop body
+   fires when that arm or body exits; a `defer` at function level
+   fires when the function returns (whether by an explicit
+   `return`, by falling off the end, or by an error path that
+   returns).
+
+Where `defer` fires:
+
+- Function return — including the implicit return at the end of a
+  `fun` that lacks one.
+- `if` / `else` arm exit, both the taken and the not-taken path.
+- `match` arm exit, for the arm that was selected.
+- `for` / `while` / `for (...)` loop body exit (including `break`).
+- `on` error handler exit.
+- Expression-block termination.
+
+Where `defer` does **not** fire in v0.1.0:
+
+- `goto`. A `goto` is a low-level transfer of control: if you
+  `goto` out of a scope, defers registered inside that scope are
+  skipped. If you `goto` into a scope, defers in inner scopes of
+  the target are not affected. Code that mixes `goto` and
+  resource cleanup is the canonical case for the goto-to-label
+  pattern shown in [§9.4](#94-goto-and-labels) — defer is *not*
+  safe there.
+
+A second codegen quirk is worth knowing about even though it is
+not a `defer` rule per se: when an `on` handler absorbs a `send`,
+the join point after the handler is treated as a scope-exit point
+by the defer infrastructure. In practice, an `on`-handled call
+will cause defers registered *before* the call to fire once, even
+if the handler did not actually run (i.e. the call returned
+normally without sending). The defer does not re-fire when the
+function returns later. See
+[`defer_comprehensive_test.zl`](examples/tests/defer_comprehensive_test.zl)
+test 7 for an executable demonstration and the expected trace
+order.
+
+A runnable demonstration of every rule above is in
+[`examples/tests/defer_test.zl`](examples/tests/defer_test.zl)
+(basic if/return) and
+[`examples/tests/defer_loop_test.zl`](examples/tests/defer_loop_test.zl)
+(for/continue/break). A more comprehensive test that also covers
+LIFO ordering, capture by reference, scope boundaries, `match`
+arms, `on` handlers, and accumulation across loop iterations is
+in
+[`examples/tests/defer_comprehensive_test.zl`](examples/tests/defer_comprehensive_test.zl).
 
 ---
 

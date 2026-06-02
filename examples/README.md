@@ -155,7 +155,7 @@ from. The plugin API contract is documented in
 
 ## Tests
 
-`examples/tests/` is the integration test suite. There are 67 `*_test.zl`
+`examples/tests/` is the integration test suite. There are 68 `*_test.zl`
 files plus three sub-folders for the negative cases:
 
 - [`tests/`](tests/) — pass tests. Run any one with `zlang tests/<name>.zl`
@@ -207,6 +207,10 @@ Test files worth reading as documentation in their own right:
 - `preprocessor_define_test.zl` and `define_override_test.zl` — `#define`,
   the `NUM_FIELDS(...)` style macro, and the `-D NAME=VALUE` override flag
   (§42, §47.4).
+- `defer_test.zl`, `defer_loop_test.zl`, and `defer_comprehensive_test.zl`
+  — the `defer` statement: LIFO ordering, capture by reference,
+  scope-boundary semantics, the `on`-handler join-point quirk, and
+  defer accumulation across loop iterations. Mirrors §9.6.
 
 ## Layout reference
 
