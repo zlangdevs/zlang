@@ -1855,7 +1855,9 @@ development to skip `install` + restart cycles.
 
 ## 45. The Plugin ABI (v6)
 
-The ABI is the C header [`include/zlang_plugin_api_v1.h`](include/zlang_plugin_api_v1.h).
+The ABI is bundled into the compiler. Run `zlang module sdk` to
+materialize the C header `zlang_plugin_api_v1.h`, the convenience header
+`zlx_plugin_sdk.h`, and the Zig SDK (`sdk.zig`) into `~/.zlang/sdk`.
 The current version is **6**.
 
 Key points:
@@ -1905,11 +1907,19 @@ ZLANG_EXPORT void zlang_register(ZlangPluginApi* api) {
 }
 ```
 
-Compile as a shared library:
+Compile as a shared library against the bundled SDK, with no fixed
+paths into the compiler tree:
 
 ```bash
-clang -shared -fPIC -O2 -o myext.zlx.so myext.c -Iinclude
+clang -shared -fPIC -O2 -o myext.zlx.so myext.c -I"$(zlang module sdk --include)"
 zlang module install ./myext.zlx.so
+```
+
+For a Zig plugin that does `const sdk = @import("zlx");`, let the
+compiler wire the SDK module and pack the package in one step:
+
+```bash
+zlang module build .
 ```
 
 See any of the bundled extensions for a worked example:
