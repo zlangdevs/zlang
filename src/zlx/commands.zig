@@ -7,6 +7,7 @@ const manifest = @import("manifest.zig");
 const package_mod = @import("package.zig");
 const registry = @import("registry.zig");
 const store_mod = @import("store.zig");
+const sdk_embed = @import("sdk_embed.zig");
 
 extern fn inotify_init1(flags: c_int) c_int;
 extern fn inotify_add_watch(fd: c_int, pathname: [*:0]const u8, mask: u32) c_int;
@@ -55,6 +56,8 @@ pub fn handle(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !?u8 {
     if (std.mem.eql(u8, cmd, "loadall")) return try moduleLoadAll(sub_args, alloc, io);
     if (std.mem.eql(u8, cmd, "doctor")) return try doctorModules(sub_args, alloc, io);
     if (std.mem.eql(u8, cmd, "pack")) return try packModule(sub_args, alloc, io);
+    if (std.mem.eql(u8, cmd, "build")) return try buildModule(sub_args, alloc, io);
+    if (std.mem.eql(u8, cmd, "sdk")) return try sdkCommand(sub_args, alloc, io);
     if (std.mem.eql(u8, cmd, "dev")) return try devModule(sub_args, alloc, io);
     std.debug.print("zlx: unknown module subcommand '{s}'. Try 'zlang module help'.\n", .{cmd});
     return 1;
@@ -77,6 +80,8 @@ fn printModuleHelp() void {
         \\  load-order            Print topological load order of installed modules
         \\  doctor                Diagnose installed extensions (status, api, hash, sidecar)
         \\  pack <dir> -o <out>   Pack <dir>/manifest.zon + declared files into <out>.zlx
+        \\  build <dir>           Compile src/plugin.zig or src/plugin.c against the bundled SDK and pack
+        \\  sdk [--zig|--include] [dir]  Materialize the bundled plugin SDK and print its path
         \\  dev <dir>             Watch, rebuild, and install an extension package
         \\  help                  Show this help
         \\
@@ -339,7 +344,7 @@ fn moduleAbi(args: []const [:0]u8) !u8 {
     std.debug.print("supported_range: {d}-{d}\n", .{ abi.api_min_supported, abi.api_max_supported });
     std.debug.print("probe_symbol: {s}\n", .{abi.probe_symbol});
     std.debug.print("init_symbol: {s}\n", .{abi.init_symbol});
-    std.debug.print("header: include/zlang_plugin_api_v1.h\n", .{});
+    std.debug.print("sdk: run 'zlang module sdk' to materialize headers and the Zig SDK\n", .{});
     return 0;
 }
 
@@ -589,6 +594,176 @@ fn packModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     return 0;
 }
 
+fn sdkDir(alloc: std.mem.Allocator) ![]u8 {
+    const home = std.c.getenv("HOME") orelse return error.HomeNotSet;
+    return std.fmt.allocPrint(alloc, "{s}/.zlang/sdk", .{std.mem.span(home)});
+}
+
+fn writeSdkInto(dir: []const u8, alloc: std.mem.Allocator, io: std.Io) !void {
+    try std.Io.Dir.cwd().createDirPath(io, dir);
+    for (sdk_embed.files) |file| {
+        const path = try std.fs.path.join(alloc, &.{ dir, file.name });
+        defer alloc.free(path);
+        try writeFileBytes(io, path, file.bytes);
+    }
+}
+
+fn ensureSdk(alloc: std.mem.Allocator, io: std.Io) ![]u8 {
+    const dir = try sdkDir(alloc);
+    errdefer alloc.free(dir);
+    try writeSdkInto(dir, alloc, io);
+    return dir;
+}
+
+fn sdkCommand(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
+    var want: enum { dir, zig, include } = .dir;
+    var target: ?[]const u8 = null;
+    var i: usize = 2;
+    while (i < args.len) : (i += 1) {
+        const a = args[i];
+        if (std.mem.eql(u8, a, "--zig")) {
+            want = .zig;
+        } else if (std.mem.eql(u8, a, "--include")) {
+            want = .include;
+        } else if (std.mem.eql(u8, a, "--dir")) {
+            want = .dir;
+        } else if (target == null) {
+            target = a;
+        }
+    }
+
+    const dir = if (target) |t| blk: {
+        try writeSdkInto(t, alloc, io);
+        break :blk try alloc.dupe(u8, t);
+    } else try ensureSdk(alloc, io);
+    defer alloc.free(dir);
+
+    switch (want) {
+        .dir, .include => try printStdoutLine(io, dir),
+        .zig => {
+            const p = try std.fs.path.join(alloc, &.{ dir, "sdk.zig" });
+            defer alloc.free(p);
+            try printStdoutLine(io, p);
+        },
+    }
+    return 0;
+}
+
+fn printStdoutLine(io: std.Io, text: []const u8) !void {
+    var buffer: [4096]u8 = undefined;
+    var writer = std.Io.File.stdout().writer(io, &buffer);
+    try writer.interface.writeAll(text);
+    try writer.interface.writeAll("\n");
+    try writer.interface.flush();
+}
+
+fn buildModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
+    var src_dir: ?[]const u8 = null;
+    var out_path: ?[]const u8 = null;
+    var i: usize = 2;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "-o")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("zlx: -o requires a path\n", .{});
+                return 1;
+            }
+            out_path = args[i];
+        } else if (src_dir == null) {
+            src_dir = args[i];
+        }
+    }
+    const dir = src_dir orelse {
+        std.debug.print("Usage: zlang module build <dir> [-o out.zlx]\n", .{});
+        return 1;
+    };
+
+    const manifest_path = try std.fs.path.join(alloc, &.{ dir, "manifest.zon" });
+    defer alloc.free(manifest_path);
+    const manifest_bytes = std.Io.Dir.cwd().readFileAlloc(io, manifest_path, alloc, .limited(1024 * 1024)) catch |err| {
+        std.debug.print("zlx: could not read {s}: {}\n", .{ manifest_path, err });
+        return 1;
+    };
+    defer alloc.free(manifest_bytes);
+    const parsed = manifest.parse(alloc, manifest_bytes) catch |err| {
+        std.debug.print("zlx: invalid manifest in {s}: {}\n", .{ manifest_path, err });
+        return 1;
+    };
+    defer manifest.free(alloc, parsed);
+
+    const sdk_dir = try ensureSdk(alloc, io);
+    defer alloc.free(sdk_dir);
+
+    const entry = parsed.entry orelse "plugin.so";
+    const out_so = try std.fs.path.join(alloc, &.{ dir, entry });
+    defer alloc.free(out_so);
+    if (std.fs.path.dirname(out_so)) |parent| try std.Io.Dir.cwd().createDirPath(io, parent);
+
+    const zig_src = try std.fs.path.join(alloc, &.{ dir, "src", "plugin.zig" });
+    defer alloc.free(zig_src);
+    const c_src = try std.fs.path.join(alloc, &.{ dir, "src", "plugin.c" });
+    defer alloc.free(c_src);
+
+    const has_zig = blk: {
+        std.Io.Dir.cwd().access(io, zig_src, .{}) catch break :blk false;
+        break :blk true;
+    };
+    const has_c = blk: {
+        std.Io.Dir.cwd().access(io, c_src, .{}) catch break :blk false;
+        break :blk true;
+    };
+
+    if (has_zig) {
+        const sdk_zig_path = try std.fs.path.join(alloc, &.{ sdk_dir, "sdk.zig" });
+        defer alloc.free(sdk_zig_path);
+        const mroot = try std.fmt.allocPrint(alloc, "-Mroot={s}", .{zig_src});
+        defer alloc.free(mroot);
+        const mzlx = try std.fmt.allocPrint(alloc, "-Mzlx={s}", .{sdk_zig_path});
+        defer alloc.free(mzlx);
+        const emit = try std.fmt.allocPrint(alloc, "-femit-bin={s}", .{out_so});
+        defer alloc.free(emit);
+        runCommand(io, &.{
+            "zig",          "build-lib", "-dynamic", "-OReleaseSafe", "-fPIC",
+            "-lc",          "--dep",     "zlx",      mroot,           mzlx,
+            emit,
+        }, null) catch |err| {
+            std.debug.print("zlx: zig build-lib failed: {}\n", .{err});
+            return 1;
+        };
+    } else if (has_c) {
+        const include = try std.fmt.allocPrint(alloc, "-I{s}", .{sdk_dir});
+        defer alloc.free(include);
+        runCommand(io, &.{
+            "clang", "-shared", "-fPIC", "-O2", include, "-o", out_so, c_src,
+        }, null) catch |err| {
+            std.debug.print("zlx: clang failed: {}\n", .{err});
+            return 1;
+        };
+    } else {
+        std.debug.print("zlx: no src/plugin.zig or src/plugin.c found in {s}\n", .{dir});
+        return 1;
+    }
+
+    const default_zlx = try std.fmt.allocPrint(alloc, "{s}.zlx", .{parsed.name});
+    defer alloc.free(default_zlx);
+    const out_zlx = out_path orelse try std.fs.path.join(alloc, &.{ dir, default_zlx });
+    const out_zlx_owned = out_path == null;
+    defer if (out_zlx_owned) alloc.free(out_zlx);
+
+    const module_z = try alloc.dupeZ(u8, "module");
+    defer alloc.free(module_z);
+    const pack_z = try alloc.dupeZ(u8, "pack");
+    defer alloc.free(pack_z);
+    const dir_z = try alloc.dupeZ(u8, dir);
+    defer alloc.free(dir_z);
+    const dash_o_z = try alloc.dupeZ(u8, "-o");
+    defer alloc.free(dash_o_z);
+    const out_zlx_z = try alloc.dupeZ(u8, out_zlx);
+    defer alloc.free(out_zlx_z);
+    const pack_args = [_][:0]u8{ module_z, pack_z, dir_z, dash_o_z, out_zlx_z };
+    return try packModule(&pack_args, alloc, io);
+}
+
 fn devModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
     if (args.len != 3) {
         std.debug.print("Usage: zlang module dev <dir>\n", .{});
@@ -723,7 +898,11 @@ fn buildAndInstallDevModule(dir: []const u8, alloc: std.mem.Allocator, io: std.I
             std.Io.Dir.cwd().access(io, src_plugin_c, .{}) catch break :blk fallback_plugin_c;
             break :blk src_plugin_c;
         };
-        try runCommand(io, &.{ "clang", "-shared", "-fPIC", "-Iinclude", "-o", out_so, plugin_c }, null);
+        const sdk_dir = try ensureSdk(alloc, io);
+        defer alloc.free(sdk_dir);
+        const include = try std.fmt.allocPrint(alloc, "-I{s}", .{sdk_dir});
+        defer alloc.free(include);
+        try runCommand(io, &.{ "clang", "-shared", "-fPIC", include, "-o", out_so, plugin_c }, null);
     }
 
     const zlx_name = try std.fmt.allocPrint(alloc, "{s}.zlx", .{parsed.name});
