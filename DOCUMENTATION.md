@@ -1885,6 +1885,38 @@ Key points:
 Plugins cannot reach into the compiler's private structs; everything
 goes through the API table.
 
+### The two SDKs (Zig and C)
+
+`zlang module sdk` materializes two parallel SDKs into `~/.zlang/sdk`.
+Both describe the *same* ABI; they exist because the ABI must be usable
+from source in different languages:
+
+- **Zig SDK** (`sdk.zig` + `abi.zig`). This is the first-class SDK,
+  because `zlang` itself is written in Zig. Zig plugins do
+  `const sdk = @import("zlx");` and get native Zig types
+  (`sdk.HostApi`, `sdk.BlockInput`, ...) plus typed helpers
+  (`sdk.emit`, `sdk.diagError`, ...) with no C interop layer.
+- **C SDK** (`zlang_plugin_api_v1.h` + `zlx_plugin_sdk.h`). This is for
+  plugins written in C — and, by extension, any language that can speak
+  the C ABI / include a C header (C++, Rust via bindgen, Zig via
+  `@cImport`, etc.). It declares the identical structs and the same
+  convenience helpers as `static inline` functions.
+
+Why both files are kept rather than a single source: Zig and C are
+compatible at the **binary ABI** level (struct layout, calling
+convention), so compiled plugins of either language interoperate with
+the host. They are *not* interchangeable at the **source** level — a C
+compiler cannot read a `.zig` file, and Zig's `-femit-h` header
+generator is a no-op in the current toolchain. Collapsing to one file
+would force the Zig side through `@cImport`, losing native types and
+helpers for the three of four bundled extensions that are written in
+Zig. The two SDKs are tiny, embedded in the compiler binary, and
+versioned together, so they never drift.
+
+Rule of thumb: **write the plugin in Zig and use the Zig SDK**; reach
+for the C SDK only when the plugin must be in C (or another C-ABI
+language), e.g. when wrapping an existing C library.
+
 ---
 
 ## 46. Building a Custom Extension
