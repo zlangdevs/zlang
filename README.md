@@ -1,4 +1,17 @@
+<div align="center">
+
+<img src="https://avatars.githubusercontent.com/u/225277494?s=200&v=4" alt="ZLang logo" width="120" height="120">
+
 # ZLang
+
+[![Zig](https://img.shields.io/badge/Zig-0.16.0-f7a41d?logo=zig&logoColor=white)](https://ziglang.org)
+[![LLVM](https://img.shields.io/badge/LLVM-22-262d3a?logo=llvm&logoColor=white)](https://llvm.org)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/zlangdevs/zlang/releases)
+[![Platform](https://img.shields.io/badge/platform-linux--x86__64-555?logo=linux&logoColor=white)](#)
+[![License](https://img.shields.io/badge/license-GPL--3.0-green)](LICENSE)
+[![Extensions](https://img.shields.io/badge/.zlx-extensible-purple)](EXTENSIONS_ROADMAP.md)
+
+</div>
 
 A small statically-typed systems language that compiles to LLVM IR and then to
 a native binary. C-like syntax, a modern type system, real SIMD, first-class
