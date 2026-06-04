@@ -28,6 +28,24 @@ fn runCommandOk(allocator: std.mem.Allocator, argv: []const []const u8) bool {
     return result.term == .exited and result.term.exited == 0;
 }
 
+// Like runCommandOk, but on failure echoes the command and its captured
+// stderr/stdout so the underlying linker error is visible (e.g. in CI).
+fn runCommandReport(allocator: std.mem.Allocator, argv: []const []const u8) bool {
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const result = std.process.run(allocator, threaded.io(), .{ .argv = argv }) catch |err| {
+        std.debug.print("Link command failed to start: {s}\n", .{@errorName(err)});
+        return false;
+    };
+    if (result.term == .exited and result.term.exited == 0) return true;
+    std.debug.print("Link command failed:", .{});
+    for (argv) |a| std.debug.print(" {s}", .{a});
+    std.debug.print("\n", .{});
+    if (result.stderr.len != 0) std.debug.print("{s}\n", .{result.stderr});
+    if (result.stdout.len != 0) std.debug.print("{s}\n", .{result.stdout});
+    return false;
+}
+
 fn detectGccLibDir(allocator: std.mem.Allocator) ?[]const u8 {
     var threaded: std.Io.Threaded = .init(allocator, .{});
     defer threaded.deinit();
@@ -5722,14 +5740,29 @@ pub const CodeGenerator = struct {
             }
         }
 
-        const crt1_exists = blk: {
+        // crt object files live in different directories across distros:
+        // /usr/lib on Arch, /usr/lib/x86_64-linux-gnu on Debian/Ubuntu multiarch,
+        // /usr/lib64 on some RPM distros. Probe for the directory that actually
+        // holds crt1.o so the lld fast path works everywhere, not just Arch.
+        const crt_dir: ?[]const u8 = blk: {
             var threaded: std.Io.Threaded = .init(arena_alloc, .{});
             defer threaded.deinit();
-            std.Io.Dir.cwd().access(threaded.io(), "/usr/lib/crt1.o", .{}) catch break :blk false;
-            break :blk true;
+            const candidates = [_][]const u8{
+                "/usr/lib",
+                "/usr/lib/x86_64-linux-gnu",
+                "/usr/lib64",
+                "/lib/x86_64-linux-gnu",
+            };
+            for (candidates) |dir| {
+                const probe = std.fmt.allocPrint(arena_alloc, "{s}/crt1.o", .{dir}) catch continue;
+                std.Io.Dir.cwd().access(threaded.io(), probe, .{}) catch continue;
+                break :blk dir;
+            }
+            break :blk null;
         };
 
-        if (crt1_exists and arch.len == 0 and lld_tool != null) {
+        if (crt_dir != null and arch.len == 0 and lld_tool != null) {
+            const cdir = crt_dir.?;
             const link_start = nanoTimestamp();
             var lld_args_list: std.ArrayList([]const u8) = .empty;
             try lld_args_list.appendSlice(arena_alloc, &[_][]const u8{
@@ -5740,9 +5773,10 @@ pub const CodeGenerator = struct {
                 "/lib64/ld-linux-x86-64.so.2",
                 "-L/usr/lib",
                 "-L/lib64",
-                "/usr/lib/crt1.o",
-                "/usr/lib/crti.o",
             });
+            try lld_args_list.append(arena_alloc, try std.fmt.allocPrint(arena_alloc, "-L{s}", .{cdir}));
+            try lld_args_list.append(arena_alloc, try std.fmt.allocPrint(arena_alloc, "{s}/crt1.o", .{cdir}));
+            try lld_args_list.append(arena_alloc, try std.fmt.allocPrint(arena_alloc, "{s}/crti.o", .{cdir}));
 
             if (detectGccLibDir(arena_alloc)) |gcc_lib_dir| {
                 const gcc_lib_arg = try std.fmt.allocPrint(arena_alloc, "-L{s}", .{gcc_lib_dir});
@@ -5771,7 +5805,7 @@ pub const CodeGenerator = struct {
                 try lld_args_list.append(arena_alloc, "-lm");
             }
 
-            try lld_args_list.append(arena_alloc, "/usr/lib/crtn.o");
+            try lld_args_list.append(arena_alloc, try std.fmt.allocPrint(arena_alloc, "{s}/crtn.o", .{cdir}));
 
             if (runCommandOk(arena_alloc, lld_args_list.items)) {
                 lld_success = true;
@@ -5813,7 +5847,7 @@ pub const CodeGenerator = struct {
                 try clang_args_list.append(arena_alloc, ef);
             }
 
-            if (!runCommandOk(arena_alloc, clang_args_list.items)) {
+            if (!runCommandReport(arena_alloc, clang_args_list.items)) {
                 return error.CompilationFailed;
             }
             if (timing) |t| t.link_time_ns = @intCast(nanoTimestamp() - link_start);
