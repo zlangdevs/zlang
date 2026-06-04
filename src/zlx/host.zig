@@ -586,8 +586,8 @@ test "host records registrations and detects duplicates" {
     var host = Host.init(alloc);
     defer host.deinit();
     const syntax = abi.BlockSyntax{ .mode = .brace_counting, .terminator = null };
-    const r1 = host.api.register_syntax_block(&host.api, "brainfuck", &syntax, testHandler);
-    const r2 = host.api.register_syntax_block(&host.api, "brainfuck", &syntax, testHandler);
+    const r1 = host.api.register_syntax_block(&host.api, "sample_block", &syntax, testHandler);
+    const r2 = host.api.register_syntax_block(&host.api, "sample_block", &syntax, testHandler);
     try std.testing.expectEqual(@as(c_int, @intFromEnum(abi.RegisterResult.ok)), r1);
     try std.testing.expectEqual(@as(c_int, @intFromEnum(abi.RegisterResult.duplicate)), r2);
     try std.testing.expectEqual(@as(usize, 1), host.counts.syntax_blocks);
