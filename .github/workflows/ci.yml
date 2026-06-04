@@ -46,8 +46,7 @@ jobs:
           sudo ln -sf "$inc/llvm" /usr/include/llvm
       - name: Build
         run: zig build -Doptimize=ReleaseFast
-      - name: Run integration suite (informational)
-        continue-on-error: true
+      - name: Run integration suite
         run: ./run_tests.sh
         env:
           ZSTDPATH: ${{ github.workspace }}/stdlib
