@@ -31,7 +31,6 @@ extern void* zig_create_bool_literal(int value);
 extern void* zig_create_null_literal(void);
 extern void* zig_create_stmt_list(void);
 extern void* zig_create_arg_list(void);
-extern void* zig_create_brainfuck(const char* code);
 extern void* zig_create_if_stmt(void* condition, void* then_body, void* else_body);
 extern void* zig_create_for_stmt(void* condition, void* body);
 extern void* zig_create_c_for_stmt(void* init, void* condition, void* increment, void* body);
@@ -81,6 +80,7 @@ extern void zig_add_error_handler_number_kind(void* list, int kind, const char* 
 extern void* zig_create_handled_call_stmt(void* call, void* handlers);
 extern void zlang_set_location(int line, int col);
 extern void zig_record_parse_error(int line, int col, const char* msg);
+extern int zig_try_eval_const_int(void* expr, long long* out_value);
 
 void yyerror(const char* s);
 int zlang_lex(void* scanner);
@@ -98,7 +98,7 @@ void* ast_root = NULL;
    - type/cast parsing around '<' and generic type forms
    - identifier-leading ambiguities (label/type/ref/struct initializer)
    These ambiguities are inherent to the language syntax and correctly resolved. */
-%expect 2
+%expect 1
 %expect-rr 5
 
 %define parse.error verbose
@@ -112,7 +112,7 @@ void* ast_root = NULL;
     int number;
 }
 
-%token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING TOKEN_BRAINFUCK
+%token <string> TOKEN_IDENTIFIER TOKEN_FLOAT TOKEN_NUMBER TOKEN_STRING
 %token <number> TOKEN_CHAR
 %token <number> TOKEN_REASSIGN
 
@@ -148,10 +148,12 @@ void* ast_root = NULL;
 %left TOKEN_AT
 %right TOKEN_AS
 %right NOT UMINUS UPLUS UAMPERSAND UDEREF UBIT_NOT
+%nonassoc REF_BASE_PREC
+%nonassoc TOKEN_LBRACE
 
 %type <node> parameter_list parameters parameter
 %type <node> program function_list function statement_list statement
-%type <node> var_declaration global_variable_declaration function_call return_statement assignment brainfuck_statement
+%type <node> var_declaration global_variable_declaration function_call return_statement assignment
 %type <node> expression logical_or_expression logical_and_expression bitwise_or_expression bitwise_xor_expression bitwise_and_expression shift_expression equality_expression relational_expression additive_expression multiplicative_expression unary_expression primary_expression postfix_expression argument_list arguments
 %type <node> cast_expression expression_block
 %type <node> c_for_statement for_increment
@@ -396,6 +398,23 @@ complex_type_name:
         free($3);
         $$ = result;
     }
+  | qualified_type_name TOKEN_LESS type_name TOKEN_COMMA TOKEN_LPAREN expression TOKEN_RPAREN TOKEN_GREATER %prec TOKEN_LESS {
+        long long evaluated = 0;
+        if (zig_try_eval_const_int($6, &evaluated) && evaluated >= 0) {
+            char value_buf[64];
+            snprintf(value_buf, sizeof(value_buf), "%lld", evaluated);
+            char* result = malloc(strlen($1) + strlen($3) + strlen(value_buf) + 6);
+            sprintf(result, "%s<%s, %s>", $1, $3, value_buf);
+            free($1);
+            free($3);
+            $$ = result;
+        } else {
+            yyerror("array size expression must be a non-negative integer constant");
+            free($1);
+            free($3);
+            YYERROR;
+        }
+    }
   | qualified_type_name TOKEN_LESS TOKEN_UNDERSCORE TOKEN_GREATER %prec TOKEN_LESS {
         char* result = malloc(strlen($1) + 4);
         sprintf(result, "%s<_>", $1);
@@ -526,7 +545,6 @@ statement:
    | defer_statement TOKEN_SEMICOLON { $$ = $1; }
    | send_statement TOKEN_SEMICOLON { $$ = $1; }
    | solicit_statement TOKEN_SEMICOLON { $$ = $1; }
-   | brainfuck_statement TOKEN_SEMICOLON { $$ = $1; }
    | if_statement { $$ = $1; }
    | for_statement { $$ = $1; }
    | c_for_statement { $$ = $1; }
@@ -733,17 +751,10 @@ label_statement:
     }
 ;
 
-brainfuck_statement:
-    TOKEN_BRAINFUCK {
-        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_brainfuck($1);
-        free($1);
-    }
-;
-
 /* ========== EXPRESSIONS ========== */
 
 ref_base:
-    TOKEN_IDENTIFIER { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_identifier($1); }
+    TOKEN_IDENTIFIER %prec REF_BASE_PREC { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_identifier($1); }
 ;
 
 ref_expression:
@@ -782,6 +793,14 @@ assignment:
         void* inner_expr = $3;
         void* deref = zig_create_unary_op('*', inner_expr);
         zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_compound_assignment(deref, $6, $5);
+    }
+  | function_call TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_ASSIGN initializer_expression {
+        void* arr_idx = zig_create_array_index($1, $3);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_assignment(arr_idx, $6);
+    }
+  | function_call TOKEN_LBRACKET expression TOKEN_RBRACKET TOKEN_REASSIGN expression {
+        void* arr_idx = zig_create_array_index($1, $3);
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_compound_assignment(arr_idx, $6, $5);
     }
 ;
 
@@ -963,6 +982,9 @@ primary_expression:
     | string_literal { zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_string_literal($1); free($1); }
     | handled_call_statement { $$ = $1; }
     | function_call { $$ = $1; }
+    | function_call TOKEN_LBRACKET expression TOKEN_RBRACKET {
+        zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_array_index($1, $3);
+    }
     | function_call TOKEN_DOT TOKEN_IDENTIFIER {
         const char* field_copy = strdup($3);
         zlang_set_location(@$.first_line, @$.first_column); $$ = zig_create_qualified_identifier($1, field_copy);

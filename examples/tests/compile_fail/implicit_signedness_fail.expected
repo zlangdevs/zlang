@@ -1,0 +1,3 @@
+# Expected diagnostic fragments
+cannot implicitly convert i32 to u32
+signedness differs

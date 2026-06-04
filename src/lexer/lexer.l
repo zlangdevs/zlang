@@ -35,7 +35,6 @@ static int current_col = 1;
 %option prefix="zlang_"
 %option yylineno
 
-%x BRAINFUCK
 %x COMMENT
 
 DIGIT    [0-9]
@@ -81,7 +80,6 @@ FLOAT_DOT  \.{DIGIT_WITH_DELIM}{EXPONENT}?
 "as"        { return TOKEN_AS; }
 "match"     { return TOKEN_MATCH; }
 "_"         { return TOKEN_UNDERSCORE; }
-"brainfuck"[ \t\n]*"{" { BEGIN(BRAINFUCK); yylval.string = strdup(""); }
 {IDENT}     { yylval.string = strdup(yytext); last_was_identifier = 1; last_was_rparen = 0; return TOKEN_IDENTIFIER; }
 {FLOAT_EXP_DOT}  { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_FLOAT; }
 {FLOAT_EXP_INT}  { yylval.string = strdup(yytext); last_was_rparen = 0; return TOKEN_FLOAT; }
@@ -214,18 +212,6 @@ FLOAT_DOT  \.{DIGIT_WITH_DELIM}{EXPONENT}?
 ";"         { last_was_rparen = 0; template_depth = 0; return TOKEN_SEMICOLON; }
 [ \t\n]+    { /* skip spaces */ }
 "??".*      { /* skip single-line comments */ }
-<BRAINFUCK>[^{}]+ {
-    yylval.string = realloc(yylval.string, strlen(yylval.string) + yyleng + 1);
-    strcat(yylval.string, yytext);
-}
-<BRAINFUCK>"{"    {
-    yylval.string = realloc(yylval.string, strlen(yylval.string) + 2);
-    strcat(yylval.string, "{");
-}
-<BRAINFUCK>"}"    {
-    BEGIN(INITIAL);
-    return TOKEN_BRAINFUCK;
-}
 .           {
     fprintf(stderr, "Lex error at line %d: unexpected character '%s'\n", yylineno, yytext);
     return 0;

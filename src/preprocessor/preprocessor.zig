@@ -128,9 +128,11 @@ fn findInterpolationExprEnd(s: []const u8, start: usize, limit: usize) ?usize {
 fn appendStringWithInterpolation(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
+    defs: *const std.StringHashMap([]const u8),
     input: []const u8,
     start_idx: usize,
     end_idx: usize,
+    depth: usize,
 ) errors.PreprocessError!void {
     var has_interpolation = false;
     var i = start_idx + 1;
@@ -197,7 +199,11 @@ fn appendStringWithInterpolation(
             const expr_start = cur + 2;
             const expr_end = findInterpolationExprEnd(input, expr_start, end_idx).?;
             try out.appendSlice(allocator, ", (");
-            try out.appendSlice(allocator, std.mem.trim(u8, input[expr_start..expr_end], " \t\r\n"));
+            const raw_expr = std.mem.trim(u8, input[expr_start..expr_end], " \t\r\n");
+            var expanded_expr: std.ArrayList(u8) = .empty;
+            defer expanded_expr.deinit(allocator);
+            try appendExpandedText(allocator, &expanded_expr, defs, raw_expr, depth + 1);
+            try out.appendSlice(allocator, expanded_expr.items);
             try out.appendSlice(allocator, ")");
 
             cur = expr_end + 1;
@@ -247,7 +253,7 @@ fn appendExpandedText(
 
             const string_end = i - 1;
             if (quote == '"') {
-                try appendStringWithInterpolation(allocator, out, text, string_start, string_end);
+                try appendStringWithInterpolation(allocator, out, defs, text, string_start, string_end, depth);
             } else {
                 try out.appendSlice(allocator, text[string_start..i]);
             }
@@ -331,21 +337,22 @@ fn parseDefineLine(
     try appendUniqueDefineName(allocator, defined_names, name);
 
     skipSpaces(line, &i);
-    const source_value = std.mem.trimRight(u8, line[i..], " \t\r");
+    const source_value = std.mem.trimEnd(u8, line[i..], " \t\r");
     const value = findDefineOverride(define_overrides, name) orelse source_value;
 
-    const name_copy = try allocator.dupe(u8, name);
-    const value_copy = try allocator.dupe(u8, value);
-
-    const old_opt = defs.fetchPut(name_copy, value_copy) catch {
-        allocator.free(name_copy);
-        allocator.free(value_copy);
-        return errors.PreprocessError.OutOfMemory;
-    };
-    if (old_opt) |old| {
-        allocator.free(old.key);
-        allocator.free(old.value);
+    if (defs.getPtr(name)) |existing_value_ptr| {
+        const new_value = try allocator.dupe(u8, value);
+        allocator.free(existing_value_ptr.*);
+        existing_value_ptr.* = new_value;
+        return;
     }
+
+    const name_copy = try allocator.dupe(u8, name);
+    errdefer allocator.free(name_copy);
+    const value_copy = try allocator.dupe(u8, value);
+    errdefer allocator.free(value_copy);
+
+    defs.put(name_copy, value_copy) catch return errors.PreprocessError.OutOfMemory;
 }
 
 fn parseFlagLine(allocator: std.mem.Allocator, flags: *std.ArrayList([]const u8), line: []const u8) errors.PreprocessError!void {
@@ -361,7 +368,7 @@ fn parseFlagLine(allocator: std.mem.Allocator, flags: *std.ArrayList([]const u8)
     if (!std.mem.eql(u8, kw, "flag")) return errors.PreprocessError.InvalidDirective;
 
     skipSpaces(line, &i);
-    const rest = std.mem.trimRight(u8, line[i..], " \t\r");
+    const rest = std.mem.trimEnd(u8, line[i..], " \t\r");
     if (rest.len == 0) return errors.PreprocessError.InvalidDirective;
 
     var it = std.mem.tokenizeAny(u8, rest, " \t");
@@ -416,10 +423,10 @@ pub fn preprocessWithFlagsAndDefines(allocator: std.mem.Allocator, input: []cons
         defs.deinit();
     }
 
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
 
-    var flags = std.ArrayList([]const u8){};
+    var flags: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (flags.items) |flag| {
             allocator.free(flag);
@@ -427,7 +434,7 @@ pub fn preprocessWithFlagsAndDefines(allocator: std.mem.Allocator, input: []cons
         flags.deinit(allocator);
     }
 
-    var defined_names = std.ArrayList([]const u8){};
+    var defined_names: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (defined_names.items) |name| {
             allocator.free(name);
@@ -477,7 +484,7 @@ pub fn preprocessWithFlagsAndDefines(allocator: std.mem.Allocator, input: []cons
 
             const string_end = i - 1;
             if (quote == '"') {
-                try appendStringWithInterpolation(allocator, &out, input, string_start, string_end);
+                try appendStringWithInterpolation(allocator, &out, &defs, input, string_start, string_end, 0);
             } else {
                 try out.appendSlice(allocator, input[string_start..i]);
             }

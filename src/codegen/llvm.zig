@@ -5,7 +5,6 @@ const utils = @import("utils.zig");
 const structs = @import("structs.zig");
 const strings = @import("strings.zig");
 const modules = @import("modules.zig");
-const bfck = @import("bf.zig");
 const control_flow = @import("control_flow.zig");
 const variables = @import("variables.zig");
 const functions = @import("functions.zig");
@@ -15,6 +14,47 @@ const simd = @import("simd.zig");
 const enums = @import("enums.zig");
 const diagnostics = @import("../diagnostics.zig");
 const llvm_tools = @import("../llvm_tools.zig");
+
+fn nanoTimestamp() i128 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(.REALTIME, &ts) != 0) return 0;
+    return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
+}
+
+fn runCommandOk(allocator: std.mem.Allocator, argv: []const []const u8) bool {
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const result = std.process.run(allocator, threaded.io(), .{ .argv = argv }) catch return false;
+    return result.term == .exited and result.term.exited == 0;
+}
+
+// Like runCommandOk, but on failure echoes the command and its captured
+// stderr/stdout so the underlying linker error is visible (e.g. in CI).
+fn runCommandReport(allocator: std.mem.Allocator, argv: []const []const u8) bool {
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const result = std.process.run(allocator, threaded.io(), .{ .argv = argv }) catch |err| {
+        std.debug.print("Link command failed to start: {s}\n", .{@errorName(err)});
+        return false;
+    };
+    if (result.term == .exited and result.term.exited == 0) return true;
+    std.debug.print("Link command failed:", .{});
+    for (argv) |a| std.debug.print(" {s}", .{a});
+    std.debug.print("\n", .{});
+    if (result.stderr.len != 0) std.debug.print("{s}\n", .{result.stderr});
+    if (result.stdout.len != 0) std.debug.print("{s}\n", .{result.stdout});
+    return false;
+}
+
+fn detectGccLibDir(allocator: std.mem.Allocator) ?[]const u8 {
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const result = std.process.run(allocator, threaded.io(), .{ .argv = &[_][]const u8{ "/usr/bin/cc", "-print-libgcc-file-name" } }) catch return null;
+    if (result.term != .exited or result.term.exited != 0) return null;
+    const libgcc_path = std.mem.trim(u8, result.stdout, " \t\r\n");
+    const dir = std.fs.path.dirname(libgcc_path) orelse return null;
+    return allocator.dupe(u8, dir) catch null;
+}
 
 const c_bindings = @import("c_bindings.zig");
 const c = c_bindings.c;
@@ -51,7 +91,8 @@ pub const CodeGenerator = struct {
     current_line: usize,
     current_column: usize,
     current_token_text: ?[]const u8,
-    enable_comptime_bf_opt: bool,
+    emitted_error: bool,
+    optimize_enabled: bool,
     template_substitutions: ?std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     function_overloads: std.HashMap([]const u8, std.ArrayList(structs.FunctionOverload), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     pending_template_instantiations: std.ArrayList(structs.TemplateInstantiation),
@@ -65,6 +106,7 @@ pub const CodeGenerator = struct {
     next_solicit_callback_id: usize,
     function_asts: std.HashMap([]const u8, ast.Function, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
     current_source_function_name: ?[]const u8,
+    current_codegen_function_name: ?[]const u8,
     deferred_actions: std.ArrayList(DeferredAction),
     defer_scope_markers: std.ArrayList(usize),
     pending_global_inits: std.ArrayList(PendingGlobalInit),
@@ -83,10 +125,29 @@ pub const CodeGenerator = struct {
     };
 
     const PendingGlobalInit = struct {
+        global_name: []const u8,
         global_var: c.LLVMValueRef,
         initializer: *ast.Node,
         type_ref: c.LLVMTypeRef,
         type_name: []const u8,
+    };
+
+    pub const BackendTiming = struct {
+        pub const LinkBackend = enum {
+            unknown,
+            zig_cc,
+            lld,
+            clang,
+        };
+
+        opt_time_ns: u64 = 0,
+        llc_time_ns: u64 = 0,
+        link_time_ns: u64 = 0,
+        llc_version_major: i16 = 0,
+        opt_version_major: i16 = 0,
+        clang_version_major: i16 = 0,
+        lld_version_major: i16 = 0,
+        link_backend: LinkBackend = .unknown,
     };
 
     fn normalizeClangTarget(alloc: std.mem.Allocator, arch: []const u8) ![]const u8 {
@@ -112,6 +173,21 @@ pub const CodeGenerator = struct {
         return std.mem.indexOf(u8, target, "-gnu.") != null;
     }
 
+    fn toolVersionHintFromPath(tool_path: []const u8) i16 {
+        const base = std.fs.path.basename(tool_path);
+        var i: usize = base.len;
+        while (i > 0 and base[i - 1] >= '0' and base[i - 1] <= '9') : (i -= 1) {}
+        if (i == base.len) return 0;
+        const digits = base[i..];
+        return std.fmt.parseInt(i16, digits, 10) catch 0;
+    }
+
+    fn sameParentDir(a: []const u8, b: []const u8) bool {
+        const da = std.fs.path.dirname(a) orelse "";
+        const db = std.fs.path.dirname(b) orelse "";
+        return std.mem.eql(u8, da, db);
+    }
+
     pub fn init(allocator: std.mem.Allocator) errors.CodegenError!CodeGenerator {
         _ = c.LLVMInitializeNativeTarget();
         _ = c.LLVMInitializeNativeAsmPrinter();
@@ -125,9 +201,9 @@ pub const CodeGenerator = struct {
         if (builder == null) return errors.CodegenError.BuilderCreationFailed;
         const control_flow_analyzer = control_flow.ControlFlowAnalyzer.init(allocator);
 
-        var variable_scopes = std.ArrayList(std.HashMap([]const u8, structs.VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage)){};
+        var variable_scopes: std.ArrayList(std.HashMap([]const u8, structs.VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage)) = .empty;
         try variable_scopes.append(allocator, std.HashMap([]const u8, structs.VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator));
-        var defer_scope_markers = std.ArrayList(usize){};
+        var defer_scope_markers: std.ArrayList(usize) = .empty;
         try defer_scope_markers.append(allocator, 0);
 
         return CodeGenerator{
@@ -148,7 +224,7 @@ pub const CodeGenerator = struct {
             .current_function = null,
             .current_function_return_type = "",
             .control_flow_analyzer = control_flow_analyzer,
-            .loop_context_stack = std.ArrayList(structs.LoopContext){},
+            .loop_context_stack = .empty,
             .variable_scopes = variable_scopes,
             .uses_float_modulo = false,
             .global_string_counter = 0,
@@ -157,14 +233,15 @@ pub const CodeGenerator = struct {
             .struct_declarations = std.HashMap([]const u8, ast.StructDecl, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .module_manager = modules.ModuleManager.init(allocator),
             .label_blocks = std.HashMap([]const u8, c.LLVMBasicBlockRef, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
-            .pending_gotos = std.ArrayList(structs.PendingGoto){},
+            .pending_gotos = .empty,
             .current_line = 0,
             .current_column = 0,
             .current_token_text = null,
-            .enable_comptime_bf_opt = false,
+            .emitted_error = false,
+            .optimize_enabled = false,
             .template_substitutions = null,
             .function_overloads = std.HashMap([]const u8, std.ArrayList(structs.FunctionOverload), std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
-            .pending_template_instantiations = std.ArrayList(structs.TemplateInstantiation){},
+            .pending_template_instantiations = .empty,
             .error_codes = std.HashMap([]const u8, i32, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .next_error_code = 1,
             .last_error_global = null,
@@ -175,9 +252,10 @@ pub const CodeGenerator = struct {
             .next_solicit_callback_id = 1,
             .function_asts = std.HashMap([]const u8, ast.Function, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
             .current_source_function_name = null,
-            .deferred_actions = std.ArrayList(DeferredAction){},
+            .current_codegen_function_name = null,
+            .deferred_actions = .empty,
             .defer_scope_markers = defer_scope_markers,
-            .pending_global_inits = std.ArrayList(PendingGlobalInit){},
+            .pending_global_inits = .empty,
         };
     }
 
@@ -231,6 +309,7 @@ pub const CodeGenerator = struct {
     }
 
     fn reportError(self: *CodeGenerator, message: []const u8, hint: ?[]const u8) void {
+        self.emitted_error = true;
         const file_path = self.module_manager.getCurrentModulePath();
         diagnostics.printDiagnostic(self.allocator, .{
             .file_path = file_path,
@@ -366,12 +445,37 @@ pub const CodeGenerator = struct {
         self.reportError(msg, hint);
     }
 
+    pub fn emitMemcpy(self: *CodeGenerator, dst_ptr: c.LLVMValueRef, src_ptr: c.LLVMValueRef, ty: c.LLVMTypeRef) !void {
+        const memcpy_func = try self.declareLibcFunction("memcpy");
+        const i8_ty = c.LLVMInt8TypeInContext(self.context);
+        const i8_ptr_ty = c.LLVMPointerType(i8_ty, 0);
+        const size_ty = utils.libcTypeToLLVM(self, .size_t_type);
+        const dst_i8 = c.LLVMBuildBitCast(self.builder, dst_ptr, i8_ptr_ty, "memcpy_dst");
+        const src_i8 = c.LLVMBuildBitCast(self.builder, src_ptr, i8_ptr_ty, "memcpy_src");
+        const size = c.LLVMABISizeOfType(c.LLVMGetModuleDataLayout(self.module), ty);
+        const size_val = c.LLVMConstInt(size_ty, @as(c_ulonglong, @intCast(size)), 0);
+        var args = [_]c.LLVMValueRef{ dst_i8, src_i8, size_val };
+        _ = c.LLVMBuildCall2(self.builder, c.LLVMGlobalGetValueType(memcpy_func), memcpy_func, &args[0], 3, "");
+    }
+
     pub fn registerFunctionModule(self: *CodeGenerator, func_name: []const u8, module_name: []const u8) !void {
         try self.module_manager.registerFunctionModule(func_name, module_name);
     }
 
+    pub fn registerGlobalModule(self: *CodeGenerator, global_name: []const u8, module_name: []const u8) !void {
+        try self.module_manager.registerGlobalModule(global_name, module_name);
+    }
+
+    pub fn setCurrentModule(self: *CodeGenerator, module_name: []const u8) void {
+        self.module_manager.setCurrentModule(module_name);
+    }
+
     pub fn setCurrentModuleByFunction(self: *CodeGenerator, func_name: []const u8) void {
         self.module_manager.setCurrentModuleByFunction(func_name);
+    }
+
+    pub fn setCurrentModuleByGlobal(self: *CodeGenerator, global_name: []const u8) void {
+        self.module_manager.setCurrentModuleByGlobal(global_name);
     }
 
     pub fn canAccess(self: *CodeGenerator, from_module: []const u8, target_module: []const u8) bool {
@@ -513,14 +617,14 @@ pub const CodeGenerator = struct {
                 const array_name = try self.getBaseIdentifierName(qual_id.base);
                 defer self.allocator.free(array_name);
                 const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
-                var collected_indices = std.ArrayList(c.LLVMValueRef){};
+                var collected_indices: std.ArrayList(c.LLVMValueRef) = .empty;
                 defer collected_indices.deinit(self.allocator);
                 const base_node = try self.collectArrayIndices(arr_idx.array, &collected_indices);
                 _ = base_node;
                 const index_value = try self.generateExpression(arr_idx.index);
                 try collected_indices.append(self.allocator, index_value);
 
-                var all_indices = std.ArrayList(c.LLVMValueRef){};
+                var all_indices: std.ArrayList(c.LLVMValueRef) = .empty;
                 defer all_indices.deinit(self.allocator);
                 try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
 
@@ -580,8 +684,14 @@ pub const CodeGenerator = struct {
             .identifier => {
                 const base_name = qual_id.base.data.identifier.name;
                 const var_info = CodeGenerator.getVariable(self, base_name) orelse return errors.CodegenError.UndefinedVariable;
-                base_val = var_info.value;
-                base_ty = var_info.type_ref;
+                if (std.mem.startsWith(u8, var_info.type_name, "ptr<") and std.mem.endsWith(u8, var_info.type_name, ">")) {
+                    base_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_for_field");
+                    const inner_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
+                    base_ty = try self.getLLVMType(inner_type_name);
+                } else {
+                    base_val = var_info.value;
+                    base_ty = var_info.type_ref;
+                }
             },
             .array_index => {
                 const arr_idx = qual_id.base.data.array_index;
@@ -720,8 +830,25 @@ pub const CodeGenerator = struct {
                 }
             }
 
+            if (var_type_kind == c.LLVMStructTypeKind and as.value.data == .identifier) {
+                const src_name = as.value.data.identifier.name;
+                if (CodeGenerator.getVariable(self, src_name)) |src_var| {
+                    if (std.mem.eql(u8, src_var.type_name, var_info.type_name)) {
+                        try self.emitMemcpy(var_info.value, src_var.value, var_info.type_ref);
+                        return;
+                    }
+                }
+            }
+
             const value_raw = try self.generateExpressionWithContext(as.value, var_info.type_name);
-            const final_value = try self.castWithSourceRules(value_raw, @ptrCast(var_info.type_ref), as.value);
+            if (var_type_kind == c.LLVMStructTypeKind and
+                (as.value.data == .function_call or as.value.data == .method_call) and
+                c.LLVMGetTypeKind(c.LLVMTypeOf(value_raw)) == c.LLVMPointerTypeKind)
+            {
+                try self.emitMemcpy(var_info.value, value_raw, var_info.type_ref);
+                return;
+            }
+            const final_value = try self.castWithSourceRulesNamed(value_raw, @ptrCast(var_info.type_ref), as.value, var_info.type_name);
             _ = c.LLVMBuildStore(@ptrCast(self.builder), @ptrCast(final_value), @ptrCast(var_info.value));
         }
     }
@@ -762,10 +889,12 @@ pub const CodeGenerator = struct {
     pub const getStructDecl = structs.getStructDecl;
 
     pub fn generateCode(self: *CodeGenerator, program: *ast.Node) errors.CodegenError!void {
+        self.emitted_error = false;
         switch (program.data) {
             .program => |prog| {
                 try self.registerBuiltinErrorGuard();
                 for (prog.functions.items) |func| {
+                    self.setCurrentNodeContext(func);
                     if (func.data == .error_decl) {
                         const error_decl = func.data.error_decl;
                         if (error_decl.code_kind != .alias) {
@@ -774,6 +903,7 @@ pub const CodeGenerator = struct {
                     }
                 }
                 for (prog.functions.items) |func| {
+                    self.setCurrentNodeContext(func);
                     if (func.data == .error_decl) {
                         const error_decl = func.data.error_decl;
                         if (error_decl.code_kind == .alias) {
@@ -782,6 +912,7 @@ pub const CodeGenerator = struct {
                     }
                 }
                 for (prog.functions.items) |func| {
+                    self.setCurrentNodeContext(func);
                     if (func.data == .struct_decl) {
                         const struct_decl = func.data.struct_decl;
                         if (self.struct_types.get(struct_decl.name) == null) {
@@ -793,6 +924,7 @@ pub const CodeGenerator = struct {
                     }
                 }
                 for (prog.functions.items) |func| {
+                    self.setCurrentNodeContext(func);
                     if (func.data == .enum_decl) {
                         try enums.generateEnumDeclaration(self, func.data.enum_decl);
                     } else if (func.data == .struct_decl) {
@@ -804,13 +936,18 @@ pub const CodeGenerator = struct {
                     }
                 }
                 for (prog.functions.items) |func| {
+                    self.setCurrentNodeContext(func);
                     if (func.data == .function) {
                         try self.declareFunction(func.data.function);
                     }
                 }
-                for (prog.globals.items) |glob| try self.generateGlobalDeclaration(glob);
+                for (prog.globals.items) |glob| {
+                    self.setCurrentNodeContext(glob);
+                    try self.generateGlobalDeclaration(glob);
+                }
                 try self.generatePendingGlobalInitializers();
                 for (prog.functions.items) |func| {
+                    self.setCurrentNodeContext(func);
                     if (func.data == .function) try self.generateFunctionBody(func.data.function);
                 }
             },
@@ -838,8 +975,10 @@ pub const CodeGenerator = struct {
         }
 
         for (self.pending_global_inits.items) |pending| {
+            self.setCurrentNodeContext(pending.initializer);
+            self.setCurrentModuleByGlobal(pending.global_name);
             const value_raw = try self.generateExpressionWithContext(pending.initializer, pending.type_name);
-            const final_value = try self.castWithSourceRules(value_raw, pending.type_ref, pending.initializer);
+            const final_value = try self.castWithSourceRulesNamed(value_raw, pending.type_ref, pending.initializer, pending.type_name);
             _ = c.LLVMBuildStore(self.builder, final_value, pending.global_var);
         }
 
@@ -879,6 +1018,10 @@ pub const CodeGenerator = struct {
     }
 
     pub fn generateStatement(self: *CodeGenerator, stmt: *ast.Node) errors.CodegenError!void {
+        const current_block = c.LLVMGetInsertBlock(@ptrCast(self.builder));
+        if (current_block != null and c.LLVMGetBasicBlockTerminator(current_block) != null and stmt.data != .label_stmt) {
+            return;
+        }
         self.setCurrentNodeContext(stmt);
         switch (stmt.data) {
             .assignment => |as| {
@@ -1099,6 +1242,21 @@ pub const CodeGenerator = struct {
 
                             if (is_zero_struct_init) {
                                 _ = c.LLVMBuildStore(self.builder, c.LLVMConstNull(var_type), alloca);
+                            } else if (initializer.data == .identifier) {
+                                const src_name = initializer.data.identifier.name;
+                                if (CodeGenerator.getVariable(self, src_name)) |src_var| {
+                                    if (std.mem.eql(u8, src_var.type_name, decl.type_name)) {
+                                        try self.emitMemcpy(alloca, src_var.value, var_type);
+                                    } else {
+                                        const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
+                                        const casted_value = try self.castWithSourceRulesNamed(init_value, var_type, initializer, decl.type_name);
+                                        _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
+                                    }
+                                } else {
+                                    const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
+                                    const casted_value = try self.castWithSourceRulesNamed(init_value, var_type, initializer, decl.type_name);
+                                    _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
+                                }
                             } else {
                                 const struct_name = std.mem.span(c.LLVMGetStructName(var_type));
                                 const struct_decl = self.getStructDecl(struct_name) orelse return errors.CodegenError.TypeMismatch;
@@ -1118,12 +1276,16 @@ pub const CodeGenerator = struct {
                                     }
                                 }
                                 const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
-                                const casted_value = try self.castWithSourceRules(init_value, var_type, initializer);
+                                if ((initializer.data == .function_call or initializer.data == .method_call) and c.LLVMGetTypeKind(c.LLVMTypeOf(init_value)) == c.LLVMPointerTypeKind) {
+                                    try self.emitMemcpy(alloca, init_value, var_type);
+                                    return;
+                                }
+                                const casted_value = try self.castWithSourceRulesNamed(init_value, var_type, initializer, decl.type_name);
                                 _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                             }
                         } else {
                             const init_value = try self.generateExpressionWithContext(initializer, decl.type_name);
-                            const casted_value = try self.castWithSourceRules(init_value, var_type, initializer);
+                            const casted_value = try self.castWithSourceRulesNamed(init_value, var_type, initializer, decl.type_name);
                             _ = c.LLVMBuildStore(self.builder, casted_value, alloca);
                         }
                     } else if (c.LLVMGetTypeKind(var_type) == c.LLVMStructTypeKind) {
@@ -1223,13 +1385,17 @@ pub const CodeGenerator = struct {
                         }
 
                         const current_value = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_current");
-                        const rhs_value = try self.generateExpressionWithContext(cas.value, var_info.type_name);
-                        const rhs_casted = try self.castWithSourceRules(rhs_value, @ptrCast(var_info.type_ref), cas.value);
-
                         const current_type_kind = c.LLVMGetTypeKind(var_info.type_ref);
                         const is_float = current_type_kind == c.LLVMFloatTypeKind or
                             current_type_kind == c.LLVMDoubleTypeKind or
                             current_type_kind == c.LLVMHalfTypeKind;
+                        const rhs_value = try self.generateExpressionWithContext(cas.value, var_info.type_name);
+                        const rhs_type = c.LLVMTypeOf(rhs_value);
+                        const rhs_kind = c.LLVMGetTypeKind(rhs_type);
+                        const rhs_casted = if (is_float and rhs_kind == c.LLVMIntegerTypeKind)
+                            self.castToType(rhs_value, @ptrCast(var_info.type_ref))
+                        else
+                            try self.castWithRules(rhs_value, @ptrCast(var_info.type_ref), cas.value);
 
                         const new_value = switch (cas.op) {
                             '+' => if (is_float)
@@ -1258,8 +1424,8 @@ pub const CodeGenerator = struct {
                                 else
                                     c.LLVMBuildSRem(self.builder, current_value, rhs_casted, "srem_compound");
                             },
-                            'A' => c.LLVMBuildAnd(self.builder, current_value, rhs_casted, "and_compound"),
-                            '$' => c.LLVMBuildOr(self.builder, current_value, rhs_casted, "or_compound"),
+                            'A', '&' => c.LLVMBuildAnd(self.builder, current_value, rhs_casted, "and_compound"),
+                            '$', '|' => c.LLVMBuildOr(self.builder, current_value, rhs_casted, "or_compound"),
                             '^' => c.LLVMBuildXor(self.builder, current_value, rhs_casted, "xor_compound"),
                             '<' => c.LLVMBuildShl(self.builder, current_value, rhs_casted, "shl_compound"),
                             '>' => c.LLVMBuildAShr(self.builder, current_value, rhs_casted, "ashr_compound"),
@@ -1268,89 +1434,11 @@ pub const CodeGenerator = struct {
                         _ = c.LLVMBuildStore(self.builder, new_value, var_info.value);
                     },
                     .array_index => |arr_idx| {
-                        var collected_indices = std.ArrayList(c.LLVMValueRef){};
-                        defer collected_indices.deinit(self.allocator);
-                        const base_node = try self.collectArrayIndices(arr_idx.array, &collected_indices);
-                        var index_value = try self.generateExpression(arr_idx.index);
-                        const array_name = try self.getBaseIdentifierName(base_node);
-                        defer self.allocator.free(array_name);
-                        const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
-
-                        if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
-                            if (c.LLVMTypeOf(index_value) != c.LLVMInt64TypeInContext(self.context)) {
-                                index_value = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
-                            }
-                            try collected_indices.append(self.allocator, index_value);
-                            const ptr_val = c.LLVMBuildLoad2(self.builder, var_info.type_ref, var_info.value, "load_ptr_compound");
-                            const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                            const element_type = try self.getLLVMType(element_type_name);
-                            const idx = collected_indices.items[collected_indices.items.len - 1];
-                            var indices = [_]c.LLVMValueRef{idx};
-                            const element_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_index_compound");
-                            const current_val = c.LLVMBuildLoad2(self.builder, element_type, element_ptr, "load_elem");
-                            const expected_ty_name = self.getTypeNameFromLLVMType(element_type);
-                            const rhs_raw = try self.generateExpressionWithContext(cas.value, expected_ty_name);
-                            const rhs_val = try self.castWithRules(rhs_raw, element_type, cas.value);
-
-                            const is_float = std.mem.eql(u8, expected_ty_name, "f16") or
-                                std.mem.eql(u8, expected_ty_name, "f32") or
-                                std.mem.eql(u8, expected_ty_name, "f64");
-
-                            const new_value = switch (cas.op) {
-                                '+' => if (is_float)
-                                    c.LLVMBuildFAdd(self.builder, current_val, rhs_val, "fadd_ptr_compound")
-                                else
-                                    c.LLVMBuildAdd(self.builder, current_val, rhs_val, "add_ptr_compound"),
-                                '-' => if (is_float)
-                                    c.LLVMBuildFSub(self.builder, current_val, rhs_val, "fsub_ptr_compound")
-                                else
-                                    c.LLVMBuildSub(self.builder, current_val, rhs_val, "sub_ptr_compound"),
-                                '*' => if (is_float)
-                                    c.LLVMBuildFMul(self.builder, current_val, rhs_val, "fmul_ptr_compound")
-                                else
-                                    c.LLVMBuildMul(self.builder, current_val, rhs_val, "mul_ptr_compound"),
-                                '/' => if (is_float)
-                                    c.LLVMBuildFDiv(self.builder, current_val, rhs_val, "fdiv_ptr_compound")
-                                else
-                                    c.LLVMBuildSDiv(self.builder, current_val, rhs_val, "sdiv_ptr_compound"),
-                                '%' => if (is_float) blk: {
-                                    self.uses_float_modulo = true;
-                                    break :blk c.LLVMBuildFRem(self.builder, current_val, rhs_val, "frem_ptr_compound");
-                                } else blk: {
-                                    const is_unsigned = isUnsignedType(expected_ty_name);
-                                    break :blk if (is_unsigned)
-                                        c.LLVMBuildURem(self.builder, current_val, rhs_val, "urem_ptr_compound")
-                                    else
-                                        c.LLVMBuildSRem(self.builder, current_val, rhs_val, "srem_ptr_compound");
-                                },
-                                'A' => c.LLVMBuildAnd(self.builder, current_val, rhs_val, "and_ptr_compound"),
-                                '$' => c.LLVMBuildOr(self.builder, current_val, rhs_val, "or_ptr_compound"),
-                                '^' => c.LLVMBuildXor(self.builder, current_val, rhs_val, "xor_ptr_compound"),
-                                '<' => c.LLVMBuildShl(self.builder, current_val, rhs_val, "shl_ptr_compound"),
-                                '>' => c.LLVMBuildAShr(self.builder, current_val, rhs_val, "ashr_ptr_compound"),
-                                else => return errors.CodegenError.UnsupportedOperation,
-                            };
-                            _ = c.LLVMBuildStore(self.builder, new_value, element_ptr);
-                            return;
-                        }
-
-                        index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
-                        try collected_indices.append(self.allocator, index_value);
-                        var final_type = var_info.type_ref;
-                        for (0..collected_indices.items.len) |_| final_type = c.LLVMGetElementType(final_type);
-                        var all_indices = std.ArrayList(c.LLVMValueRef){};
-                        defer all_indices.deinit(self.allocator);
-                        try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
-                        var i = collected_indices.items.len;
-                        while (i > 0) {
-                            i -= 1;
-                            try all_indices.append(self.allocator, collected_indices.items[i]);
-                        }
-                        const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
-                        const current_val = c.LLVMBuildLoad2(self.builder, final_type, element_ptr, "load_elem");
-                        const expected_ty_name = self.getTypeNameFromLLVMType(final_type);
+                        const access = try array.getArrayElementPtrAndType(self, arr_idx);
+                        const current_val = c.LLVMBuildLoad2(self.builder, access.element_type, access.ptr, "load_elem");
+                        const expected_ty_name = access.element_type_name;
                         const rhs_raw = try self.generateExpressionWithContext(cas.value, expected_ty_name);
-                        const rhs_val = try self.castWithRules(rhs_raw, final_type, cas.value);
+                        const rhs_val = try self.castWithRules(rhs_raw, access.element_type, cas.value);
 
                         const is_float = std.mem.eql(u8, expected_ty_name, "f16") or
                             std.mem.eql(u8, expected_ty_name, "f32") or
@@ -1383,14 +1471,14 @@ pub const CodeGenerator = struct {
                                 else
                                     c.LLVMBuildSRem(self.builder, current_val, rhs_val, "srem_array_compound");
                             },
-                            'A' => c.LLVMBuildAnd(self.builder, current_val, rhs_val, "and_array_compound"),
-                            '$' => c.LLVMBuildOr(self.builder, current_val, rhs_val, "or_array_compound"),
+                            'A', '&' => c.LLVMBuildAnd(self.builder, current_val, rhs_val, "and_array_compound"),
+                            '$', '|' => c.LLVMBuildOr(self.builder, current_val, rhs_val, "or_array_compound"),
                             '^' => c.LLVMBuildXor(self.builder, current_val, rhs_val, "xor_array_compound"),
                             '<' => c.LLVMBuildShl(self.builder, current_val, rhs_val, "shl_array_compound"),
                             '>' => c.LLVMBuildAShr(self.builder, current_val, rhs_val, "ashr_array_compound"),
                             else => return errors.CodegenError.UnsupportedOperation,
                         };
-                        _ = c.LLVMBuildStore(self.builder, new_value, element_ptr);
+                        _ = c.LLVMBuildStore(self.builder, new_value, access.ptr);
                     },
                     .qualified_identifier => |qident| {
                         const base_name = try self.getBaseIdentifierName(cas.target);
@@ -1405,13 +1493,17 @@ pub const CodeGenerator = struct {
                         const field_type_name = struct_decl.fields.items[field_index].type_name;
                         const field_type = try self.getLLVMType(field_type_name);
                         const current_value = c.LLVMBuildLoad2(self.builder, field_type, field_ptr, "load_field");
-                        const rhs_value = try self.generateExpressionWithContext(cas.value, field_type_name);
-                        const rhs_casted = try self.castWithSourceRules(rhs_value, field_type, cas.value);
-
                         const field_type_kind = c.LLVMGetTypeKind(field_type);
                         const is_float = field_type_kind == c.LLVMFloatTypeKind or
                             field_type_kind == c.LLVMDoubleTypeKind or
                             field_type_kind == c.LLVMHalfTypeKind;
+                        const rhs_value = try self.generateExpressionWithContext(cas.value, field_type_name);
+                        const rhs_type = c.LLVMTypeOf(rhs_value);
+                        const rhs_kind = c.LLVMGetTypeKind(rhs_type);
+                        const rhs_casted = if (is_float and rhs_kind == c.LLVMIntegerTypeKind)
+                            self.castToType(rhs_value, field_type)
+                        else
+                            try self.castWithRules(rhs_value, field_type, cas.value);
 
                         const new_value = switch (cas.op) {
                             '+' => if (is_float)
@@ -1440,8 +1532,8 @@ pub const CodeGenerator = struct {
                                 else
                                     c.LLVMBuildSRem(self.builder, current_value, rhs_casted, "srem_field_compound");
                             },
-                            'A' => c.LLVMBuildAnd(self.builder, current_value, rhs_casted, "and_field_compound"),
-                            '$' => c.LLVMBuildOr(self.builder, current_value, rhs_casted, "or_field_compound"),
+                            'A', '&' => c.LLVMBuildAnd(self.builder, current_value, rhs_casted, "and_field_compound"),
+                            '$', '|' => c.LLVMBuildOr(self.builder, current_value, rhs_casted, "or_field_compound"),
                             '^' => c.LLVMBuildXor(self.builder, current_value, rhs_casted, "xor_field_compound"),
                             '<' => c.LLVMBuildShl(self.builder, current_value, rhs_casted, "shl_field_compound"),
                             '>' => c.LLVMBuildAShr(self.builder, current_value, rhs_casted, "ashr_field_compound"),
@@ -1514,18 +1606,49 @@ pub const CodeGenerator = struct {
             .return_stmt => |ret| {
                 if (ret.expression) |expr| {
                     const target_ty_name = self.current_function_return_type;
-                    const ret_raw = try self.generateExpressionWithContext(expr, target_ty_name);
                     const target_ty = try self.getLLVMType(target_ty_name);
+                    var sret_ptr: ?c.LLVMValueRef = null;
+                    if (self.current_codegen_function_name) |fname| {
+                        if (self.sret_functions.get(fname) != null) {
+                            if (self.current_function) |fn_val| {
+                                sret_ptr = c.LLVMGetParam(fn_val, 0);
+                            }
+                        }
+                    }
+
+                    if (sret_ptr != null and expr.data == .identifier) {
+                        const ident_name = expr.data.identifier.name;
+                        if (CodeGenerator.getVariable(self, ident_name)) |var_info| {
+                            if (var_info.type_ref == target_ty) {
+                                try self.runDeferredActions();
+                                try self.emitMemcpy(sret_ptr.?, var_info.value, target_ty);
+                                _ = c.LLVMBuildRetVoid(self.builder);
+                                return;
+                            }
+                        }
+                    }
+
+                    const ret_raw = try self.generateExpressionWithContext(expr, target_ty_name);
+
+                    if (sret_ptr != null and c.LLVMGetTypeKind(c.LLVMTypeOf(ret_raw)) == c.LLVMPointerTypeKind and c.LLVMGetTypeKind(target_ty) == c.LLVMStructTypeKind) {
+                        try self.runDeferredActions();
+                        try self.emitMemcpy(sret_ptr.?, ret_raw, target_ty);
+                        _ = c.LLVMBuildRetVoid(self.builder);
+                        return;
+                    }
+
                     const final_ret = try self.castWithRules(ret_raw, target_ty, expr);
                     try self.runDeferredActions();
-                    _ = c.LLVMBuildRet(self.builder, final_ret);
+                    if (sret_ptr) |ptr| {
+                        _ = c.LLVMBuildStore(self.builder, final_ret, ptr);
+                        _ = c.LLVMBuildRetVoid(self.builder);
+                    } else {
+                        _ = c.LLVMBuildRet(self.builder, final_ret);
+                    }
                 } else {
                     try self.runDeferredActions();
                     _ = c.LLVMBuildRetVoid(self.builder);
                 }
-            },
-            .brainfuck => |bf| {
-                _ = try bfck.generateBrainfuck(self, bf, self.enable_comptime_bf_opt);
             },
             .if_stmt => |if_stmt| {
                 try self.generateIfStatement(if_stmt);
@@ -1564,7 +1687,7 @@ pub const CodeGenerator = struct {
                     return;
                 }
 
-                var collected_indices = std.ArrayList(c.LLVMValueRef){};
+                var collected_indices: std.ArrayList(c.LLVMValueRef) = .empty;
                 defer collected_indices.deinit(self.allocator);
                 const base_node = try self.collectArrayIndices(arr_cass.array, &collected_indices);
                 var index_value = try self.generateExpression(arr_cass.index);
@@ -1625,7 +1748,7 @@ pub const CodeGenerator = struct {
                 try collected_indices.append(self.allocator, index_value);
                 var final_type = var_info.type_ref;
                 for (0..collected_indices.items.len) |_| final_type = c.LLVMGetElementType(final_type);
-                var all_indices = std.ArrayList(c.LLVMValueRef){};
+                var all_indices: std.ArrayList(c.LLVMValueRef) = .empty;
                 defer all_indices.deinit(self.allocator);
                 try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
                 var i = collected_indices.items.len;
@@ -2161,22 +2284,22 @@ pub const CodeGenerator = struct {
     }
 
     fn getOrCreateStackSaveIntrinsic(self: *CodeGenerator) c.LLVMValueRef {
-        var f = c.LLVMGetNamedFunction(self.module, "llvm.stacksave");
+        var f = c.LLVMGetNamedFunction(self.module, "llvm.stacksave.p0");
         if (f == null) {
             const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
             const fn_ty = c.LLVMFunctionType(i8_ptr, null, 0, 0);
-            f = c.LLVMAddFunction(self.module, "llvm.stacksave", fn_ty);
+            f = c.LLVMAddFunction(self.module, "llvm.stacksave.p0", fn_ty);
         }
         return f;
     }
 
     fn getOrCreateStackRestoreIntrinsic(self: *CodeGenerator) c.LLVMValueRef {
-        var f = c.LLVMGetNamedFunction(self.module, "llvm.stackrestore");
+        var f = c.LLVMGetNamedFunction(self.module, "llvm.stackrestore.p0");
         if (f == null) {
             const i8_ptr = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
             var params = [_]c.LLVMTypeRef{i8_ptr};
             const fn_ty = c.LLVMFunctionType(c.LLVMVoidTypeInContext(self.context), &params, 1, 0);
-            f = c.LLVMAddFunction(self.module, "llvm.stackrestore", fn_ty);
+            f = c.LLVMAddFunction(self.module, "llvm.stackrestore.p0", fn_ty);
         }
         return f;
     }
@@ -2485,11 +2608,11 @@ pub const CodeGenerator = struct {
         defer locals.deinit();
         try self.collectHandlerLocalDecls(statements, &locals);
 
-        var captures = std.ArrayList([]const u8){};
+        var captures: std.ArrayList([]const u8) = .empty;
         defer captures.deinit(self.allocator);
         try self.collectHandlerCapturesFromStatements(statements, &captures, &locals);
 
-        var mutated = std.ArrayList([]const u8){};
+        var mutated: std.ArrayList([]const u8) = .empty;
         defer mutated.deinit(self.allocator);
         try self.collectHandlerMutatedCaptures(statements, &mutated, &locals);
 
@@ -2583,14 +2706,14 @@ pub const CodeGenerator = struct {
             defer locals.deinit();
             try self.collectHandlerLocalDecls(handler.body.items, &locals);
 
-            var handler_caps = std.ArrayList([]const u8){};
+            var handler_caps: std.ArrayList([]const u8) = .empty;
             defer handler_caps.deinit(self.allocator);
             try self.collectHandlerCapturesFromStatements(handler.body.items, &handler_caps, &locals);
             for (handler_caps.items) |name| {
                 try self.appendUniqueName(captures, name);
             }
 
-            var handler_mut = std.ArrayList([]const u8){};
+            var handler_mut: std.ArrayList([]const u8) = .empty;
             defer handler_mut.deinit(self.allocator);
             try self.collectHandlerMutatedCaptures(handler.body.items, &handler_mut, &locals);
             for (handler_mut.items) |name| {
@@ -2641,7 +2764,7 @@ pub const CodeGenerator = struct {
         const saved_source_name = self.current_source_function_name;
         const saved_scopes = self.variable_scopes;
 
-        self.variable_scopes = std.ArrayList(std.HashMap([]const u8, structs.VariableInfo, std.hash_map.StringContext, std.hash_map.default_max_load_percentage)){};
+        self.variable_scopes = .empty;
         defer {
             for (self.variable_scopes.items) |*scope| {
                 scope.deinit();
@@ -2760,9 +2883,9 @@ pub const CodeGenerator = struct {
 
         if (has_solicit_handlers and handled.call.data == .function_call) {
             const call_name = handled.call.data.function_call.name;
-            var captures = std.ArrayList([]const u8){};
+            var captures: std.ArrayList([]const u8) = .empty;
             defer captures.deinit(self.allocator);
-            var mutated = std.ArrayList([]const u8){};
+            var mutated: std.ArrayList([]const u8) = .empty;
             defer mutated.deinit(self.allocator);
             try self.collectSolicitHandlerCaptureSets(handled, &captures, &mutated);
 
@@ -2770,9 +2893,9 @@ pub const CodeGenerator = struct {
             defer callee_var_types.deinit();
             try self.collectFunctionVarTypes(call_name, &callee_var_types);
 
-            var caller_bindings = std.ArrayList(SolicitCaptureBinding){};
+            var caller_bindings: std.ArrayList(SolicitCaptureBinding) = .empty;
             defer caller_bindings.deinit(self.allocator);
-            var callee_bindings = std.ArrayList(SolicitCaptureBinding){};
+            var callee_bindings: std.ArrayList(SolicitCaptureBinding) = .empty;
             defer callee_bindings.deinit(self.allocator);
 
             const callback_id = self.next_solicit_callback_id;
@@ -2950,7 +3073,7 @@ pub const CodeGenerator = struct {
         const struct_decl = self.getStructDecl(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
         const field_map = self.struct_fields.get(struct_init.struct_name) orelse return errors.CodegenError.TypeMismatch;
 
-        var field_values = std.ArrayList(c.LLVMValueRef){};
+        var field_values: std.ArrayList(c.LLVMValueRef) = .empty;
         defer field_values.deinit(self.allocator);
         try field_values.resize(self.allocator, struct_decl.fields.items.len);
 
@@ -2992,7 +3115,7 @@ pub const CodeGenerator = struct {
                     const arr_len = c.LLVMGetArrayLength(expected_type);
                     if (parsed.len > arr_len) return errors.CodegenError.TypeMismatch;
 
-                    var bytes = std.ArrayList(c.LLVMValueRef){};
+                    var bytes: std.ArrayList(c.LLVMValueRef) = .empty;
                     defer bytes.deinit(self.allocator);
                     try bytes.resize(self.allocator, arr_len);
                     const zero = c.LLVMConstInt(elem_type, 0, 0);
@@ -3021,7 +3144,7 @@ pub const CodeGenerator = struct {
                 const arr_len = c.LLVMGetArrayLength(expected_type);
                 if (arr.elements.items.len > arr_len) return errors.CodegenError.TypeMismatch;
 
-                var elems = std.ArrayList(c.LLVMValueRef){};
+                var elems: std.ArrayList(c.LLVMValueRef) = .empty;
                 defer elems.deinit(self.allocator);
                 try elems.resize(self.allocator, arr_len);
                 const zero = c.LLVMConstNull(element_type);
@@ -3047,7 +3170,7 @@ pub const CodeGenerator = struct {
     fn buildGlobalArrayInitializer(self: *CodeGenerator, decl: ast.VarDecl, array_type: c.LLVMTypeRef, array_info: FixedArrayInfo) errors.CodegenError!c.LLVMValueRef {
         const element_type = c.LLVMGetElementType(array_type);
 
-        var const_elements = std.ArrayList(c.LLVMValueRef){};
+        var const_elements: std.ArrayList(c.LLVMValueRef) = .empty;
         defer const_elements.deinit(self.allocator);
         try const_elements.resize(self.allocator, array_info.array_size);
 
@@ -3103,8 +3226,10 @@ pub const CodeGenerator = struct {
     }
 
     fn generateGlobalDeclaration(self: *CodeGenerator, global_node: *ast.Node) errors.CodegenError!void {
+        self.setCurrentNodeContext(global_node);
         switch (global_node.data) {
             .var_decl => |decl| {
+                self.setCurrentModuleByGlobal(decl.name);
                 if (utils.isVarArgType(decl.type_name)) {
                     if (self.current_line > 0) {
                         self.reportErrorFmt("Invalid type 'vararg' for variable '{s}'", .{decl.name}, "Variadic arguments can only be used as the last parameter of a function");
@@ -3154,6 +3279,7 @@ pub const CodeGenerator = struct {
 
                     if (allow_runtime_init and !decl.is_const) {
                         try self.pending_global_inits.append(self.allocator, .{
+                            .global_name = decl.name,
                             .global_var = global_var,
                             .initializer = initializer,
                             .type_ref = var_type,
@@ -3251,12 +3377,24 @@ pub const CodeGenerator = struct {
             return c.LLVMBuildLoad2(self.builder, target_type, value, "struct_load");
         } else if (value_kind == c.LLVMPointerTypeKind and target_kind == c.LLVMPointerTypeKind) {
             return c.LLVMBuildBitCast(self.builder, value, target_type, "bitcast");
+        } else if (value_kind == c.LLVMIntegerTypeKind and target_kind == c.LLVMPointerTypeKind) {
+            const const_int = c.LLVMIsAConstantInt(value);
+            if (const_int != null and c.LLVMConstIntGetSExtValue(value) == 0) {
+                return c.LLVMConstNull(target_type);
+            }
+            return c.LLVMBuildIntToPtr(self.builder, value, target_type, "int_to_ptr");
+        } else if (value_kind == c.LLVMPointerTypeKind and target_kind == c.LLVMIntegerTypeKind) {
+            return c.LLVMBuildPtrToInt(self.builder, value, target_type, "ptr_to_int");
         }
 
         return value;
     }
 
     pub fn castWithSourceRules(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef, value_node: ?*ast.Node) errors.CodegenError!c.LLVMValueRef {
+        return self.castWithSourceRulesNamed(value, target_type, value_node, null);
+    }
+
+    pub fn castWithSourceRulesNamed(self: *CodeGenerator, value: c.LLVMValueRef, target_type: c.LLVMTypeRef, value_node: ?*ast.Node, target_type_name: ?[]const u8) errors.CodegenError!c.LLVMValueRef {
         var val = value;
         var from_ty = c.LLVMTypeOf(val);
         var source_type_name: ?[]const u8 = null;
@@ -3296,6 +3434,17 @@ pub const CodeGenerator = struct {
                 }
             }
         }
+        if (target_type_name) |tname| {
+            if (source_type_name) |sname| {
+                if (utils.isIntPrimitive(sname) and utils.isIntPrimitive(tname) and
+                    !std.mem.eql(u8, sname, tname) and
+                    utils.isUnsignedType(sname) != utils.isUnsignedType(tname))
+                {
+                    self.reportErrorFmt("Type mismatch: cannot implicitly convert {s} to {s} (signedness differs)", .{ sname, tname }, "Add an explicit cast (as <type> or as _)");
+                    return errors.CodegenError.TypeMismatch;
+                }
+            }
+        }
         if (self.typesAreEqual(from_ty, target_type)) return val;
         const fk = c.LLVMGetTypeKind(from_ty);
         const tk = c.LLVMGetTypeKind(target_type);
@@ -3317,6 +3466,8 @@ pub const CodeGenerator = struct {
             if (value_node) |vn3| {
                 switch (vn3.data) {
                     .struct_initializer => can_load_struct = true,
+                    .function_call => can_load_struct = true,
+                    .method_call => can_load_struct = true,
                     .identifier => |ident| {
                         if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                             can_load_struct = self.pointerTypeMatchesTargetStruct(var_info.type_name, target_type);
@@ -3384,13 +3535,15 @@ pub const CodeGenerator = struct {
 
         const from_name = self.getTypeNameFromLLVMType(@ptrCast(from_ty));
         const to_name = self.getTypeNameFromLLVMType(@ptrCast(target_type));
-
         if (value_node) |vn| {
+            const old_line = self.current_line;
             const old_col = self.current_column;
             const old_token_text = self.current_token_text;
+            if (vn.line > 0) self.current_line = vn.line;
             if (vn.column > 0) self.current_column = vn.column;
             self.current_token_text = tokenTextForNode(vn);
             self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
+            self.current_line = old_line;
             self.current_column = old_col;
             self.current_token_text = old_token_text;
         } else {
@@ -3514,6 +3667,8 @@ pub const CodeGenerator = struct {
             if (value_node) |vn3| {
                 switch (vn3.data) {
                     .struct_initializer => can_load_struct = true,
+                    .function_call => can_load_struct = true,
+                    .method_call => can_load_struct = true,
                     .identifier => |ident| {
                         if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                             can_load_struct = self.pointerTypeMatchesTargetStruct(var_info.type_name, target_type);
@@ -3586,9 +3741,17 @@ pub const CodeGenerator = struct {
         }
         const from_name = self.getTypeNameFromLLVMType(@ptrCast(from_ty));
         const to_name = self.getTypeNameFromLLVMType(@ptrCast(target_type));
-
-        if (value_node) |_| {
+        if (value_node) |vn| {
+            const old_line = self.current_line;
+            const old_col = self.current_column;
+            const old_token_text = self.current_token_text;
+            if (vn.line > 0) self.current_line = vn.line;
+            if (vn.column > 0) self.current_column = vn.column;
+            self.current_token_text = tokenTextForNode(vn);
             self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
+            self.current_line = old_line;
+            self.current_column = old_col;
+            self.current_token_text = old_token_text;
         } else {
             self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
         }
@@ -3714,18 +3877,12 @@ pub const CodeGenerator = struct {
                     return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), float_val);
                 } else {
                     if (expected_type) |type_name| {
-                        if (std.mem.eql(u8, type_name, "f16") or std.mem.eql(u8, type_name, "f32") or std.mem.eql(u8, type_name, "f64")) {
-                            const ival = numeric.parseNumericLiteral(num.value) catch 0;
-                            const fval: f64 = @floatFromInt(ival);
-                            if (std.mem.eql(u8, type_name, "f16")) {
-                                return c.LLVMConstReal(c.LLVMHalfTypeInContext(self.context), fval);
-                            } else if (std.mem.eql(u8, type_name, "f32")) {
-                                return c.LLVMConstReal(c.LLVMFloatTypeInContext(self.context), fval);
-                            } else {
-                                return c.LLVMConstReal(c.LLVMDoubleTypeInContext(self.context), fval);
-                            }
-                        }
                         const llvm_type = try self.getLLVMType(type_name);
+                        const expected_kind = c.LLVMGetTypeKind(llvm_type);
+                        if (expected_kind != c.LLVMIntegerTypeKind) {
+                            const value = numeric.parseNumericLiteral(num.value) catch 0;
+                            return c.LLVMConstInt(c.LLVMInt64TypeInContext(self.context), @as(c_ulonglong, @intCast(value)), 0);
+                        }
                         if (std.mem.startsWith(u8, type_name, "u")) {
                             if (std.mem.startsWith(u8, num.value, "-")) {
                                 const sval = numeric.parseNumericLiteral(num.value) catch {
@@ -3781,7 +3938,7 @@ pub const CodeGenerator = struct {
                     if (overloads.items.len == 1) {
                         const match = overloads.items[0];
                         if (!match.is_template) {
-                            var cand_param_type_names = std.ArrayList([]const u8){};
+                            var cand_param_type_names: std.ArrayList([]const u8) = .empty;
                             defer cand_param_type_names.deinit(self.allocator);
                             for (match.func_node.parameters.items) |p| {
                                 if (!utils.isVarArgType(p.type_name)) try cand_param_type_names.append(self.allocator, p.type_name);
@@ -3833,23 +3990,31 @@ pub const CodeGenerator = struct {
                             else => errors.CodegenError.UnsupportedOperation,
                         };
                     } else if (kind == c.LLVMIntegerTypeKind) {
+                        var lhs_int = lhs_val;
+                        var rhs_int = rhs_val;
+                        if (c.LLVMTypeOf(lhs_int) != target_ty) {
+                            lhs_int = self.castToTypeWithSourceInfo(lhs_int, target_ty, try self.inferType(b.lhs));
+                        }
+                        if (c.LLVMTypeOf(rhs_int) != target_ty) {
+                            rhs_int = self.castToTypeWithSourceInfo(rhs_int, target_ty, try self.inferType(b.rhs));
+                        }
                         return switch (b.op) {
-                            '+' => c.LLVMBuildAdd(self.builder, lhs_val, rhs_val, "add"),
-                            '-' => c.LLVMBuildSub(self.builder, lhs_val, rhs_val, "sub"),
-                            '*' => c.LLVMBuildMul(self.builder, lhs_val, rhs_val, "mul"),
+                            '+' => c.LLVMBuildAdd(self.builder, lhs_int, rhs_int, "add"),
+                            '-' => c.LLVMBuildSub(self.builder, lhs_int, rhs_int, "sub"),
+                            '*' => c.LLVMBuildMul(self.builder, lhs_int, rhs_int, "mul"),
                             '/' => blk: {
                                 const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(target_ty));
                                 break :blk if (is_unsigned)
-                                    c.LLVMBuildUDiv(self.builder, lhs_val, rhs_val, "udiv")
+                                    c.LLVMBuildUDiv(self.builder, lhs_int, rhs_int, "udiv")
                                 else
-                                    c.LLVMBuildSDiv(self.builder, lhs_val, rhs_val, "sdiv");
+                                    c.LLVMBuildSDiv(self.builder, lhs_int, rhs_int, "sdiv");
                             },
                             '%' => blk: {
                                 const is_unsigned = isUnsignedType(self.getTypeNameFromLLVMType(target_ty));
                                 break :blk if (is_unsigned)
-                                    c.LLVMBuildURem(self.builder, lhs_val, rhs_val, "urem")
+                                    c.LLVMBuildURem(self.builder, lhs_int, rhs_int, "urem")
                                 else
-                                    c.LLVMBuildSRem(self.builder, lhs_val, rhs_val, "srem");
+                                    c.LLVMBuildSRem(self.builder, lhs_int, rhs_int, "srem");
                             },
                             '&', '|', 'A', '$', '^', '<', '>' => try self.generateBinaryOp(b),
                             else => errors.CodegenError.UnsupportedOperation,
@@ -4000,6 +4165,36 @@ pub const CodeGenerator = struct {
         return t1;
     }
 
+    fn resolveStructTypeName(self: *CodeGenerator, struct_type_name: []const u8) ?[]const u8 {
+        if (self.struct_declarations.get(struct_type_name) != null) {
+            return struct_type_name;
+        }
+
+        var it = self.struct_declarations.iterator();
+        while (it.next()) |entry| {
+            const candidate = entry.key_ptr.*;
+            if (std.mem.endsWith(u8, candidate, struct_type_name)) {
+                if (candidate.len == struct_type_name.len) {
+                    return candidate;
+                }
+                const sep_idx = candidate.len - struct_type_name.len - 1;
+                if (candidate[sep_idx] == '.') {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    fn getStructFieldTypeName(self: *CodeGenerator, struct_type_name: []const u8, field_name: []const u8) ?[]const u8 {
+        const resolved_name = self.resolveStructTypeName(struct_type_name) orelse return null;
+        const struct_decl = self.struct_declarations.get(resolved_name) orelse return null;
+        const field_map = self.struct_fields.get(resolved_name) orelse return null;
+        const field_index = field_map.get(field_name) orelse return null;
+        return struct_decl.fields.items[field_index].type_name;
+    }
+
     pub fn inferType(self: *CodeGenerator, node: *ast.Node) errors.CodegenError![]const u8 {
         switch (node.data) {
             .identifier => |ident| {
@@ -4033,6 +4228,23 @@ pub const CodeGenerator = struct {
                     return rhs_type;
                 }
                 return self.mergeTypes(lhs_type, rhs_type);
+            },
+            .qualified_identifier => |qual_id| {
+                const base_type = try self.inferType(qual_id.base);
+                var struct_type_name = base_type;
+                if (std.mem.startsWith(u8, struct_type_name, "ptr<") and std.mem.endsWith(u8, struct_type_name, ">")) {
+                    struct_type_name = struct_type_name[4 .. struct_type_name.len - 1];
+                }
+
+                if (self.getStructFieldTypeName(struct_type_name, qual_id.field)) |field_type| {
+                    return field_type;
+                }
+
+                if (self.getQualifiedFieldPtrAndType(node)) |pair| {
+                    return self.getTypeNameFromLLVMType(pair.ty);
+                } else |_| {}
+
+                return "void";
             },
             .function_call => |call| {
                 if (self.function_return_types.get(call.name)) |ret_type| {
@@ -4153,7 +4365,7 @@ pub const CodeGenerator = struct {
                     if (overloads.items.len == 1) {
                         const match = overloads.items[0];
                         if (!match.is_template) {
-                            var cand_param_type_names = std.ArrayList([]const u8){};
+                            var cand_param_type_names: std.ArrayList([]const u8) = .empty;
                             defer cand_param_type_names.deinit(self.allocator);
                             for (match.func_node.parameters.items) |p| {
                                 if (!utils.isVarArgType(p.type_name)) try cand_param_type_names.append(self.allocator, p.type_name);
@@ -4188,16 +4400,34 @@ pub const CodeGenerator = struct {
                         const array_name = try self.getBaseIdentifierName(qual_id.base);
                         defer self.allocator.free(array_name);
                         const array_var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
-                        const index_value = try self.generateExpression(array_index.index);
-                        const element_type = c.LLVMGetElementType(@ptrCast(array_var_info.type_ref));
-                        var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
-                        result_value = c.LLVMBuildGEP2(self.builder, @ptrCast(array_var_info.type_ref), @ptrCast(array_var_info.value), &indices[0], 2, "array_element_ptr");
-                        result_type = element_type;
-                        const elem_type_kind = c.LLVMGetTypeKind(element_type);
-                        if (elem_type_kind == c.LLVMStructTypeKind) {
-                            const name_ptr = c.LLVMGetStructName(element_type);
-                            if (name_ptr != null) {
-                                result_type_name = std.mem.span(name_ptr);
+                        var index_value = try self.generateExpression(array_index.index);
+                        if (std.mem.startsWith(u8, array_var_info.type_name, "ptr<") and std.mem.endsWith(u8, array_var_info.type_name, ">")) {
+                            const element_type_name = array_var_info.type_name[4 .. array_var_info.type_name.len - 1];
+                            const element_type = try self.getLLVMType(element_type_name);
+                            index_value = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
+                            const loaded_ptr = c.LLVMBuildLoad2(self.builder, array_var_info.type_ref, array_var_info.value, "load_ptr_for_field_access");
+                            var indices = [_]c.LLVMValueRef{index_value};
+                            result_value = c.LLVMBuildGEP2(self.builder, element_type, loaded_ptr, &indices[0], 1, "ptr_element_ptr");
+                            result_type = element_type;
+                            const elem_type_kind = c.LLVMGetTypeKind(element_type);
+                            if (elem_type_kind == c.LLVMStructTypeKind) {
+                                const name_ptr = c.LLVMGetStructName(element_type);
+                                if (name_ptr != null) {
+                                    result_type_name = std.mem.span(name_ptr);
+                                }
+                            }
+                        } else {
+                            index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
+                            const element_type = c.LLVMGetElementType(@ptrCast(array_var_info.type_ref));
+                            var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
+                            result_value = c.LLVMBuildGEP2(self.builder, @ptrCast(array_var_info.type_ref), @ptrCast(array_var_info.value), &indices[0], 2, "array_element_ptr");
+                            result_type = element_type;
+                            const elem_type_kind = c.LLVMGetTypeKind(element_type);
+                            if (elem_type_kind == c.LLVMStructTypeKind) {
+                                const name_ptr = c.LLVMGetStructName(element_type);
+                                if (name_ptr != null) {
+                                    result_type_name = std.mem.span(name_ptr);
+                                }
                             }
                         }
                     },
@@ -4368,14 +4598,95 @@ pub const CodeGenerator = struct {
                             return pair.ptr;
                         } else if (un.operand.data == .array_index) {
                             const arr_idx = un.operand.data.array_index;
-                            const array_name = try self.getBaseIdentifierName(arr_idx.array);
-                            defer self.allocator.free(array_name);
-                            const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
+                            var collected_indices: std.ArrayList(c.LLVMValueRef) = .empty;
+                            defer collected_indices.deinit(self.allocator);
+
+                            const base_node = try self.collectArrayIndices(arr_idx.array, &collected_indices);
                             var index_value = try self.generateExpression(arr_idx.index);
+
+                            var base_ptr: c.LLVMValueRef = undefined;
+                            var base_type: c.LLVMTypeRef = undefined;
+                            var base_type_name: []const u8 = "";
+                            var base_ptr_is_direct_value = false;
+
+                            if (base_node.data == .qualified_identifier) {
+                                const pair = try self.getQualifiedFieldPtrAndType(base_node);
+                                base_ptr = pair.ptr;
+                                base_type = pair.ty;
+                                base_type_name = self.getTypeNameFromLLVMType(base_type);
+                            } else {
+                                if (base_node.data == .function_call) {
+                                    base_ptr = try self.generateExpression(base_node);
+                                    base_type = c.LLVMTypeOf(base_ptr);
+                                    const call = base_node.data.function_call;
+                                    base_type_name = if (self.function_return_types.get(call.name)) |rt|
+                                        rt
+                                    else if (self.function_asts.get(call.name)) |fn_ast|
+                                        fn_ast.return_type
+                                    else
+                                        try self.inferType(base_node);
+                                    base_ptr_is_direct_value = true;
+                                } else {
+                                    const array_name = try self.getBaseIdentifierName(base_node);
+                                    defer self.allocator.free(array_name);
+                                    const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
+                                    base_ptr = var_info.value;
+                                    base_type = var_info.type_ref;
+                                    base_type_name = var_info.type_name;
+                                }
+                            }
+
+                            const is_pointer_base = std.mem.startsWith(u8, base_type_name, "ptr<") or (base_ptr_is_direct_value and c.LLVMGetTypeKind(base_type) == c.LLVMPointerTypeKind);
+                            if (is_pointer_base) {
+                                if (c.LLVMTypeOf(index_value) != c.LLVMInt64TypeInContext(self.context)) {
+                                    index_value = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
+                                }
+                                try collected_indices.append(self.allocator, index_value);
+                                const ptr_val = if (base_ptr_is_direct_value)
+                                    base_ptr
+                                else
+                                    c.LLVMBuildLoad2(self.builder, base_type, base_ptr, "load_ptr_for_addr");
+                                if (!(std.mem.startsWith(u8, base_type_name, "ptr<") and std.mem.endsWith(u8, base_type_name, ">"))) {
+                                    return errors.CodegenError.TypeMismatch;
+                                }
+                                const element_type_name = base_type_name[4 .. base_type_name.len - 1];
+                                const element_type = try self.getLLVMType(element_type_name);
+                                const idx = collected_indices.items[collected_indices.items.len - 1];
+                                var ptr_indices = [_]c.LLVMValueRef{idx};
+                                return c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &ptr_indices[0], 1, "ptr_index_addr");
+                            }
+
+                            if (std.mem.startsWith(u8, base_type_name, "[]")) {
+                                index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
+                                try collected_indices.append(self.allocator, index_value);
+
+                                const element_type_name = base_type_name[2..];
+                                const element_type = try self.getLLVMType(element_type_name);
+
+                                var ptr_indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0) };
+                                const ptr_in_struct = c.LLVMBuildGEP2(self.builder, base_type, base_ptr, &ptr_indices[0], 2, "slice_ptr_in_struct_addr");
+                                const arg_ptr_type = c.LLVMPointerType(element_type, 0);
+                                const loaded_ptr = c.LLVMBuildLoad2(self.builder, arg_ptr_type, ptr_in_struct, "slice_ptr_val_addr");
+
+                                const idx = collected_indices.items[collected_indices.items.len - 1];
+                                var idx_only = [_]c.LLVMValueRef{idx};
+                                return c.LLVMBuildGEP2(self.builder, element_type, loaded_ptr, &idx_only[0], 1, "slice_element_ptr_addr");
+                            }
+
                             index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
-                            var indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
-                            const element_ptr = c.LLVMBuildGEP2(self.builder, var_info.type_ref, var_info.value, &indices[0], 2, "array_element_ptr");
-                            return element_ptr;
+                            try collected_indices.append(self.allocator, index_value);
+
+                            var all_indices: std.ArrayList(c.LLVMValueRef) = .empty;
+                            defer all_indices.deinit(self.allocator);
+                            try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
+
+                            var i = collected_indices.items.len;
+                            while (i > 0) {
+                                i -= 1;
+                                try all_indices.append(self.allocator, collected_indices.items[i]);
+                            }
+
+                            return c.LLVMBuildGEP2(self.builder, base_type, base_ptr, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr");
                         }
                         return errors.CodegenError.TypeMismatch;
                     },
@@ -4680,7 +4991,7 @@ pub const CodeGenerator = struct {
                 return self.generateBinaryOp(b);
             },
             .method_call => |method| {
-                var args = std.ArrayList(*ast.Node){};
+                var args: std.ArrayList(*ast.Node) = .empty;
                 defer args.deinit(self.allocator);
                 try args.append(self.allocator, method.object);
                 for (method.args.items) |arg| {
@@ -4720,10 +5031,10 @@ pub const CodeGenerator = struct {
 
                 return errors.CodegenError.UnsupportedOperation;
             },
-            .array_initializer => |_| {
+            .array_initializer => {
                 return errors.CodegenError.TypeMismatch;
             },
-            .simd_initializer => |_| {
+            .simd_initializer => {
                 return errors.CodegenError.TypeMismatch;
             },
             else => return errors.CodegenError.TypeMismatch,
@@ -4905,7 +5216,27 @@ pub const CodeGenerator = struct {
         };
     }
 
+    fn getPointerElementTypeFromExpr(self: *CodeGenerator, expr: *ast.Node, ptr_type: c.LLVMTypeRef) errors.CodegenError!c.LLVMTypeRef {
+        _ = ptr_type;
+        const inferred = try self.inferType(expr);
+        if (std.mem.startsWith(u8, inferred, "ptr<") and std.mem.endsWith(u8, inferred, ">")) {
+            return try self.getLLVMType(inferred[4 .. inferred.len - 1]);
+        }
+        if (expr.data == .identifier) {
+            const name = expr.data.identifier.name;
+            if (CodeGenerator.getVariable(self, name)) |var_info| {
+                if (std.mem.startsWith(u8, var_info.type_name, "ptr<") and std.mem.endsWith(u8, var_info.type_name, ">")) {
+                    return try self.getLLVMType(var_info.type_name[4 .. var_info.type_name.len - 1]);
+                }
+            }
+        }
+        return c.LLVMInt8TypeInContext(self.context);
+    }
+
     fn generateBinaryOp(self: *CodeGenerator, bin_op: ast.BinaryOp) errors.CodegenError!c.LLVMValueRef {
+        if (bin_op.op == '&') return self.generateLogicalAnd(bin_op.lhs, bin_op.rhs);
+        if (bin_op.op == '|') return self.generateLogicalOr(bin_op.lhs, bin_op.rhs);
+
         const lhs_value = try self.generateExpression(bin_op.lhs);
         const lhs_type = c.LLVMTypeOf(lhs_value);
         const lhs_kind = c.LLVMGetTypeKind(lhs_type);
@@ -4923,27 +5254,7 @@ pub const CodeGenerator = struct {
             const rhs_kind = c.LLVMGetTypeKind(rhs_type);
 
             if (rhs_kind == c.LLVMIntegerTypeKind) {
-                var element_type: c.LLVMTypeRef = undefined;
-                if (bin_op.lhs.data == .identifier) {
-                    const var_info = CodeGenerator.getVariable(self, bin_op.lhs.data.identifier.name) orelse return errors.CodegenError.UndefinedVariable;
-                    if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
-                        const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                        element_type = try self.getLLVMType(element_type_name);
-                    } else {
-                        return errors.CodegenError.TypeMismatch;
-                    }
-                } else {
-                    element_type = c.LLVMGetElementType(lhs_type);
-                    if (element_type == null or c.LLVMGetTypeKind(element_type) == c.LLVMVoidTypeKind) {
-                        const inferred_type = try self.inferType(bin_op.lhs);
-                        if (std.mem.startsWith(u8, inferred_type, "ptr<") and std.mem.endsWith(u8, inferred_type, ">")) {
-                            const element_type_name = inferred_type[4 .. inferred_type.len - 1];
-                            element_type = try self.getLLVMType(element_type_name);
-                        } else {
-                            element_type = c.LLVMInt8TypeInContext(self.context);
-                        }
-                    }
-                }
+                const element_type = try self.getPointerElementTypeFromExpr(bin_op.lhs, lhs_type);
                 var idx_val = rhs_value;
                 if (c.LLVMTypeOf(rhs_value) != c.LLVMInt64TypeInContext(self.context)) {
                     idx_val = self.castToType(rhs_value, c.LLVMInt64TypeInContext(self.context));
@@ -4952,27 +5263,7 @@ pub const CodeGenerator = struct {
                 var indices = [_]c.LLVMValueRef{index};
                 return c.LLVMBuildGEP2(self.builder, element_type, lhs_value, &indices[0], 1, "ptr_arith");
             } else if (rhs_kind == c.LLVMPointerTypeKind and bin_op.op == '-') {
-                var element_type: c.LLVMTypeRef = undefined;
-                if (bin_op.lhs.data == .identifier) {
-                    const var_info = CodeGenerator.getVariable(self, bin_op.lhs.data.identifier.name) orelse return errors.CodegenError.UndefinedVariable;
-                    if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
-                        const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                        element_type = try self.getLLVMType(element_type_name);
-                    } else {
-                        return errors.CodegenError.TypeMismatch;
-                    }
-                } else {
-                    element_type = c.LLVMGetElementType(lhs_type);
-                    if (element_type == null or c.LLVMGetTypeKind(element_type) == c.LLVMVoidTypeKind) {
-                        const inferred_type = try self.inferType(bin_op.lhs);
-                        if (std.mem.startsWith(u8, inferred_type, "ptr<") and std.mem.endsWith(u8, inferred_type, ">")) {
-                            const element_type_name = inferred_type[4 .. inferred_type.len - 1];
-                            element_type = try self.getLLVMType(element_type_name);
-                        } else {
-                            element_type = c.LLVMInt8TypeInContext(self.context);
-                        }
-                    }
-                }
+                const element_type = try self.getPointerElementTypeFromExpr(bin_op.lhs, lhs_type);
                 const lhs_int = c.LLVMBuildPtrToInt(self.builder, lhs_value, c.LLVMInt64TypeInContext(self.context), "ptr_to_int_lhs");
                 const rhs_int = c.LLVMBuildPtrToInt(self.builder, rhs_value, c.LLVMInt64TypeInContext(self.context), "ptr_to_int_rhs");
                 const byte_diff = c.LLVMBuildSub(self.builder, lhs_int, rhs_int, "byte_diff");
@@ -4984,18 +5275,23 @@ pub const CodeGenerator = struct {
         }
 
         const lhs_type_name_inferred = try self.inferType(bin_op.lhs);
-        const rhs_value = try self.generateExpressionWithContext(bin_op.rhs, lhs_type_name_inferred);
+        const has_concrete_lhs_context = !std.mem.eql(u8, lhs_type_name_inferred, "void") and
+            !std.mem.eql(u8, lhs_type_name_inferred, "ptr") and
+            !std.mem.eql(u8, lhs_type_name_inferred, "unknown");
+        const rhs_value = if (has_concrete_lhs_context)
+            try self.generateExpressionWithContext(bin_op.rhs, lhs_type_name_inferred)
+        else
+            try self.generateExpression(bin_op.rhs);
         const rhs_type_name_inferred = try self.inferType(bin_op.rhs);
 
         const rhs_type = c.LLVMTypeOf(rhs_value);
         const rhs_kind = c.LLVMGetTypeKind(rhs_type);
 
         if (lhs_kind == c.LLVMIntegerTypeKind and rhs_kind == c.LLVMPointerTypeKind and bin_op.op == '+') {
+            const element_type = try self.getPointerElementTypeFromExpr(bin_op.rhs, rhs_type);
             if (bin_op.rhs.data == .identifier) {
                 const var_info = CodeGenerator.getVariable(self, bin_op.rhs.data.identifier.name) orelse return errors.CodegenError.UndefinedVariable;
                 if (std.mem.startsWith(u8, var_info.type_name, "ptr<")) {
-                    const element_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
-                    const element_type = try self.getLLVMType(element_type_name);
                     var idx_val = lhs_value;
                     if (c.LLVMTypeOf(lhs_value) != c.LLVMInt64TypeInContext(self.context)) {
                         idx_val = self.castToType(lhs_value, c.LLVMInt64TypeInContext(self.context));
@@ -5003,7 +5299,6 @@ pub const CodeGenerator = struct {
                     var indices = [_]c.LLVMValueRef{idx_val};
                     return c.LLVMBuildGEP2(self.builder, element_type, rhs_value, &indices[0], 1, "ptr_arith");
                 }
-                const element_type = c.LLVMGetElementType(rhs_type);
                 var idx_val = lhs_value;
                 if (c.LLVMTypeOf(lhs_value) != c.LLVMInt64TypeInContext(self.context)) {
                     idx_val = self.castToType(lhs_value, c.LLVMInt64TypeInContext(self.context));
@@ -5011,7 +5306,12 @@ pub const CodeGenerator = struct {
                 var indices = [_]c.LLVMValueRef{idx_val};
                 return c.LLVMBuildGEP2(self.builder, element_type, rhs_value, &indices[0], 1, "ptr_arith");
             }
-            return errors.CodegenError.TypeMismatch;
+            var idx_val = lhs_value;
+            if (c.LLVMTypeOf(lhs_value) != c.LLVMInt64TypeInContext(self.context)) {
+                idx_val = self.castToType(lhs_value, c.LLVMInt64TypeInContext(self.context));
+            }
+            var indices = [_]c.LLVMValueRef{idx_val};
+            return c.LLVMBuildGEP2(self.builder, element_type, rhs_value, &indices[0], 1, "ptr_arith");
         }
 
         if (lhs_kind == c.LLVMPointerTypeKind or rhs_kind == c.LLVMPointerTypeKind) {
@@ -5248,6 +5548,28 @@ pub const CodeGenerator = struct {
         }
     }
 
+    pub fn writeBitcodeToFile(self: *CodeGenerator, filename: []const u8) !void {
+        const filename_z = utils.dupeZ(self.allocator, filename);
+        defer self.allocator.free(filename_z);
+
+        const result = c.LLVMWriteBitcodeToFile(self.module, filename_z.ptr);
+        if (result != 0) return error.WriteFailed;
+    }
+
+    pub fn verifyModule(self: *CodeGenerator) !void {
+        var error_msg: [*c]u8 = null;
+        const verify_result = c.LLVMVerifyModule(self.module, c.LLVMReturnStatusAction, &error_msg);
+        if (verify_result != 0) {
+            if (error_msg != null) {
+                defer c.LLVMDisposeMessage(error_msg);
+                std.debug.print("IR verification failed:\n{s}\n", .{std.mem.span(error_msg)});
+            } else {
+                std.debug.print("IR verification failed with unknown LLVM error\n", .{});
+            }
+            return error.VerificationFailed;
+        }
+    }
+
     pub fn emitLLVMIR(self: *CodeGenerator, base_name: []const u8, optimize: bool) ![]const u8 {
         const ir_file = try std.fmt.allocPrint(self.allocator, "{s}.ll", .{base_name});
         errdefer self.allocator.free(ir_file);
@@ -5255,24 +5577,30 @@ pub const CodeGenerator = struct {
         try self.writeToFile(ir_file);
 
         if (optimize) {
-            var opt_args_list = std.ArrayList([]const u8){};
+            var opt_args_list: std.ArrayList([]const u8) = .empty;
             defer opt_args_list.deinit(self.allocator);
 
-            try opt_args_list.appendSlice(self.allocator, &[_][]const u8{
-                "opt",
-                "-O3",
-                ir_file,
-                "-o",
-                ir_file,
-            });
+            const use_fast_pipeline = self.shouldUseFastOptimizePipeline();
 
-            var opt_child_process = std.process.Child.init(opt_args_list.items, self.allocator);
-            opt_child_process.stdout_behavior = .Pipe;
-            opt_child_process.stderr_behavior = .Inherit;
-            try opt_child_process.spawn();
+            if (use_fast_pipeline) {
+                try opt_args_list.appendSlice(self.allocator, &[_][]const u8{
+                    "opt",
+                    "-passes=globaldce,sroa,mem2reg,instcombine,simplifycfg,gvn,dse,instcombine,simplifycfg,globaldce",
+                    ir_file,
+                    "-o",
+                    ir_file,
+                });
+            } else {
+                try opt_args_list.appendSlice(self.allocator, &[_][]const u8{
+                    "opt",
+                    "-O3",
+                    ir_file,
+                    "-o",
+                    ir_file,
+                });
+            }
 
-            const result = try opt_child_process.wait();
-            if (result != .Exited or result.Exited != 0) {
+            if (!runCommandOk(self.allocator, opt_args_list.items)) {
                 return error.OptimizationFailed;
             }
         }
@@ -5280,70 +5608,34 @@ pub const CodeGenerator = struct {
         return ir_file;
     }
 
-    pub fn compileToExecutable(self: *CodeGenerator, output: []const u8, arch: []const u8, link_objects: []const []const u8, keep_ll: bool, optimize: bool, extra_flags: []const []const u8) !void {
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena.deinit();
-        const arena_alloc = arena.allocator();
+    fn shouldUseFastOptimizePipeline(self: *CodeGenerator) bool {
+        var defined_functions: usize = 0;
+        var instruction_count: usize = 0;
 
-        const ir_file = try std.fmt.allocPrint(arena_alloc, "{s}.ll", .{output});
-        defer arena_alloc.free(ir_file);
-        try self.writeToFile(ir_file);
+        var func = c.LLVMGetFirstFunction(self.module);
+        while (func != null) : (func = c.LLVMGetNextFunction(func)) {
+            var bb = c.LLVMGetFirstBasicBlock(func);
+            if (bb == null) continue;
 
-        const obj_file = try std.fmt.allocPrint(arena_alloc, "{s}.o", .{output});
-        defer arena_alloc.free(obj_file);
-
-        const clang_target = try normalizeClangTarget(arena_alloc, arch);
-        const llc_triple = try normalizeLlcTriple(arena_alloc, clang_target);
-
-        const opt_tool = if (optimize) try llvm_tools.getLLVMToolPath(arena_alloc, .opt) else null;
-        const llc_tool = try llvm_tools.getLLVMToolPath(arena_alloc, .llc);
-        const clang_tool = try llvm_tools.getLLVMToolPath(arena_alloc, .clang);
-        const zig_tool = if (arch.len != 0) try llvm_tools.getLLVMToolPath(arena_alloc, .zig) else null;
-
-        if (arch.len != 0 and zig_tool == null) {
-            std.debug.print("Error: -arch requires zig in PATH for sysroot-compatible linking.\n", .{});
-            std.debug.print("Please install Zig or remove -arch.\n", .{});
-            return error.CompilationFailed;
-        }
-
-        if (llc_tool == null) {
-            std.debug.print("Error: llc not found. Please install LLVM tools.\n", .{});
-            std.debug.print("Tried: llc-20, llc-19, llc-18, ..., llc\n", .{});
-            return error.CompilationFailed;
-        }
-
-        if (optimize) {
-            if (opt_tool == null) {
-                std.debug.print("Warning: opt not found. Skipping optimization pass.\n", .{});
-                std.debug.print("Tried: opt-20, opt-19, opt-18, ..., opt\n", .{});
-            } else {
-                var opt_args_list = std.ArrayList([]const u8){};
-                try opt_args_list.appendSlice(arena_alloc, &[_][]const u8{
-                    opt_tool.?,
-                    "-O3",
-                    ir_file,
-                    "-o",
-                    ir_file,
-                });
-
-                var opt_child_process = std.process.Child.init(opt_args_list.items, arena_alloc);
-                opt_child_process.stdout_behavior = .Pipe;
-                opt_child_process.stderr_behavior = .Inherit;
-                try opt_child_process.spawn();
-
-                const result = try opt_child_process.wait();
-                if (result != .Exited or result.Exited != 0) {
-                    return error.CompilationFailed;
+            defined_functions += 1;
+            while (bb != null) : (bb = c.LLVMGetNextBasicBlock(bb)) {
+                var inst = c.LLVMGetFirstInstruction(bb);
+                while (inst != null) : (inst = c.LLVMGetNextInstruction(inst)) {
+                    instruction_count += 1;
                 }
             }
         }
 
-        var llc_args_list = std.ArrayList([]const u8){};
+        return defined_functions >= 700 or instruction_count >= 90000;
+    }
+
+    fn runLlcForInput(arena_alloc: std.mem.Allocator, llc_tool: []const u8, llc_input_file: []const u8, obj_file: []const u8, llc_triple: []const u8, optimize: bool, max_threads: usize) !void {
+        var llc_args_list: std.ArrayList([]const u8) = .empty;
         try llc_args_list.appendSlice(arena_alloc, &[_][]const u8{
-            llc_tool.?,
+            llc_tool,
             "-filetype=obj",
             "-relocation-model=pic",
-            ir_file,
+            llc_input_file,
             "-o",
             obj_file,
         });
@@ -5352,27 +5644,79 @@ pub const CodeGenerator = struct {
             try llc_args_list.append(arena_alloc, "-O3");
         }
 
+        if (max_threads > 0) {
+            const llc_threads = try std.fmt.allocPrint(arena_alloc, "--threads={d}", .{max_threads});
+            try llc_args_list.append(arena_alloc, llc_threads);
+        }
+
         if (llc_triple.len != 0) {
             const march_flag: []const u8 = try std.fmt.allocPrint(arena_alloc, "-mtriple={s}", .{llc_triple});
             try llc_args_list.append(arena_alloc, march_flag);
         }
 
-        var llc_child = std.process.Child.init(llc_args_list.items, arena_alloc);
-        llc_child.stdout_behavior = .Pipe;
-        llc_child.stderr_behavior = .Inherit;
+        var threaded: std.Io.Threaded = .init(arena_alloc, .{});
+        defer threaded.deinit();
+        const llc_result = std.process.run(arena_alloc, threaded.io(), .{ .argv = llc_args_list.items }) catch return error.CompilationFailed;
+        if (llc_result.term != .exited or llc_result.term.exited != 0) return error.CompilationFailed;
+    }
 
-        try llc_child.spawn();
-        const llc_result = try llc_child.wait();
+    fn linkObjectsToExecutable(self: *CodeGenerator, output: []const u8, arch: []const u8, generated_objects: []const []const u8, link_objects: []const []const u8, extra_flags: []const []const u8, max_threads: usize, timing: ?*BackendTiming) !void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
 
-        if (llc_result != .Exited or llc_result.Exited != 0) {
+        const clang_target = try normalizeClangTarget(arena_alloc, arch);
+
+        var tool_cache = llvm_tools.ToolCache.init(arena_alloc);
+        defer tool_cache.deinit();
+
+        const llc_tool = try tool_cache.get(.llc);
+        const lld_tool = try tool_cache.get(.ld_lld);
+        var clang_tool: ?[]const u8 = null;
+        const zig_tool = if (arch.len != 0) try tool_cache.get(.zig) else null;
+
+        if (timing) |t| {
+            var llc_major: i16 = 0;
+            if (llc_tool) |tool| {
+                llc_major = toolVersionHintFromPath(tool);
+                if (llc_major == 0) {
+                    llc_major = @intCast((try llvm_tools.detectToolVersionMajor(arena_alloc, tool)) orelse 0);
+                }
+                t.llc_version_major = llc_major;
+            }
+            const opt_tool = try tool_cache.get(.opt);
+            if (opt_tool) |tool| {
+                var major = toolVersionHintFromPath(tool);
+                if (major == 0 and llc_tool != null and llc_major > 0 and sameParentDir(tool, llc_tool.?)) major = llc_major;
+                t.opt_version_major = major;
+            }
+            if (lld_tool) |tool| {
+                var major = toolVersionHintFromPath(tool);
+                if (major == 0 and llc_tool != null and llc_major > 0 and sameParentDir(tool, llc_tool.?)) major = llc_major;
+                t.lld_version_major = major;
+            }
+            const detected_clang_tool = try tool_cache.get(.clang);
+            if (detected_clang_tool) |tool| {
+                var major = toolVersionHintFromPath(tool);
+                if (major == 0 and llc_tool != null and llc_major > 0 and sameParentDir(tool, llc_tool.?)) major = llc_major;
+                t.clang_version_major = major;
+            }
+        }
+
+        if (arch.len != 0 and zig_tool == null) {
+            std.debug.print("Error: -arch requires zig in PATH for sysroot-compatible linking.\n", .{});
+            std.debug.print("Please install Zig or remove -arch.\n", .{});
             return error.CompilationFailed;
         }
 
         var lld_success = false;
 
         if (isVersionedGlibcTarget(clang_target)) {
-            var zig_cc_args = std.ArrayList([]const u8){};
-            try zig_cc_args.appendSlice(arena_alloc, &[_][]const u8{ zig_tool.?, "cc", "-target", clang_target, obj_file, "-o", output, "-lc", "-L/usr/lib", "-L/lib", "-L/lib64" });
+            const link_start = nanoTimestamp();
+            var zig_cc_args: std.ArrayList([]const u8) = .empty;
+            try zig_cc_args.appendSlice(arena_alloc, &[_][]const u8{ zig_tool.?, "cc", "-target", clang_target });
+            for (generated_objects) |obj| try zig_cc_args.append(arena_alloc, obj);
+            try zig_cc_args.appendSlice(arena_alloc, &[_][]const u8{ "-o", output, "-lc", "-L/usr/lib", "-L/lib", "-L/lib64" });
 
             for (link_objects) |obj| {
                 try zig_cc_args.append(arena_alloc, obj);
@@ -5386,43 +5730,65 @@ pub const CodeGenerator = struct {
                 try zig_cc_args.append(arena_alloc, ef);
             }
 
-            var zig_cc_child = std.process.Child.init(zig_cc_args.items, arena_alloc);
-            zig_cc_child.stdout_behavior = .Pipe;
-            zig_cc_child.stderr_behavior = .Inherit;
-
-            zig_cc_child.spawn() catch {
+            if (!runCommandOk(arena_alloc, zig_cc_args.items)) {
                 std.debug.print("Error: -arch {s} requires 'zig cc' for portable glibc linking, but zig was not found.\n", .{clang_target});
                 return error.CompilationFailed;
-            };
-            const zig_cc_result = try zig_cc_child.wait();
-            if (zig_cc_result == .Exited and zig_cc_result.Exited == 0) {
-                lld_success = true;
             } else {
-                std.debug.print("Error: zig cc failed to link target {s}.\n", .{clang_target});
-                return error.CompilationFailed;
+                lld_success = true;
+                if (timing) |t| t.link_time_ns = @intCast(nanoTimestamp() - link_start);
+                if (timing) |t| t.link_backend = .zig_cc;
             }
         }
 
-        const crt1_exists = blk: {
-            std.fs.cwd().access("/usr/lib/crt1.o", .{}) catch break :blk false;
-            break :blk true;
+        // crt object files live in different directories across distros:
+        // /usr/lib on Arch, /usr/lib/x86_64-linux-gnu on Debian/Ubuntu multiarch,
+        // /usr/lib64 on some RPM distros. Probe for the directory that actually
+        // holds crt1.o so the lld fast path works everywhere, not just Arch.
+        const crt_dir: ?[]const u8 = blk: {
+            var threaded: std.Io.Threaded = .init(arena_alloc, .{});
+            defer threaded.deinit();
+            const candidates = [_][]const u8{
+                "/usr/lib",
+                "/usr/lib/x86_64-linux-gnu",
+                "/usr/lib64",
+                "/lib/x86_64-linux-gnu",
+            };
+            for (candidates) |dir| {
+                const probe = std.fmt.allocPrint(arena_alloc, "{s}/crt1.o", .{dir}) catch continue;
+                std.Io.Dir.cwd().access(threaded.io(), probe, .{}) catch continue;
+                break :blk dir;
+            }
+            break :blk null;
         };
 
-        if (crt1_exists and arch.len == 0) {
-            var lld_args_list = std.ArrayList([]const u8){};
+        if (crt_dir != null and arch.len == 0 and lld_tool != null) {
+            const cdir = crt_dir.?;
+            const link_start = nanoTimestamp();
+            var lld_args_list: std.ArrayList([]const u8) = .empty;
             try lld_args_list.appendSlice(arena_alloc, &[_][]const u8{
-                "ld.lld",
+                lld_tool.?,
                 "-o",
                 output,
                 "-dynamic-linker",
                 "/lib64/ld-linux-x86-64.so.2",
                 "-L/usr/lib",
                 "-L/lib64",
-                "-L/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1",
-                "/usr/lib/crt1.o",
-                "/usr/lib/crti.o",
-                obj_file,
             });
+            try lld_args_list.append(arena_alloc, try std.fmt.allocPrint(arena_alloc, "-L{s}", .{cdir}));
+            try lld_args_list.append(arena_alloc, try std.fmt.allocPrint(arena_alloc, "{s}/crt1.o", .{cdir}));
+            try lld_args_list.append(arena_alloc, try std.fmt.allocPrint(arena_alloc, "{s}/crti.o", .{cdir}));
+
+            if (detectGccLibDir(arena_alloc)) |gcc_lib_dir| {
+                const gcc_lib_arg = try std.fmt.allocPrint(arena_alloc, "-L{s}", .{gcc_lib_dir});
+                try lld_args_list.append(arena_alloc, gcc_lib_arg);
+            }
+
+            for (generated_objects) |obj| try lld_args_list.append(arena_alloc, obj);
+
+            if (max_threads > 0) {
+                const lld_threads = try std.fmt.allocPrint(arena_alloc, "--threads={d}", .{max_threads});
+                try lld_args_list.append(arena_alloc, lld_threads);
+            }
 
             for (link_objects) |obj| {
                 try lld_args_list.append(arena_alloc, obj);
@@ -5439,29 +5805,30 @@ pub const CodeGenerator = struct {
                 try lld_args_list.append(arena_alloc, "-lm");
             }
 
-            try lld_args_list.append(arena_alloc, "/usr/lib/crtn.o");
+            try lld_args_list.append(arena_alloc, try std.fmt.allocPrint(arena_alloc, "{s}/crtn.o", .{cdir}));
 
-            var lld_child = std.process.Child.init(lld_args_list.items, arena_alloc);
-            lld_child.stdout_behavior = .Pipe;
-            lld_child.stderr_behavior = .Inherit;
-
-            try lld_child.spawn();
-            const lld_result = try lld_child.wait();
-
-            if (lld_result == .Exited and lld_result.Exited == 0) {
+            if (runCommandOk(arena_alloc, lld_args_list.items)) {
                 lld_success = true;
+                if (timing) |t| t.link_time_ns = @intCast(nanoTimestamp() - link_start);
+                if (timing) |t| t.link_backend = .lld;
             }
         }
 
         if (!lld_success) {
+            const link_start = nanoTimestamp();
+            if (clang_tool == null) {
+                clang_tool = try tool_cache.get(.clang);
+            }
             if (clang_tool == null) {
                 std.debug.print("Error: clang not found for linking. Please install clang.\n", .{});
-                std.debug.print("Tried: clang-20, clang-19, clang-18, ..., clang\n", .{});
+                std.debug.print("Tried: clang-21/clang21, clang-20/clang20, ..., clang (plus common absolute paths and ZLANG_LLVM_BIN)\n", .{});
                 return error.CompilationFailed;
             }
 
-            var clang_args_list = std.ArrayList([]const u8){};
-            try clang_args_list.appendSlice(arena_alloc, &[_][]const u8{ clang_tool.?, obj_file, "-o", output, "-lc" });
+            var clang_args_list: std.ArrayList([]const u8) = .empty;
+            try clang_args_list.append(arena_alloc, clang_tool.?);
+            for (generated_objects) |obj| try clang_args_list.append(arena_alloc, obj);
+            try clang_args_list.appendSlice(arena_alloc, &[_][]const u8{ "-o", output, "-lc" });
 
             if (clang_target.len != 0) {
                 const target_arg = try std.fmt.allocPrint(arena_alloc, "--target={s}", .{clang_target});
@@ -5480,21 +5847,205 @@ pub const CodeGenerator = struct {
                 try clang_args_list.append(arena_alloc, ef);
             }
 
-            var clang_child = std.process.Child.init(clang_args_list.items, arena_alloc);
-            clang_child.stdout_behavior = .Pipe;
-            clang_child.stderr_behavior = .Inherit;
-
-            try clang_child.spawn();
-            const clang_result = try clang_child.wait();
-
-            if (clang_result != .Exited or clang_result.Exited != 0) {
+            if (!runCommandReport(arena_alloc, clang_args_list.items)) {
                 return error.CompilationFailed;
+            }
+            if (timing) |t| t.link_time_ns = @intCast(nanoTimestamp() - link_start);
+            if (timing) |t| t.link_backend = .clang;
+        }
+    }
+
+    pub fn compileIRToObjectFile(self: *CodeGenerator, ir_input_file: []const u8, obj_output_file: []const u8, arch: []const u8, optimize: bool, max_threads: usize, llc_time_ns: ?*u64) !void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        const clang_target = try normalizeClangTarget(arena_alloc, arch);
+        const llc_triple = try normalizeLlcTriple(arena_alloc, clang_target);
+
+        var tool_cache = llvm_tools.ToolCache.init(arena_alloc);
+        defer tool_cache.deinit();
+
+        const llc_tool = try tool_cache.get(.llc);
+        if (llc_tool == null) {
+            std.debug.print("Error: llc not found. Please install LLVM tools.\n", .{});
+            std.debug.print("Tried: llc-21/llc21, llc-20/llc20, ..., llc (plus common absolute paths and ZLANG_LLVM_BIN)\n", .{});
+            return error.CompilationFailed;
+        }
+
+        const llc_start = nanoTimestamp();
+        try runLlcForInput(arena_alloc, llc_tool.?, ir_input_file, obj_output_file, llc_triple, optimize, max_threads);
+        if (llc_time_ns) |t| t.* = @intCast(nanoTimestamp() - llc_start);
+    }
+
+    pub fn splitBitcodeIntoUnits(self: *CodeGenerator, bitcode_file: []const u8, output_prefix: []const u8, unit_count: usize, arch: []const u8, out_units: *std.ArrayList([]const u8)) !bool {
+        if (unit_count <= 1) return false;
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        var tool_cache = llvm_tools.ToolCache.init(arena_alloc);
+        defer tool_cache.deinit();
+
+        const split_tool = try tool_cache.get(.llvm_split);
+        if (split_tool == null) return false;
+
+        var args: std.ArrayList([]const u8) = .empty;
+        try args.appendSlice(arena_alloc, &[_][]const u8{ split_tool.?, "--round-robin", "-j" });
+        const jobs = try std.fmt.allocPrint(arena_alloc, "{d}", .{unit_count});
+        try args.append(arena_alloc, jobs);
+
+        const clang_target = try normalizeClangTarget(arena_alloc, arch);
+        if (clang_target.len != 0) {
+            const llc_triple = try normalizeLlcTriple(arena_alloc, clang_target);
+            if (llc_triple.len != 0) {
+                const triple_arg = try std.fmt.allocPrint(arena_alloc, "--mtriple={s}", .{llc_triple});
+                try args.append(arena_alloc, triple_arg);
             }
         }
 
-        if (!keep_ll) {
-            std.fs.cwd().deleteFile(ir_file) catch {};
+        try args.appendSlice(arena_alloc, &[_][]const u8{ bitcode_file, "-o", output_prefix });
+
+        var threaded: std.Io.Threaded = .init(arena_alloc, .{});
+        defer threaded.deinit();
+        if (!runCommandOk(arena_alloc, args.items)) return false;
+
+        var idx: usize = 0;
+        while (idx < unit_count) : (idx += 1) {
+            const unit_path = try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ output_prefix, idx });
+            std.Io.Dir.cwd().access(threaded.io(), unit_path, .{}) catch {
+                self.allocator.free(unit_path);
+                break;
+            };
+            try out_units.append(self.allocator, unit_path);
         }
-        std.fs.cwd().deleteFile(obj_file) catch {};
+
+        return out_units.items.len > 1;
+    }
+
+    pub fn linkObjectFilesToExecutable(self: *CodeGenerator, output: []const u8, arch: []const u8, generated_objects: []const []const u8, link_objects: []const []const u8, extra_flags: []const []const u8, max_threads: usize, timing: ?*BackendTiming) !void {
+        try self.linkObjectsToExecutable(output, arch, generated_objects, link_objects, extra_flags, max_threads, timing);
+    }
+
+    pub fn compileToExecutable(self: *CodeGenerator, output: []const u8, arch: []const u8, link_objects: []const []const u8, keep_ll: bool, optimize: bool, extra_flags: []const []const u8, max_threads: usize, timing: ?*BackendTiming) !void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        const ir_ext = if (keep_ll) ".ll" else ".bc";
+        const ir_file = try std.fmt.allocPrint(arena_alloc, "{s}{s}", .{ output, ir_ext });
+        defer arena_alloc.free(ir_file);
+        if (keep_ll) {
+            try self.writeToFile(ir_file);
+        } else {
+            try self.writeBitcodeToFile(ir_file);
+        }
+
+        const obj_file = try std.fmt.allocPrint(arena_alloc, "{s}.o", .{output});
+        defer arena_alloc.free(obj_file);
+
+        const clang_target = try normalizeClangTarget(arena_alloc, arch);
+        const llc_triple = try normalizeLlcTriple(arena_alloc, clang_target);
+
+        var tool_cache = llvm_tools.ToolCache.init(arena_alloc);
+        defer tool_cache.deinit();
+
+        const opt_tool = if (optimize) try tool_cache.get(.opt) else null;
+        const llc_tool = try tool_cache.get(.llc);
+        const lld_tool = try tool_cache.get(.ld_lld);
+
+        if (timing) |t| {
+            var llc_major: i16 = 0;
+            if (llc_tool) |tool| {
+                llc_major = toolVersionHintFromPath(tool);
+                if (llc_major == 0) {
+                    llc_major = @intCast((try llvm_tools.detectToolVersionMajor(arena_alloc, tool)) orelse 0);
+                }
+                t.llc_version_major = llc_major;
+            }
+            if (opt_tool) |tool| {
+                var major = toolVersionHintFromPath(tool);
+                if (major == 0 and llc_tool != null and llc_major > 0 and sameParentDir(tool, llc_tool.?)) major = llc_major;
+                t.opt_version_major = major;
+            }
+            if (lld_tool) |tool| {
+                var major = toolVersionHintFromPath(tool);
+                if (major == 0 and llc_tool != null and llc_major > 0 and sameParentDir(tool, llc_tool.?)) major = llc_major;
+                t.lld_version_major = major;
+            }
+            const detected_clang_tool = try tool_cache.get(.clang);
+            if (detected_clang_tool) |tool| {
+                var major = toolVersionHintFromPath(tool);
+                if (major == 0 and llc_tool != null and llc_major > 0 and sameParentDir(tool, llc_tool.?)) major = llc_major;
+                t.clang_version_major = major;
+            }
+        }
+
+        if (llc_tool == null) {
+            std.debug.print("Error: llc not found. Please install LLVM tools.\n", .{});
+            std.debug.print("Tried: llc-21/llc21, llc-20/llc20, ..., llc (plus common absolute paths and ZLANG_LLVM_BIN)\n", .{});
+            return error.CompilationFailed;
+        }
+
+        var llc_input_file = ir_file;
+        var optimized_ir_file: ?[]const u8 = null;
+
+        if (optimize) {
+            if (opt_tool == null) {
+                std.debug.print("Warning: opt not found. Skipping optimization pass.\n", .{});
+                std.debug.print("Tried: opt-21/opt21, opt-20/opt20, ..., opt (plus common absolute paths and ZLANG_LLVM_BIN)\n", .{});
+            } else {
+                const opt_start = nanoTimestamp();
+                const opt_ext = if (keep_ll) ".ll" else ".bc";
+                const opt_output_file = try std.fmt.allocPrint(arena_alloc, "{s}.opt{s}", .{ output, opt_ext });
+                optimized_ir_file = opt_output_file;
+                var opt_args_list: std.ArrayList([]const u8) = .empty;
+
+                if (self.shouldUseFastOptimizePipeline()) {
+                    try opt_args_list.appendSlice(arena_alloc, &[_][]const u8{
+                        opt_tool.?,
+                        "-passes=globaldce,sroa,mem2reg,instcombine,simplifycfg,gvn,dse,instcombine,simplifycfg,globaldce",
+                        ir_file,
+                        "-o",
+                        opt_output_file,
+                    });
+                } else {
+                    try opt_args_list.appendSlice(arena_alloc, &[_][]const u8{
+                        opt_tool.?,
+                        "-O3",
+                        ir_file,
+                        "-o",
+                        opt_output_file,
+                    });
+                }
+
+                if (max_threads > 0) {
+                    const opt_threads = try std.fmt.allocPrint(arena_alloc, "--threads={d}", .{max_threads});
+                    try opt_args_list.append(arena_alloc, opt_threads);
+                }
+
+                var threaded: std.Io.Threaded = .init(arena_alloc, .{});
+                defer threaded.deinit();
+                const result = std.process.run(arena_alloc, threaded.io(), .{ .argv = opt_args_list.items }) catch return error.CompilationFailed;
+                if (result.term != .exited or result.term.exited != 0) return error.CompilationFailed;
+                llc_input_file = opt_output_file;
+                if (timing) |t| t.opt_time_ns = @intCast(nanoTimestamp() - opt_start);
+            }
+        }
+
+        const llc_start = nanoTimestamp();
+        try runLlcForInput(arena_alloc, llc_tool.?, llc_input_file, obj_file, llc_triple, optimize, max_threads);
+        if (timing) |t| t.llc_time_ns = @intCast(nanoTimestamp() - llc_start);
+
+        const generated_objects = [_][]const u8{obj_file};
+        try self.linkObjectsToExecutable(output, arch, &generated_objects, link_objects, extra_flags, max_threads, timing);
+
+        var threaded_cleanup: std.Io.Threaded = .init(arena_alloc, .{});
+        defer threaded_cleanup.deinit();
+        if (!keep_ll) std.Io.Dir.cwd().deleteFile(threaded_cleanup.io(), ir_file) catch {};
+        if (optimized_ir_file) |opt_file| {
+            std.Io.Dir.cwd().deleteFile(threaded_cleanup.io(), opt_file) catch {};
+        }
+        std.Io.Dir.cwd().deleteFile(threaded_cleanup.io(), obj_file) catch {};
     }
 };

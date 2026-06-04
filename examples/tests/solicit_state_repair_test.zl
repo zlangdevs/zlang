@@ -1,0 +1,16 @@
+error NeedSeed = _;
+
+fun next_value() >> i32 {
+    i32 seed = 0;
+    solicit NeedSeed;
+    return seed + 41;
+}
+
+fun main() >> i32 {
+    i32 out = next_value() on solicit NeedSeed {
+        seed = 1;
+    };
+
+    @printf("(expected 42):%d\n", out);
+    return 0;
+}

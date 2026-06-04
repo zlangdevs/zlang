@@ -11,6 +11,12 @@ const c = c_bindings.c;
 
 const CodeGenerator = @import("llvm.zig").CodeGenerator;
 
+pub const ArrayElementAccess = struct {
+    ptr: c.LLVMValueRef,
+    element_type: c.LLVMTypeRef,
+    element_type_name: []const u8,
+};
+
 pub fn containsArrayIndex(self: *CodeGenerator, node: *ast.Node) !bool {
     switch (node.data) {
         .array_index => return true,
@@ -45,21 +51,198 @@ pub fn generateArrayElementFieldAssignment(self: *CodeGenerator, array_index: as
     defer self.allocator.free(array_name);
     const array_var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
     var index_value = try self.generateExpression(array_index.index);
-    index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
-    const element_type = c.LLVMGetElementType(@ptrCast(array_var_info.type_ref));
+
+    var element_type: c.LLVMTypeRef = undefined;
+    var array_element_ptr: c.LLVMValueRef = undefined;
+
+    if (std.mem.startsWith(u8, array_var_info.type_name, "ptr<") and std.mem.endsWith(u8, array_var_info.type_name, ">")) {
+        const element_type_name = array_var_info.type_name[4 .. array_var_info.type_name.len - 1];
+        element_type = try self.getLLVMType(element_type_name);
+        const index64 = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
+        const loaded_ptr = c.LLVMBuildLoad2(self.builder, array_var_info.type_ref, array_var_info.value, "load_ptr_for_field_assign");
+        var ptr_indices = [_]c.LLVMValueRef{index64};
+        array_element_ptr = c.LLVMBuildGEP2(self.builder, element_type, loaded_ptr, &ptr_indices[0], 1, "ptr_struct_element_ptr");
+    } else {
+        index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
+        element_type = c.LLVMGetElementType(@ptrCast(array_var_info.type_ref));
+        var array_indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
+        array_element_ptr = c.LLVMBuildGEP2(@ptrCast(self.builder), @ptrCast(array_var_info.type_ref), @ptrCast(array_var_info.value), &array_indices[0], 2, "array_element_ptr");
+    }
+
     const element_type_kind = c.LLVMGetTypeKind(element_type);
     if (element_type_kind != c.LLVMStructTypeKind) {
         return errors.CodegenError.TypeMismatch;
     }
     const struct_name = try self.getStructTypeName(@ptrCast(element_type));
     defer self.allocator.free(struct_name);
-    var array_indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), index_value };
-    const array_element_ptr = c.LLVMBuildGEP2(@ptrCast(self.builder), @ptrCast(array_var_info.type_ref), @ptrCast(array_var_info.value), &array_indices[0], 2, "array_element_ptr");
     try self.generateRecursiveFieldAssignment(array_element_ptr, element_type, struct_name, field_path, value_expr);
 }
 
+pub fn getArrayElementPtrAndType(self: *CodeGenerator, arr_idx: ast.ArrayIndex) errors.CodegenError!ArrayElementAccess {
+    var collected_indices: std.ArrayList(c.LLVMValueRef) = .empty;
+    defer collected_indices.deinit(self.allocator);
+
+    const base_node = try collectArrayIndices(self, arr_idx.array, &collected_indices);
+    var index_value = try self.generateExpression(arr_idx.index);
+
+    var base_ptr: c.LLVMValueRef = undefined;
+    var base_type: c.LLVMTypeRef = undefined;
+    var base_type_name: []const u8 = "";
+    var base_ptr_is_direct_value = false;
+    var pointer_element_type_name: ?[]const u8 = null;
+
+    if (base_node.data == .qualified_identifier) {
+        const pair = try self.getQualifiedFieldPtrAndType(base_node);
+        base_ptr = pair.ptr;
+        base_type = pair.ty;
+        base_type_name = self.getTypeNameFromLLVMType(base_type);
+        if (!std.mem.startsWith(u8, base_type_name, "ptr<")) {
+            const qual = base_node.data.qualified_identifier;
+            if (qual.base.data == .identifier) {
+                const base_name = qual.base.data.identifier.name;
+                if (CodeGenerator.getVariable(self, base_name)) |base_var| {
+                    if (std.mem.startsWith(u8, base_var.type_name, "ptr<") and std.mem.endsWith(u8, base_var.type_name, ">")) {
+                        const inner_type_name = base_var.type_name[4 .. base_var.type_name.len - 1];
+                        if (self.struct_declarations.get(inner_type_name)) |struct_decl| {
+                            if (self.struct_fields.get(inner_type_name)) |field_map| {
+                                if (field_map.get(qual.field)) |field_index| {
+                                    base_type_name = struct_decl.fields.items[field_index].type_name;
+                                    if (std.mem.startsWith(u8, base_type_name, "ptr<") and std.mem.endsWith(u8, base_type_name, ">")) {
+                                        pointer_element_type_name = base_type_name[4 .. base_type_name.len - 1];
+                                    }
+                                }
+                            }
+                        }
+                    } else if (self.struct_declarations.get(base_var.type_name)) |struct_decl| {
+                        if (self.struct_fields.get(base_var.type_name)) |field_map| {
+                            if (field_map.get(qual.field)) |field_index| {
+                                base_type_name = struct_decl.fields.items[field_index].type_name;
+                                if (std.mem.startsWith(u8, base_type_name, "ptr<") and std.mem.endsWith(u8, base_type_name, ">")) {
+                                    pointer_element_type_name = base_type_name[4 .. base_type_name.len - 1];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        if (base_node.data == .function_call) {
+            base_ptr = try self.generateExpression(base_node);
+            base_type = c.LLVMTypeOf(base_ptr);
+            const call = base_node.data.function_call;
+            base_type_name = if (self.function_return_types.get(call.name)) |rt|
+                rt
+            else if (self.function_asts.get(call.name)) |fn_ast|
+                fn_ast.return_type
+            else
+                try self.inferType(base_node);
+            base_ptr_is_direct_value = true;
+        } else {
+            const array_name = try self.getBaseIdentifierName(base_node);
+            defer self.allocator.free(array_name);
+            const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
+            base_ptr = var_info.value;
+            base_type = var_info.type_ref;
+            base_type_name = var_info.type_name;
+        }
+    }
+
+    const is_pointer_base = std.mem.startsWith(u8, base_type_name, "ptr<") or pointer_element_type_name != null or (base_ptr_is_direct_value and c.LLVMGetTypeKind(base_type) == c.LLVMPointerTypeKind);
+    if (is_pointer_base) {
+        if (c.LLVMTypeOf(index_value) != c.LLVMInt64TypeInContext(self.context)) {
+            index_value = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
+        }
+        try collected_indices.append(self.allocator, index_value);
+        const ptr_val = if (base_ptr_is_direct_value)
+            base_ptr
+        else
+            c.LLVMBuildLoad2(self.builder, base_type, base_ptr, "load_ptr_for_access");
+        if (!(std.mem.startsWith(u8, base_type_name, "ptr<") and std.mem.endsWith(u8, base_type_name, ">")) and pointer_element_type_name == null) {
+            return errors.CodegenError.TypeMismatch;
+        }
+        const element_type_name = if (pointer_element_type_name) |n| n else base_type_name[4 .. base_type_name.len - 1];
+        const element_type = try self.getLLVMType(element_type_name);
+        const idx = collected_indices.items[collected_indices.items.len - 1];
+        var indices = [_]c.LLVMValueRef{idx};
+        const element_ptr = c.LLVMBuildGEP2(self.builder, element_type, ptr_val, &indices[0], 1, "ptr_index_access");
+        return .{ .ptr = element_ptr, .element_type = element_type, .element_type_name = element_type_name };
+    }
+
+    if (std.mem.startsWith(u8, base_type_name, "[]")) {
+        index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
+        try collected_indices.append(self.allocator, index_value);
+
+        const element_type_name = base_type_name[2..];
+        const element_type = try self.getLLVMType(element_type_name);
+
+        var ptr_indices = [_]c.LLVMValueRef{ c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0), c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0) };
+        const ptr_in_struct = c.LLVMBuildGEP2(self.builder, base_type, base_ptr, &ptr_indices[0], 2, "slice_ptr_in_struct_access");
+        const arg_ptr_type = c.LLVMPointerType(element_type, 0);
+        const loaded_ptr = c.LLVMBuildLoad2(self.builder, arg_ptr_type, ptr_in_struct, "slice_ptr_val_access");
+
+        const idx = collected_indices.items[collected_indices.items.len - 1];
+        var indices = [_]c.LLVMValueRef{idx};
+        const element_ptr = c.LLVMBuildGEP2(self.builder, element_type, loaded_ptr, &indices[0], 1, "slice_element_ptr_access");
+        return .{ .ptr = element_ptr, .element_type = element_type, .element_type_name = element_type_name };
+    }
+
+    const base_kind = c.LLVMGetTypeKind(base_type);
+    if (base_kind != c.LLVMArrayTypeKind and base_kind != c.LLVMVectorTypeKind) {
+        self.reportErrorFmt("Cannot index value of type '{s}'", .{base_type_name}, "Only arrays, pointers and slices can be indexed");
+        return errors.CodegenError.TypeMismatch;
+    }
+
+    index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
+    try collected_indices.append(self.allocator, index_value);
+    var all_indices: std.ArrayList(c.LLVMValueRef) = .empty;
+    defer all_indices.deinit(self.allocator);
+    try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
+
+    var i = collected_indices.items.len;
+    while (i > 0) {
+        i -= 1;
+        try all_indices.append(self.allocator, collected_indices.items[i]);
+    }
+
+    const element_ptr = c.LLVMBuildGEP2(self.builder, base_type, base_ptr, all_indices.items.ptr, @intCast(all_indices.items.len), "array_element_ptr_access");
+
+    var element_type = base_type;
+    for (0..collected_indices.items.len) |_| {
+        element_type = c.LLVMGetElementType(element_type);
+    }
+
+    if (element_type == null or c.LLVMGetTypeKind(element_type) == c.LLVMVoidTypeKind) {
+        var inferred_type_name = base_type_name;
+        var depth = collected_indices.items.len;
+        while (depth > 0) {
+            depth -= 1;
+            if (std.mem.startsWith(u8, inferred_type_name, "arr<") and std.mem.endsWith(u8, inferred_type_name, ">")) {
+                const inner = inferred_type_name[4 .. inferred_type_name.len - 1];
+                if (std.mem.indexOfScalar(u8, inner, ',')) |comma| {
+                    inferred_type_name = std.mem.trim(u8, inner[0..comma], " ");
+                } else {
+                    return errors.CodegenError.TypeMismatch;
+                }
+            } else if (std.mem.startsWith(u8, inferred_type_name, "ptr<") and std.mem.endsWith(u8, inferred_type_name, ">")) {
+                inferred_type_name = inferred_type_name[4 .. inferred_type_name.len - 1];
+            } else if (std.mem.startsWith(u8, inferred_type_name, "[]")) {
+                inferred_type_name = inferred_type_name[2..];
+            } else {
+                return errors.CodegenError.TypeMismatch;
+            }
+        }
+
+        element_type = try self.getLLVMType(inferred_type_name);
+        return .{ .ptr = element_ptr, .element_type = element_type, .element_type_name = inferred_type_name };
+    }
+
+    const element_type_name = self.getTypeNameFromLLVMType(element_type);
+    return .{ .ptr = element_ptr, .element_type = element_type, .element_type_name = element_type_name };
+}
+
 pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignment) errors.CodegenError!void {
-    var collected_indices = std.ArrayList(c.LLVMValueRef){};
+    var collected_indices: std.ArrayList(c.LLVMValueRef) = .empty;
     defer collected_indices.deinit(self.allocator);
 
     const base_node = try collectArrayIndices(self, arr_ass.array, &collected_indices);
@@ -69,12 +252,44 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
     var base_type: c.LLVMTypeRef = undefined;
     var base_type_name: []const u8 = "";
     var base_is_const = false;
+    var base_ptr_is_direct_value = false;
+    var pointer_element_type_name: ?[]const u8 = null;
 
     if (base_node.data == .qualified_identifier) {
         const pair = try self.getQualifiedFieldPtrAndType(base_node);
         base_ptr = pair.ptr;
         base_type = pair.ty;
         base_type_name = self.getTypeNameFromLLVMType(base_type);
+        if (!std.mem.startsWith(u8, base_type_name, "ptr<")) {
+            const qual = base_node.data.qualified_identifier;
+            if (qual.base.data == .identifier) {
+                const base_name = qual.base.data.identifier.name;
+                if (CodeGenerator.getVariable(self, base_name)) |base_var| {
+                    if (std.mem.startsWith(u8, base_var.type_name, "ptr<") and std.mem.endsWith(u8, base_var.type_name, ">")) {
+                        const inner_type_name = base_var.type_name[4 .. base_var.type_name.len - 1];
+                        if (self.struct_declarations.get(inner_type_name)) |struct_decl| {
+                            if (self.struct_fields.get(inner_type_name)) |field_map| {
+                                if (field_map.get(qual.field)) |field_index| {
+                                    base_type_name = struct_decl.fields.items[field_index].type_name;
+                                    if (std.mem.startsWith(u8, base_type_name, "ptr<") and std.mem.endsWith(u8, base_type_name, ">")) {
+                                        pointer_element_type_name = base_type_name[4 .. base_type_name.len - 1];
+                                    }
+                                }
+                            }
+                        }
+                    } else if (self.struct_declarations.get(base_var.type_name)) |struct_decl| {
+                        if (self.struct_fields.get(base_var.type_name)) |field_map| {
+                            if (field_map.get(qual.field)) |field_index| {
+                                base_type_name = struct_decl.fields.items[field_index].type_name;
+                                if (std.mem.startsWith(u8, base_type_name, "ptr<") and std.mem.endsWith(u8, base_type_name, ">")) {
+                                    pointer_element_type_name = base_type_name[4 .. base_type_name.len - 1];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         const root_name = try self.getBaseIdentifierName(base_node);
         defer self.allocator.free(root_name);
@@ -82,13 +297,27 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
             base_is_const = root_var.is_const;
         }
     } else {
-        const array_name = try self.getBaseIdentifierName(base_node);
-        defer self.allocator.free(array_name);
-        const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
-        base_ptr = var_info.value;
-        base_type = var_info.type_ref;
-        base_type_name = var_info.type_name;
-        base_is_const = var_info.is_const;
+        if (base_node.data == .function_call) {
+            base_ptr = try self.generateExpression(base_node);
+            base_type = c.LLVMTypeOf(base_ptr);
+            const call = base_node.data.function_call;
+            base_type_name = if (self.function_return_types.get(call.name)) |rt|
+                rt
+            else if (self.function_asts.get(call.name)) |fn_ast|
+                fn_ast.return_type
+            else
+                try self.inferType(base_node);
+            base_is_const = false;
+            base_ptr_is_direct_value = true;
+        } else {
+            const array_name = try self.getBaseIdentifierName(base_node);
+            defer self.allocator.free(array_name);
+            const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
+            base_ptr = var_info.value;
+            base_type = var_info.type_ref;
+            base_type_name = var_info.type_name;
+            base_is_const = var_info.is_const;
+        }
     }
 
     if (base_is_const) {
@@ -100,13 +329,20 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
         return errors.CodegenError.ConstReassignment;
     }
 
-    if (std.mem.startsWith(u8, base_type_name, "ptr<")) {
+    const is_pointer_base = std.mem.startsWith(u8, base_type_name, "ptr<") or pointer_element_type_name != null or (base_ptr_is_direct_value and c.LLVMGetTypeKind(base_type) == c.LLVMPointerTypeKind);
+    if (is_pointer_base) {
         if (c.LLVMTypeOf(index_value) != c.LLVMInt64TypeInContext(self.context)) {
             index_value = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
         }
         try collected_indices.append(self.allocator, index_value);
-        const ptr_val = c.LLVMBuildLoad2(self.builder, base_type, base_ptr, "load_ptr_for_assign");
-        const element_type_name = base_type_name[4 .. base_type_name.len - 1];
+        const ptr_val = if (base_ptr_is_direct_value)
+            base_ptr
+        else
+            c.LLVMBuildLoad2(self.builder, base_type, base_ptr, "load_ptr_for_assign");
+        if (!(std.mem.startsWith(u8, base_type_name, "ptr<") and std.mem.endsWith(u8, base_type_name, ">")) and pointer_element_type_name == null) {
+            return errors.CodegenError.TypeMismatch;
+        }
+        const element_type_name = if (pointer_element_type_name) |n| n else base_type_name[4 .. base_type_name.len - 1];
         const element_type = try self.getLLVMType(element_type_name);
         const idx = collected_indices.items[collected_indices.items.len - 1];
         var indices = [_]c.LLVMValueRef{idx};
@@ -148,7 +384,7 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
         final_type = c.LLVMGetElementType(@ptrCast(final_type));
     }
 
-    var all_indices = std.ArrayList(c.LLVMValueRef){};
+    var all_indices: std.ArrayList(c.LLVMValueRef) = .empty;
     defer all_indices.deinit(self.allocator);
     try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
 
@@ -311,7 +547,7 @@ pub fn generateArrayDeclaration(self: *CodeGenerator, decl: ast.VarDecl) errors.
 }
 
 pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayIndex) errors.CodegenError!c.LLVMValueRef {
-    var collected_indices = std.ArrayList(c.LLVMValueRef){};
+    var collected_indices: std.ArrayList(c.LLVMValueRef) = .empty;
     defer collected_indices.deinit(self.allocator);
 
     const base_node = try collectArrayIndices(self, arr_idx.array, &collected_indices);
@@ -320,19 +556,64 @@ pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayInde
     var base_ptr: c.LLVMValueRef = undefined;
     var base_type: c.LLVMTypeRef = undefined;
     var base_type_name: []const u8 = "";
+    var base_ptr_is_direct_value = false;
+    var pointer_element_type_name: ?[]const u8 = null;
 
     if (base_node.data == .qualified_identifier) {
         const pair = try self.getQualifiedFieldPtrAndType(base_node);
         base_ptr = pair.ptr;
         base_type = pair.ty;
         base_type_name = self.getTypeNameFromLLVMType(base_type);
+        if (!std.mem.startsWith(u8, base_type_name, "ptr<")) {
+            const qual = base_node.data.qualified_identifier;
+            if (qual.base.data == .identifier) {
+                const base_name = qual.base.data.identifier.name;
+                if (CodeGenerator.getVariable(self, base_name)) |base_var| {
+                    if (std.mem.startsWith(u8, base_var.type_name, "ptr<") and std.mem.endsWith(u8, base_var.type_name, ">")) {
+                        const inner_type_name = base_var.type_name[4 .. base_var.type_name.len - 1];
+                        if (self.struct_declarations.get(inner_type_name)) |struct_decl| {
+                            if (self.struct_fields.get(inner_type_name)) |field_map| {
+                                if (field_map.get(qual.field)) |field_index| {
+                                    base_type_name = struct_decl.fields.items[field_index].type_name;
+                                    if (std.mem.startsWith(u8, base_type_name, "ptr<") and std.mem.endsWith(u8, base_type_name, ">")) {
+                                        pointer_element_type_name = base_type_name[4 .. base_type_name.len - 1];
+                                    }
+                                }
+                            }
+                        }
+                    } else if (self.struct_declarations.get(base_var.type_name)) |struct_decl| {
+                        if (self.struct_fields.get(base_var.type_name)) |field_map| {
+                            if (field_map.get(qual.field)) |field_index| {
+                                base_type_name = struct_decl.fields.items[field_index].type_name;
+                                if (std.mem.startsWith(u8, base_type_name, "ptr<") and std.mem.endsWith(u8, base_type_name, ">")) {
+                                    pointer_element_type_name = base_type_name[4 .. base_type_name.len - 1];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     } else {
-        const array_name = try self.getBaseIdentifierName(base_node);
-        defer self.allocator.free(array_name);
-        const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
-        base_ptr = var_info.value;
-        base_type = var_info.type_ref;
-        base_type_name = var_info.type_name;
+        if (base_node.data == .function_call) {
+            base_ptr = try self.generateExpression(base_node);
+            base_type = c.LLVMTypeOf(base_ptr);
+            const call = base_node.data.function_call;
+            base_type_name = if (self.function_return_types.get(call.name)) |rt|
+                rt
+            else if (self.function_asts.get(call.name)) |fn_ast|
+                fn_ast.return_type
+            else
+                try self.inferType(base_node);
+            base_ptr_is_direct_value = true;
+        } else {
+            const array_name = try self.getBaseIdentifierName(base_node);
+            defer self.allocator.free(array_name);
+            const var_info = CodeGenerator.getVariable(self, array_name) orelse return errors.CodegenError.UndefinedVariable;
+            base_ptr = var_info.value;
+            base_type = var_info.type_ref;
+            base_type_name = var_info.type_name;
+        }
     }
 
     if (std.mem.startsWith(u8, base_type_name, "simd<")) {
@@ -343,13 +624,21 @@ pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayInde
         return c.LLVMBuildExtractElement(self.builder, simd_val, simd_index_value, "simd_extract");
     }
 
-    if (std.mem.startsWith(u8, base_type_name, "ptr<")) {
+    const is_pointer_base = std.mem.startsWith(u8, base_type_name, "ptr<") or pointer_element_type_name != null or (base_ptr_is_direct_value and c.LLVMGetTypeKind(base_type) == c.LLVMPointerTypeKind);
+    if (is_pointer_base) {
         if (c.LLVMTypeOf(index_value) != c.LLVMInt64TypeInContext(self.context)) {
             index_value = self.castToType(index_value, c.LLVMInt64TypeInContext(self.context));
         }
         try collected_indices.append(self.allocator, index_value);
-        const ptr_val = c.LLVMBuildLoad2(self.builder, base_type, base_ptr, "load_ptr");
-        const element_type_name = base_type_name[4 .. base_type_name.len - 1];
+        const ptr_val = if (base_ptr_is_direct_value)
+            base_ptr
+        else
+            c.LLVMBuildLoad2(self.builder, base_type, base_ptr, "load_ptr");
+        if (!(std.mem.startsWith(u8, base_type_name, "ptr<") and std.mem.endsWith(u8, base_type_name, ">")) and pointer_element_type_name == null) {
+            self.reportErrorFmt("Cannot index value of type '{s}' as pointer", .{base_type_name}, "Expected pointer type before indexing");
+            return errors.CodegenError.TypeMismatch;
+        }
+        const element_type_name = if (pointer_element_type_name) |n| n else base_type_name[4 .. base_type_name.len - 1];
         const element_type = try self.getLLVMType(element_type_name);
         const idx = collected_indices.items[collected_indices.items.len - 1];
         var indices = [_]c.LLVMValueRef{idx};
@@ -375,6 +664,12 @@ pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayInde
         return c.LLVMBuildLoad2(self.builder, element_type, element_ptr, "slice_element");
     }
 
+    const base_kind = c.LLVMGetTypeKind(base_type);
+    if (base_kind != c.LLVMArrayTypeKind and base_kind != c.LLVMVectorTypeKind) {
+        self.reportErrorFmt("Cannot index value of type '{s}'", .{base_type_name}, "Only arrays, pointers and slices can be indexed");
+        return errors.CodegenError.TypeMismatch;
+    }
+
     index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
     try collected_indices.append(self.allocator, index_value);
 
@@ -383,7 +678,7 @@ pub fn generateArrayIndexExpression(self: *CodeGenerator, arr_idx: ast.ArrayInde
         final_type = c.LLVMGetElementType(final_type);
     }
 
-    var all_indices = std.ArrayList(c.LLVMValueRef){};
+    var all_indices: std.ArrayList(c.LLVMValueRef) = .empty;
     defer all_indices.deinit(self.allocator);
     try all_indices.append(self.allocator, c.LLVMConstInt(c.LLVMInt32TypeInContext(self.context), 0, 0));
 

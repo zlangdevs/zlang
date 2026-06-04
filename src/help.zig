@@ -1,4 +1,5 @@
 const std = @import("std");
+const consts = @import("consts.zig");
 
 const red = "\x1b[31m";
 const green = "\x1b[32m";
@@ -39,6 +40,7 @@ pub fn printLogo() void {
         cyan,
         reset,
     });
+    std.debug.print("  {s}zlang {s}{s}\n\n", .{ bold, consts.VERSION, reset });
 }
 
 pub fn printHelp() void {
@@ -52,12 +54,14 @@ pub fn printHelp() void {
         \\  {s}zli{s}         Start interactive REPL-like session
         \\  {s}wrap{s}        Generate ZLang wrappers for C headers
         \\  {s}wrap-clang{s}  Generate wrappers via clang preprocessing
+        \\  {s}module{s}      Manage .zlx extensions; see {s}zlang module help{s}
         \\  {s}help{s}        Show this help message
         \\
     , .{
         bold, reset, green, reset, yellow, reset,
-        bold, reset, cyan,  reset, cyan,   reset,
-        cyan, reset, cyan,  reset, cyan,   reset,
+        bold, reset,
+        cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset,
+        cyan, reset, cyan, reset,
         cyan, reset,
     });
 
@@ -70,45 +74,29 @@ pub fn printHelp() void {
         \\  {s}-dast{s}        Dump Abstract Syntax Tree
         \\  {s}-q, -quiet{s}   Suppress non-error output
         \\  {s}-verbose{s}     Enable verbose output
+        \\  {s}-version{s}     Show compiler and LLVM toolchain version info
         \\  {s}-stats{s}       Show compilation statistics
         \\  {s}-optimize{s}    Enable optimizations
+        \\  {s}-verify-ir{s}   Verify generated LLVM IR even with -optimize
+        \\  {s}-j <n>{s}       Set maximum threads (default: all CPU cores)
         \\  {s}-c{s}           Compile to object file only
         \\  {s}-DNAME=VALUE{s} Override #define value in source
         \\  {s}-l<lib>{s}      Link with library
         \\  {s}-L<path>{s}     Add library search path
         \\
-    , .{
+, .{
         bold,   reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
+        yellow, reset, yellow, reset, yellow, reset, yellow, reset,
+        yellow, reset, yellow, reset, yellow, reset, yellow, reset,
+        yellow, reset, yellow, reset, yellow, reset, yellow, reset,
+        yellow, reset, yellow, reset, yellow, reset,
     });
 
     std.debug.print(
-        \\{s}Brainfuck Mode:{s}
-        \\  {s}-b{s}            Compile pure Brainfuck (.b/.bf files, 8-bit cells)
-        \\  {s}-b8{s}           Compile Brainfuck with 8-bit cells
-        \\  {s}-b16{s}          Compile Brainfuck with 16-bit cells
-        \\  {s}-b32{s}          Compile Brainfuck with 32-bit cells
-        \\  {s}-b64{s}          Compile Brainfuck with 64-bit cells
+        \\  {s}-no-extensions{s} Skip loading native .zlx plugins (keeps pure .zl modules)
+        \\  {s}-isolated{s}      Disable plugins and plugin .zl modules for reproducible builds
         \\
-    , .{
-        bold,   reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-        yellow, reset,
-    });
+    , .{ yellow, reset, yellow, reset });
 
     std.debug.print(
         \\{s}Examples:{s}
@@ -119,8 +107,6 @@ pub fn printHelp() void {
         \\  zlang wrap-clang SDL2/SDL.h -o sdl.zl -- -I/usr/include/SDL2 -D_REENTRANT
         \\  zlang -o myapp main.zl -lSDL2
         \\  zlang main.zl -DLOGMODE=true -o myapp
-        \\  zlang -b mandelbrot.bf -o mandelbrot
-        \\  zlang -b32 program.b -o output
         \\
         \\{s}For more information, visit:{s} {s}https://github.com/zlang-dev/zlang{s}
         \\

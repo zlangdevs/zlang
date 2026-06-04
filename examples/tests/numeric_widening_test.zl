@@ -1,0 +1,12 @@
+fun main() >> i32 {
+    i8 a = 5;
+    i64 b = a;
+    u16 c = 7;
+    u32 d = c;
+    f32 e = 1.5;
+    f64 f = e;
+    i32 g = a as _;
+    u32 h = (a as _);
+    @printf("%ld %u %f %d %u\n", b, d, f, g, h);
+    return 0;
+}
