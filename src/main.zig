@@ -2577,11 +2577,12 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                 const arg = args[i];
                 if (std.mem.endsWith(u8, arg, ".zl")) {
                     try context.input_files.append(allocator, arg);
-                } else if (std.mem.endsWith(u8, arg, ".b") or std.mem.endsWith(u8, arg, ".bf")) {
-                    try context.input_files.append(allocator, arg);
-                } else if (std.mem.endsWith(u8, arg, ".zlb")) {
-                    try context.input_files.append(allocator, arg);
                 } else {
+                    // Files claimed by plugin-registered file extensions (e.g. an
+                    // extension's own source type) are not known at parse time,
+                    // since plugins load after argument parsing. Such files land
+                    // in link_objects here and are reclassified into input_files
+                    // once the plugin host is loaded.
                     const stat = std.Io.Dir.cwd().statFile(process_io, arg, .{}) catch |err| {
                         if (err == error.FileNotFound) {
                             try context.link_objects.append(allocator, arg);
@@ -2599,7 +2600,10 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
             },
         }
     }
-    return if (context.input_files.items.len == 0)
+    // link_objects may still hold files claimed by a plugin-registered file
+    // extension; those are reclassified into input_files after the plugin host
+    // loads, so a bare link_objects list is not necessarily an empty input.
+    return if (context.input_files.items.len == 0 and context.link_objects.items.len == 0)
         errors.CLIError.NoInputPath
     else
         context;
@@ -3756,6 +3760,27 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
+    // Reclassify link objects whose extension is claimed by a loaded plugin's
+    // registered file extension: move them from link_objects to input_files so
+    // the file-extension dispatch below can hand them to the owning plugin.
+    if (plugin_host.file_extensions.items.len != 0) {
+        var li: usize = 0;
+        while (li < ctx.link_objects.items.len) {
+            const obj = ctx.link_objects.items[li];
+            var claimed = false;
+            for (plugin_host.file_extensions.items) |reg| {
+                if (std.mem.endsWith(u8, obj, reg.extension)) {
+                    claimed = true;
+                    break;
+                }
+            }
+            if (claimed) {
+                _ = ctx.link_objects.orderedRemove(li);
+                try ctx.input_files.append(allocator, obj);
+            } else li += 1;
+        }
+    }
+
     plugin_module_paths = .init(allocator);
     if (zlx_store.Store.init(allocator)) |store| {
         var st = store;
@@ -3934,33 +3959,6 @@ pub fn main(init: std.process.Init) !u8 {
             };
         }
         if (ctx.input_files.items.len == 0) return 0;
-    }
-
-    for (ctx.input_files.items, 0..) |path, idx| {
-        if (!(std.mem.endsWith(u8, path, ".b") or std.mem.endsWith(u8, path, ".bf"))) continue;
-        const bytes = std.Io.Dir.cwd().readFileAlloc(process_io, path, allocator, .limited(64 * 1024 * 1024)) catch continue;
-        defer allocator.free(bytes);
-        var cell_size: i32 = 8;
-        for (ctx.plugin_flags.items) |f| {
-            if (std.mem.eql(u8, f, "-b8")) cell_size = 8
-            else if (std.mem.eql(u8, f, "-b16")) cell_size = 16
-            else if (std.mem.eql(u8, f, "-b32")) cell_size = 32
-            else if (std.mem.eql(u8, f, "-b64")) cell_size = 64;
-        }
-        const wrapped = std.fmt.allocPrint(allocator, "fun main() >> i32 {{\nbrainfuck {{\n?cell_size {d}?\n?len 30000?\n{s}\n}}\nreturn 0;\n}}\n", .{ cell_size, bytes }) catch continue;
-        defer allocator.free(wrapped);
-        const base = std.fs.path.basename(path);
-        const tmp_path = std.fmt.allocPrint(allocator, "/tmp/zlang-zlx-bf-{d}-{s}.zl", .{ @as(u64, @intCast(nanoTimestamp())), base }) catch continue;
-        var tmp = std.Io.Dir.cwd().createFile(process_io, tmp_path, .{ .truncate = true }) catch {
-            allocator.free(tmp_path);
-            continue;
-        };
-        defer tmp.close(process_io);
-        var buf: [4096]u8 = undefined;
-        var writer = tmp.writer(process_io, &buf);
-        writer.interface.writeAll(wrapped) catch {};
-        writer.interface.flush() catch {};
-        ctx.input_files.items[idx] = tmp_path;
     }
 
     if (plugin_host.syntax_blocks.items.len != 0) {

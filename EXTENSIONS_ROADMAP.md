@@ -52,20 +52,21 @@ Done on branch `zlx`:
 - Added `zlang module doctor`: prints host API range and store root, then per-module status, api compatibility, and sidecar `.so` presence. Reports `OK`/`WARN`, exits non-zero if any problems found.
 - Index entries now carry an optional `manifest_sha256` (lowercase hex SHA-256 of installed manifest bytes). `install` computes and stores it; `rebuild` recomputes it. `doctor-modules` re-hashes the on-disk manifest and warns on mismatch ("manifest hash mismatch") or absence ("no manifest hash recorded"). Verified: appending bytes to the installed `.zlx` triggers `WARN ... manifest hash mismatch; rc=1`.
 - Current MVP treats `.zlx` as a single ZON manifest file copied to `~/.zlang/modules/<name>.zlx`.
+- Native plugin `.so` probing/loading is implemented (`src/zlx/loader.zig`): probe API-range check, `init`, desc/probe agreement, and `register_plugin` against the host.
+- Extension-block dispatch is implemented at the preprocessor layer (`src/zlx/preprocess.zig`), not the bison parser: `IDENTIFIER { ... }` whose name matches a plugin-registered syntax block is brace-counted and handed to the plugin handler, whose generated zlang source is spliced back in. Works on both input files and dependency `.zl` files loaded via `use`.
+- Plugin-provided stdlib module search paths resolve at compile time: install copies declared module files into the store, and the pipeline builds an absolute-path map from the loaded host's module list.
+- Link-flag activation by feature use is implemented (RFC §5.4): a plugin's link flags enter the linker invocation only when one of its CLI flags appears on the command line or one of its modules is imported via `use`.
+- Plugin-registered file extensions (`register_file_extension`, API v4) let a plugin claim its own source file types (e.g. brainfuck `.b/.bf`, zlb `.zlb`). Core no longer hardcodes any extension's file types or syntax: unrecognized input files are reclassified into the compile set after the plugin host loads, based purely on registered extensions.
+- Built-in brainfuck is fully removed from core. There is no remaining brainfuck wrapping, cell-size flag handling, or `.b/.bf` routing in the compiler. Brainfuck now ships entirely as an external `brainfuck.zlx` extension (syntax block, `-b/-b8/-b16/-b32/-b64` flags, and a `.b/.bf` file-extension handler), validating Phase 7.
+- Phase 9 trust flags shipped: `-no-extensions` skips `dlopen` of native plugins while still loading manifest-declared module paths; `-isolated` disables both. `zlang module doctor` diagnostics and `manifest_sha256` integrity checks are implemented.
 
 Not done yet:
-- Real `.zlx` container archive unpacking.
-- Native plugin `.so` probing/loading.
-- Versioned dependency constraints.
-- Parser extension-block dispatch.
-- Extension-provided stdlib module search paths.
-- Link flag activation by feature usage.
+- Real `.zlx` container archive unpacking (still single-manifest + sidecar `.so`; multi-file `lib/plugin.so` + `std/` + `docs/` layout reserved for v2).
+- Versioned dependency constraints (flat names only; deferred to v2).
 
 Next planned increments:
-- Begin extracting the built-in brainfuck path into a `brainfuck.zlx` extension now that syntax-block dispatch works end-to-end (Phase 7 entry).
 - Add a real container layout to the package abstraction so `entry` and `std/*.zl` are extracted from a single `.zlx` archive instead of relying on a sidecar `.so` and an adjacent `std/` directory at install time.
-- Add Phase 9 security hooks: `-no-extensions` (skip dlopen), `-isolated` (also skip extension module paths), and `zlang module doctor` diagnostics.
-- Extend the package layout abstraction with a real container layout (archive extraction) so `entry`/`std/*.zl` paths are extracted from the `.zlx` instead of relying on a manifest-side sidecar `.so`.
+- Add automated end-to-end CI coverage for the extension pipeline (install → compile → run) using the external `brainfuck.zlx`/`zlb.zlx`/`threading.zlx` packages.
 
 ---
 
