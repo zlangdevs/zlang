@@ -4,6 +4,7 @@ const errors = @import("../errors.zig");
 const utils = @import("../codegen/utils.zig");
 
 var global_allocator: std.mem.Allocator = undefined;
+var parser_lock: std.Io.Mutex = .init;
 
 var last_error_line: usize = 0;
 var last_error_col: usize = 0;
@@ -43,7 +44,7 @@ fn set_node_location(node: *ast.Node) void {
 }
 
 fn parseErrorCodeLiteral(raw: []const u8) i32 {
-    var cleaned = std.ArrayList(u8){};
+    var cleaned: std.ArrayList(u8) = .empty;
     defer cleaned.deinit(global_allocator);
     for (raw) |ch| {
         if (ch != '\'') cleaned.append(global_allocator, ch) catch return 0;
@@ -60,12 +61,74 @@ fn parseErrorCodeLiteral(raw: []const u8) i32 {
     }
     return std.fmt.parseInt(i32, lit, 10) catch 0;
 }
+
+fn parseIntegerLiteralI64(raw: []const u8) ?i64 {
+    var cleaned: std.ArrayList(u8) = .empty;
+    defer cleaned.deinit(global_allocator);
+    for (raw) |ch| {
+        if (ch != '\'') cleaned.append(global_allocator, ch) catch return null;
+    }
+    const lit = cleaned.items;
+    if (std.mem.startsWith(u8, lit, "0x") or std.mem.startsWith(u8, lit, "0X")) {
+        return std.fmt.parseInt(i64, lit[2..], 16) catch null;
+    }
+    if (std.mem.startsWith(u8, lit, "0b") or std.mem.startsWith(u8, lit, "0B")) {
+        return std.fmt.parseInt(i64, lit[2..], 2) catch null;
+    }
+    if (lit.len > 1 and lit[0] == '0') {
+        return std.fmt.parseInt(i64, lit[1..], 8) catch null;
+    }
+    return std.fmt.parseInt(i64, lit, 10) catch null;
+}
+
+fn evalConstIntExpr(node: *ast.Node) ?i64 {
+    return switch (node.data) {
+        .number_literal => |n| parseIntegerLiteralI64(n.value),
+        .char_literal => |c| @as(i64, c.value),
+        .unary_op => |u| blk: {
+            const inner = evalConstIntExpr(u.operand) orelse break :blk null;
+            break :blk switch (u.op) {
+                '+' => inner,
+                '-' => -inner,
+                '~' => ~inner,
+                else => null,
+            };
+        },
+        .binary_op => |b| blk: {
+            const lhs = evalConstIntExpr(b.lhs) orelse break :blk null;
+            const rhs = evalConstIntExpr(b.rhs) orelse break :blk null;
+            break :blk switch (b.op) {
+                '+' => lhs + rhs,
+                '-' => lhs - rhs,
+                '*' => lhs * rhs,
+                '/' => if (rhs == 0) null else @divTrunc(lhs, rhs),
+                '%' => if (rhs == 0) null else @rem(lhs, rhs),
+                '<' => if (rhs < 0 or rhs > 62) null else lhs << @intCast(rhs),
+                '>' => if (rhs < 0 or rhs > 62) null else lhs >> @intCast(rhs),
+                '&' => lhs & rhs,
+                '|' => lhs | rhs,
+                '^' => lhs ^ rhs,
+                else => null,
+            };
+        },
+        .cast => |cst| evalConstIntExpr(cst.expr),
+        else => null,
+    };
+}
+
+export fn zig_try_eval_const_int(expr_ptr: ?*anyopaque, out_value: ?*c_longlong) c_int {
+    if (expr_ptr == null or out_value == null) return 0;
+    const expr = @as(*ast.Node, @ptrFromInt(@intFromPtr(expr_ptr.?)));
+    const value = evalConstIntExpr(expr) orelse return 0;
+    out_value.?.* = @intCast(value);
+    return 1;
+}
 const ParameterList = struct {
     items: std.ArrayList(ast.Parameter),
 
     fn init() ParameterList {
         return ParameterList{
-            .items = std.ArrayList(ast.Parameter){},
+            .items = .empty,
         };
     }
 };
@@ -75,7 +138,7 @@ const NodeList = struct {
 
     fn init() NodeList {
         return NodeList{
-            .items = std.ArrayList(*ast.Node){},
+            .items = .empty,
         };
     }
 };
@@ -85,7 +148,7 @@ const MatchCaseList = struct {
 
     fn init() MatchCaseList {
         return MatchCaseList{
-            .items = std.ArrayList(ast.MatchCase){},
+            .items = .empty,
         };
     }
 };
@@ -95,7 +158,7 @@ const ErrorHandlerList = struct {
 
     fn init() ErrorHandlerList {
         return ErrorHandlerList{
-            .items = std.ArrayList(ast.ErrorHandler){},
+            .items = .empty,
         };
     }
 };
@@ -103,8 +166,8 @@ const ErrorHandlerList = struct {
 export fn zig_create_program() ?*anyopaque {
     const program_data = ast.NodeData{
         .program = ast.Program{
-            .functions = std.ArrayList(*ast.Node){},
-            .globals = std.ArrayList(*ast.Node){},
+            .functions = .empty,
+            .globals = .empty,
         },
     };
 
@@ -153,13 +216,13 @@ export fn zig_create_function(name_ptr: [*c]const u8, return_type_ptr: [*c]const
     const name_copy = utils.dupe(u8, global_allocator, name);
     const return_type_copy = utils.dupe(u8, global_allocator, return_type);
 
-    var parameters = std.ArrayList(ast.Parameter){};
+    var parameters: std.ArrayList(ast.Parameter) = .empty;
     if (params_ptr) |ptr| {
         const param_list = @as(*ParameterList, @ptrFromInt(@intFromPtr(ptr)));
         parameters = param_list.items;
     }
 
-    var body = std.ArrayList(*ast.Node){};
+    var body: std.ArrayList(*ast.Node) = .empty;
     if (body_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         body = node_list.items;
@@ -298,7 +361,7 @@ export fn zig_create_function_call(name_ptr: [*c]const u8, is_libc: c_int, args_
     const name = std.mem.span(name_ptr);
     const name_copy = utils.dupe(u8, global_allocator, name);
 
-    var args = std.ArrayList(*ast.Node){};
+    var args: std.ArrayList(*ast.Node) = .empty;
     if (args_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         args = node_list.items;
@@ -463,7 +526,7 @@ const EnumValueList = struct {
 
     fn init() EnumValueList {
         return EnumValueList{
-            .items = std.ArrayList(ast.EnumValue){},
+            .items = .empty,
         };
     }
 };
@@ -473,7 +536,7 @@ const StructFieldList = struct {
 
     fn init() StructFieldList {
         return StructFieldList{
-            .items = std.ArrayList(ast.StructField){},
+            .items = .empty,
         };
     }
 };
@@ -483,7 +546,7 @@ const StructFieldValueList = struct {
 
     fn init() StructFieldValueList {
         return StructFieldValueList{
-            .items = std.ArrayList(ast.StructFieldValue){},
+            .items = .empty,
         };
     }
 };
@@ -514,7 +577,7 @@ export fn zig_add_enum_value(list_ptr: ?*anyopaque, name_ptr: [*c]const u8, valu
 export fn zig_create_enum_decl(name_ptr: [*c]const u8, values_ptr: ?*anyopaque) ?*anyopaque {
     const name = std.mem.span(name_ptr);
     const name_copy = utils.dupe(u8, global_allocator, name);
-    var values = std.ArrayList(ast.EnumValue){};
+    var values: std.ArrayList(ast.EnumValue) = .empty;
     if (values_ptr) |ptr| {
         const enum_value_list = @as(*EnumValueList, @ptrFromInt(@intFromPtr(ptr)));
         values = enum_value_list.items;
@@ -574,7 +637,7 @@ export fn zig_add_struct_field_with_default(list_ptr: ?*anyopaque, name_ptr: [*c
 export fn zig_create_struct_decl(name_ptr: [*c]const u8, fields_ptr: ?*anyopaque) ?*anyopaque {
     const name = std.mem.span(name_ptr);
     const name_copy = utils.dupe(u8, global_allocator, name);
-    var fields = std.ArrayList(ast.StructField){};
+    var fields: std.ArrayList(ast.StructField) = .empty;
     if (fields_ptr) |ptr| {
         const struct_field_list = @as(*StructFieldList, @ptrFromInt(@intFromPtr(ptr)));
         fields = struct_field_list.items;
@@ -593,7 +656,7 @@ export fn zig_create_struct_decl(name_ptr: [*c]const u8, fields_ptr: ?*anyopaque
 export fn zig_create_union_decl(name_ptr: [*c]const u8, fields_ptr: ?*anyopaque) ?*anyopaque {
     const name = std.mem.span(name_ptr);
     const name_copy = utils.dupe(u8, global_allocator, name);
-    var fields = std.ArrayList(ast.StructField){};
+    var fields: std.ArrayList(ast.StructField) = .empty;
     if (fields_ptr) |ptr| {
         const struct_field_list = @as(*StructFieldList, @ptrFromInt(@intFromPtr(ptr)));
         fields = struct_field_list.items;
@@ -612,7 +675,7 @@ export fn zig_create_union_decl(name_ptr: [*c]const u8, fields_ptr: ?*anyopaque)
 export fn zig_create_struct_initializer(struct_name_ptr: [*c]const u8, field_values_ptr: ?*anyopaque) ?*anyopaque {
     const struct_name = std.mem.span(struct_name_ptr);
     const struct_name_copy = utils.dupe(u8, global_allocator, struct_name);
-    var field_values = std.ArrayList(ast.StructFieldValue){};
+    var field_values: std.ArrayList(ast.StructFieldValue) = .empty;
     if (field_values_ptr) |ptr| {
         const struct_field_value_list = @as(*StructFieldValueList, @ptrFromInt(@intFromPtr(ptr)));
         field_values = struct_field_value_list.items;
@@ -738,18 +801,6 @@ export fn zig_add_to_arg_list(list_ptr: ?*anyopaque, arg_ptr: ?*anyopaque) void 
     node_list.items.append(global_allocator, arg_node) catch return;
 }
 
-export fn zig_create_brainfuck(code_ptr: [*c]const u8) ?*anyopaque {
-    const code = std.mem.span(code_ptr);
-    const code_copy = utils.dupe(u8, global_allocator, code);
-    const brainfuck_data = ast.NodeData{
-        .brainfuck = ast.Brainfuck{
-            .code = code_copy,
-        },
-    };
-    const node = ast.Node.create(global_allocator, brainfuck_data);
-    return @as(*anyopaque, @ptrCast(node));
-}
-
 export fn zig_create_if_stmt(condition_ptr: ?*anyopaque, then_body_ptr: ?*anyopaque, else_body_ptr: ?*anyopaque) ?*anyopaque {
     if (condition_ptr == null or then_body_ptr == null) return null;
 
@@ -781,7 +832,7 @@ export fn zig_create_for_stmt(condition_ptr: ?*anyopaque, body_ptr: ?*anyopaque)
         condition = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
     }
 
-    var body = std.ArrayList(*ast.Node){};
+    var body: std.ArrayList(*ast.Node) = .empty;
     if (body_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         body = node_list.items;
@@ -807,7 +858,7 @@ export fn zig_create_c_for_stmt(init_ptr: ?*anyopaque, cond_ptr: ?*anyopaque, in
     if (cond_ptr) |ptr| cond = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
     if (inc_ptr) |ptr| increment = @as(*ast.Node, @ptrFromInt(@intFromPtr(ptr)));
 
-    var body = std.ArrayList(*ast.Node){};
+    var body: std.ArrayList(*ast.Node) = .empty;
     if (body_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         body = node_list.items;
@@ -833,13 +884,13 @@ export fn zig_create_match_case_list() ?*anyopaque {
 }
 
 export fn zig_create_match_case(values_ptr: ?*anyopaque, body_ptr: ?*anyopaque) ?*anyopaque {
-    var values = std.ArrayList(*ast.Node){};
+    var values: std.ArrayList(*ast.Node) = .empty;
     if (values_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         values = node_list.items;
     }
 
-    var body = std.ArrayList(*ast.Node){};
+    var body: std.ArrayList(*ast.Node) = .empty;
     if (body_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         body = node_list.items;
@@ -868,7 +919,7 @@ export fn zig_create_match_stmt(condition_ptr: ?*anyopaque, cases_ptr: ?*anyopaq
 
     const condition = @as(*ast.Node, @ptrFromInt(@intFromPtr(condition_ptr.?)));
 
-    var cases = std.ArrayList(ast.MatchCase){};
+    var cases: std.ArrayList(ast.MatchCase) = .empty;
     if (cases_ptr) |ptr| {
         const case_list = @as(*MatchCaseList, @ptrFromInt(@intFromPtr(ptr)));
         cases = case_list.items;
@@ -1008,7 +1059,7 @@ export fn zig_add_error_handler_number_kind(list_ptr: ?*anyopaque, kind: c_int, 
 export fn zig_create_handled_call_stmt(call_ptr: ?*anyopaque, handlers_ptr: ?*anyopaque) ?*anyopaque {
     if (call_ptr == null) return null;
     const call = @as(*ast.Node, @ptrFromInt(@intFromPtr(call_ptr.?)));
-    var handlers = std.ArrayList(ast.ErrorHandler){};
+    var handlers: std.ArrayList(ast.ErrorHandler) = .empty;
     if (handlers_ptr) |ptr| {
         const handler_list = @as(*ErrorHandlerList, @ptrFromInt(@intFromPtr(ptr)));
         handlers = handler_list.items;
@@ -1073,7 +1124,7 @@ export fn zig_create_label_stmt(label_ptr: [*c]const u8) ?*anyopaque {
 }
 
 export fn zig_create_array_initializer(elements_ptr: ?*anyopaque) ?*anyopaque {
-    var elements = std.ArrayList(*ast.Node){};
+    var elements: std.ArrayList(*ast.Node) = .empty;
     if (elements_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         elements = node_list.items;
@@ -1146,7 +1197,7 @@ export fn zig_create_array_compound_assignment(array_ptr: ?*anyopaque, index_ptr
 }
 
 export fn zig_create_simd_initializer(elements_ptr: ?*anyopaque) ?*anyopaque {
-    var elements = std.ArrayList(*ast.Node){};
+    var elements: std.ArrayList(*ast.Node) = .empty;
     if (elements_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         elements = node_list.items;
@@ -1215,7 +1266,7 @@ export fn zig_create_simd_method_call(simd_ptr: ?*anyopaque, method_name_ptr: [*
     const simd = @as(*ast.Node, @ptrFromInt(@intFromPtr(simd_ptr.?)));
     const method_name = std.mem.span(method_name_ptr);
     const method_name_copy = utils.dupe(u8, global_allocator, method_name);
-    var args = std.ArrayList(*ast.Node){};
+    var args: std.ArrayList(*ast.Node) = .empty;
     if (args_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         args = node_list.items;
@@ -1239,7 +1290,7 @@ export fn zig_create_method_call(object_ptr: ?*anyopaque, method_name_ptr: [*c]c
     const method_name = std.mem.span(method_name_ptr);
     const method_name_copy = utils.dupe(u8, global_allocator, method_name);
 
-    var args = std.ArrayList(*ast.Node){};
+    var args: std.ArrayList(*ast.Node) = .empty;
     if (args_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         args = node_list.items;
@@ -1265,7 +1316,7 @@ export fn zig_create_c_function_decl(name_ptr: [*c]const u8, return_type_ptr: [*
     const name_copy = utils.dupe(u8, global_allocator, name);
     const return_type_copy = utils.dupe(u8, global_allocator, return_type);
 
-    var parameters = std.ArrayList(ast.Parameter){};
+    var parameters: std.ArrayList(ast.Parameter) = .empty;
     if (params_ptr) |ptr| {
         const param_list = @as(*ParameterList, @ptrFromInt(@intFromPtr(ptr)));
         parameters = param_list.items;
@@ -1292,7 +1343,7 @@ export fn zig_create_wrapper_function(name_ptr: [*c]const u8, return_type_ptr: [
     const name_copy = utils.dupe(u8, global_allocator, name);
     const return_type_copy = utils.dupe(u8, global_allocator, return_type);
 
-    var parameters = std.ArrayList(ast.Parameter){};
+    var parameters: std.ArrayList(ast.Parameter) = .empty;
     if (params_ptr) |ptr| {
         const param_list = @as(*ParameterList, @ptrFromInt(@intFromPtr(ptr)));
         parameters = param_list.items;
@@ -1363,7 +1414,7 @@ export fn zig_create_expression_block(type_name_ptr: [*c]const u8, statements_pt
     const type_name = std.mem.span(type_name_ptr);
     const type_name_copy = utils.dupe(u8, global_allocator, type_name);
 
-    var statements = std.ArrayList(*ast.Node){};
+    var statements: std.ArrayList(*ast.Node) = .empty;
     if (statements_ptr) |ptr| {
         const node_list = @as(*NodeList, @ptrFromInt(@intFromPtr(ptr)));
         statements = node_list.items;
@@ -1475,7 +1526,6 @@ const token_labels = [_]TokenLabel{
     .{ .token = "TOKEN_ON", .label = "'on'" },
     .{ .token = "TOKEN_UNDERSCORE", .label = "'_'" },
     .{ .token = "TOKEN_AT", .label = "'@'" },
-    .{ .token = "TOKEN_BRAINFUCK", .label = "brainfuck block" },
 };
 
 fn isTokenNameChar(ch: u8) bool {
@@ -1497,7 +1547,7 @@ fn formatParseMessage(allocator: std.mem.Allocator, raw: []const u8) ![]const u8
         base = "invalid syntax";
     }
 
-    var humanized = std.ArrayList(u8){};
+    var humanized: std.ArrayList(u8) = .empty;
     defer humanized.deinit(allocator);
 
     var i: usize = 0;
@@ -1522,7 +1572,7 @@ fn formatParseMessage(allocator: std.mem.Allocator, raw: []const u8) ![]const u8
     const interim = try humanized.toOwnedSlice(allocator);
     defer allocator.free(interim);
 
-    var final = std.ArrayList(u8){};
+    var final: std.ArrayList(u8) = .empty;
     defer final.deinit(allocator);
 
     const marker = ", expecting ";
@@ -1542,12 +1592,24 @@ fn formatParseMessage(allocator: std.mem.Allocator, raw: []const u8) ![]const u8
 }
 
 pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!?*ast.Node {
+    const null_terminated_input = try allocator.dupeZ(u8, input);
+    defer allocator.free(null_terminated_input);
+
+    const file = fmemopen(null_terminated_input.ptr, input.len, "r");
+    if (file == null) {
+        return errors.ParseError.FileOpenFailed;
+    }
+    defer _ = fclose(file);
+
+    std.Io.Threaded.mutexLock(&parser_lock);
+    defer std.Io.Threaded.mutexUnlock(&parser_lock);
+
     global_allocator = allocator;
     ast_root = null;
     last_error_line = 0;
     last_error_col = 0;
     if (!error_list_initialized) {
-        error_list = std.ArrayList(ParseErrorInfo){};
+        error_list = .empty;
         error_list_initialized = true;
     } else {
         for (error_list.items) |err_info| {
@@ -1562,15 +1624,6 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!
     defer _ = zlang_lex_destroy(current_scanner);
 
     zlang_reset_lexer_state();
-
-    const null_terminated_input = try allocator.dupeZ(u8, input);
-    defer allocator.free(null_terminated_input);
-
-    const file = fmemopen(null_terminated_input.ptr, input.len, "r");
-    if (file == null) {
-        return errors.ParseError.FileOpenFailed;
-    }
-    defer _ = fclose(file);
 
     zlang_set_in(file, current_scanner);
 
@@ -1593,6 +1646,9 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) errors.ParseError!
 }
 
 pub fn lastParseErrorLocation() ?struct { line: usize, column: usize } {
+    std.Io.Threaded.mutexLock(&parser_lock);
+    defer std.Io.Threaded.mutexUnlock(&parser_lock);
+
     if (last_error_line == 0) return null;
     return .{ .line = last_error_line, .column = last_error_col };
 }
@@ -1603,6 +1659,9 @@ pub fn getParseErrors() []ParseErrorInfo {
 }
 
 pub fn clearParseErrors(allocator: std.mem.Allocator) void {
+    std.Io.Threaded.mutexLock(&parser_lock);
+    defer std.Io.Threaded.mutexUnlock(&parser_lock);
+
     if (!error_list_initialized) return;
     for (error_list.items) |err_info| {
         allocator.free(err_info.message);

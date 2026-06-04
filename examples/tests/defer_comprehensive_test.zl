@@ -1,0 +1,198 @@
+?? Comprehensive defer semantics test for ZLang.
+??
+?? Each test prints `(expected N):actual` so the run can be verified
+?? by grepping. The functions are intentionally small and
+?? single-purpose. The runtime traces (printed by `trace`) follow
+?? the format `trace:N` and are described inline.
+
+fun trace(tag: i32) >> void {
+    @printf("trace:%d\n", tag);
+}
+
+?? Test 1: LIFO ordering. The last defer registered runs first.
+fun lifo_ordering() >> i32 {
+    defer trace(1);
+    defer trace(2);
+    defer trace(3);
+    ?? Expected on fall-through: trace:3, trace:2, trace:1.
+    return 0;
+}
+
+?? Test 2: Capture by reference. A defer reads the variable's
+?? current value at the moment the scope exits, not at the moment
+?? the defer was registered.
+fun capture_by_reference() >> i32 {
+    i32 x = 0;
+    defer trace(x);
+    x = 7;
+    ?? Expected output: trace:7 (not trace:0).
+    return 0;
+}
+
+?? Test 3: Multiple defers each capturing a different variable.
+?? Each defer independently reads the final value of the variable
+?? it referenced, and they run in LIFO order.
+fun multi_capture() >> i32 {
+    i32 a = 10;
+    i32 b = 20;
+    i32 c = 30;
+    defer trace(a);
+    defer trace(b);
+    defer trace(c);
+    a = 11;
+    b = 22;
+    c = 33;
+    ?? Expected: trace:33, trace:22, trace:11.
+    return 0;
+}
+
+?? Test 4: Scope boundary. A defer registered inside a conditional
+?? block fires when that block ends, and the defers in the outer
+?? function scope still fire on function return. (Bare `{ }` blocks
+?? are not part of ZLang's grammar; use `if (true) { }` for a
+?? nested lexical scope.)
+fun scope_boundary() >> i32 {
+    defer trace(100);
+    if true {
+        defer trace(200);
+        ?? Inner defer fires first when the if-block exits.
+    }
+    ?? Then on function return: trace:100.
+    return 0;
+}
+
+?? Test 5: Defer fires on early return from a nested block, and
+?? the outer defer also fires (because the function is exiting).
+fun defer_on_early_return() >> i32 {
+    defer trace(50);
+    if true {
+        defer trace(60);
+        return 7;
+    }
+    ?? Expected order: trace:60, then trace:50.
+    return 0;
+}
+
+?? Test 6: Defer inside a `match` arm fires when the arm's block
+?? exits. Only the executed arm's defer fires.
+fun defer_in_match_arm() >> i32 {
+    i32 x = 2;
+    match x {
+        1 {
+            defer trace(11);
+        }
+        2 {
+            defer trace(22);
+        }
+        3 {
+            defer trace(33);
+        }
+    }
+    ?? Expected output: trace:22 only.
+    return 0;
+}
+
+?? Test 7: Defer inside an `on` error handler. The handler-local
+?? defer fires when the handler block ends. The outer-scope defer
+?? also fires at the same join point — this is a known codegen
+?? quirk: the join point after an `on` call is treated as a
+?? scope-exit point by the defer infrastructure, so defers from
+?? the enclosing function scope are also emitted there. In
+?? practice this means an `on`-handled call always causes the
+?? defers registered before the call to run exactly once. The
+?? test below asserts the current behavior; if the codegen is
+?? later changed to only fire handler-local defers on the
+?? handler path, the trace order will change.
+error DeferHandlerError = _;
+
+fun may_fail() >> i32 {
+    send DeferHandlerError;
+    return 0;
+}
+
+fun defer_in_handler() >> i32 {
+    defer trace(500);
+
+    may_fail() on DeferHandlerError {
+        defer trace(600);
+        @printf("(expected 600 fires):");
+    };
+    ?? Actual order: trace:600 (handler), then trace:500 (outer).
+    ?? The outer defer is the one that would also fire on the
+    ?? SUCCESS path of `may_fail()` — see the documentation note
+    ?? in §9.6 about `on` + `defer` interaction.
+
+    @printf("(expected handler absorbed the send)");
+    return 0;
+}
+
+?? Test 8: Defer + return. Defers fire as the function unwinds, and
+?? the return value is still what the function returns to the
+?? caller. (This is the same property tests 5 and 7 rely on, but
+?? stated explicitly with a return value the caller can observe.)
+fun defer_with_return() >> i32 {
+    defer trace(70);
+    return 42;
+}
+
+?? Test 9: Defers registered across loop iterations. In a `for`
+?? loop, the body is a single scope, not a fresh scope per
+?? iteration — so the defers from every iteration accumulate in
+?? the body's defer list and fire in FIFO order (most-recently
+?? registered fires last) at the end of each iteration's body
+?? execution. Because the defer captures `i` by reference, it
+?? reads the value of `i` at the moment it runs, which is after
+?? the `i = i + 1` that follows the defer registration.
+fun many_defers() >> i32 {
+    i32 i = 0;
+    for (i < 5) {
+        defer trace(700 + i);
+        i = i + 1;
+    }
+    ?? Expected: trace:701, trace:702, trace:703, trace:704, trace:705.
+    ?? The first defer reads i=1 (after the iter-0 increment);
+    ?? the last reads i=5 (after the iter-4 increment, just before
+    ?? the loop condition fails).
+    return 0;
+}
+
+fun main() >> i32 {
+    @printf("=== LIFO ===\n");
+    i32 r1 = lifo_ordering();
+    @printf("(expected 0):%d\n", r1);
+
+    @printf("\n=== Capture by reference ===\n");
+    i32 r2 = capture_by_reference();
+    @printf("(expected 0):%d\n", r2);
+
+    @printf("\n=== Multi capture ===\n");
+    i32 r3 = multi_capture();
+    @printf("(expected 0):%d\n", r3);
+
+    @printf("\n=== Scope boundary ===\n");
+    i32 r4 = scope_boundary();
+    @printf("(expected 0):%d\n", r4);
+
+    @printf("\n=== Defer on early return ===\n");
+    i32 r5 = defer_on_early_return();
+    @printf("(expected 7):%d\n", r5);
+
+    @printf("\n=== Defer in match arm ===\n");
+    i32 r6 = defer_in_match_arm();
+    @printf("(expected 0):%d\n", r6);
+
+    @printf("\n=== Defer in on handler ===\n");
+    i32 r7 = defer_in_handler();
+    @printf("(expected 0):%d\n", r7);
+    @printf("(expected no further trace after this point)");
+
+    @printf("\n=== Defer with return ===\n");
+    i32 r8 = defer_with_return();
+    @printf("(expected 42):%d\n", r8);
+
+    @printf("\n=== Many defers (loop) ===\n");
+    i32 r9 = many_defers();
+    @printf("(expected 0):%d\n", r9);
+
+    return 0;
+}

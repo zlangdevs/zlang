@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const consts = @import("consts.zig");
 const errors = @import("errors.zig");
 const parser = @import("parser/parser.zig");
@@ -12,23 +13,69 @@ const diagnostics = @import("diagnostics.zig");
 const help = @import("help.zig");
 const interpreter = @import("interpreter.zig");
 const preprocessor = @import("preprocessor/preprocessor.zig");
+const llvm_tools = @import("llvm_tools.zig");
+const zlx_commands = @import("zlx/commands.zig");
+const zlx_host = @import("zlx/host.zig");
+const zlx_abi = @import("zlx/abi.zig");
+const zlx_runtime = @import("zlx/runtime.zig");
+const zlx_store = @import("zlx/store.zig");
+const zlx_preprocess = @import("zlx/preprocess.zig");
 
 const allocator = std.heap.page_allocator;
+var process_io: std.Io = undefined;
+var plugin_module_paths: ?std.StringHashMap([]const u8) = null;
+var plugin_host_ptr: ?*zlx_host.Host = null;
+var zlx_source_maps: std.ArrayList(ZlxSourceMap) = .empty;
+
+const ZlxSourceMapEntry = struct {
+    generated_offset: usize,
+    original_line: u32,
+    original_column: u32,
+};
+
+const ZlxSourceMap = struct {
+    generated_path: []u8,
+    original_file: []u8,
+    entries: std.ArrayList(ZlxSourceMapEntry),
+
+    fn deinit(self: *ZlxSourceMap, alloc: std.mem.Allocator) void {
+        alloc.free(self.generated_path);
+        alloc.free(self.original_file);
+        self.entries.deinit(alloc);
+    }
+};
+
+const DiagnosticLocation = struct {
+    file_path: []const u8,
+    line: usize,
+    column: usize,
+};
+
+fn nanoTimestamp() i96 {
+    return std.Io.Timestamp.now(process_io, .real).toNanoseconds();
+}
+
+fn getEnvVarOwned(alloc: std.mem.Allocator, name: [:0]const u8) !?[]u8 {
+    const value = std.c.getenv(name) orelse return null;
+    return try alloc.dupe(u8, std.mem.span(value));
+}
 
 const ModuleInfo = struct {
     name: []const u8,
     path: []const u8,
+    line_count: usize,
     ast: *ast.Node,
     dependencies: std.ArrayList([]const u8),
     linker_flags: std.ArrayList([]const u8),
 
-    pub fn init(alloc: std.mem.Allocator, name: []const u8, path: []const u8, ast_node: *ast.Node) ModuleInfo {
+    pub fn init(alloc: std.mem.Allocator, name: []const u8, path: []const u8, line_count: usize, ast_node: *ast.Node) ModuleInfo {
         return ModuleInfo{
             .name = utils.dupe(u8, alloc, name),
             .path = utils.dupe(u8, alloc, path),
+            .line_count = line_count,
             .ast = ast_node,
-            .dependencies = std.ArrayList([]const u8){},
-            .linker_flags = std.ArrayList([]const u8){},
+            .dependencies = .empty,
+            .linker_flags = .empty,
         };
     }
 
@@ -40,26 +87,400 @@ const ModuleInfo = struct {
     }
 };
 
+const ModuleRegistration = struct {
+    module_name: []const u8,
+    module_path: []const u8,
+    line_count: usize,
+    dependencies: std.ArrayList([]const u8),
+
+    pub fn deinit(self: *ModuleRegistration, alloc: std.mem.Allocator) void {
+        alloc.free(self.module_name);
+        alloc.free(self.module_path);
+        for (self.dependencies.items) |dep| alloc.free(dep);
+        self.dependencies.deinit(alloc);
+    }
+};
+
+const SymbolModuleBinding = struct {
+    symbol_name: []const u8,
+    module_name: []const u8,
+
+    pub fn deinit(self: *SymbolModuleBinding, alloc: std.mem.Allocator) void {
+        alloc.free(self.symbol_name);
+        alloc.free(self.module_name);
+    }
+};
+
 pub const CompilationStats = struct {
+    const LinkBackend = codegen.CodeGenerator.BackendTiming.LinkBackend;
+
     parse_time_ns: u64,
+    parse_load_time_ns: u64,
+    parse_std_time_ns: u64,
+    parse_resolve_time_ns: u64,
+    parse_rewrite_time_ns: u64,
+    parse_merge_time_ns: u64,
     codegen_time_ns: u64,
+    backend_time_ns: u64,
+    backend_prepare_time_ns: u64,
+    backend_split_time_ns: u64,
+    backend_wall_time_ns: u64,
+    backend_cpu_sum_time_ns: u64,
+    backend_units: usize,
+    backend_unit_max_time_ns: u64,
+    backend_unit_min_time_ns: u64,
     link_time_ns: u64,
     total_time_ns: u64,
     lines_of_code: usize,
     memory_peak_kb: usize,
+    llvm_link_version_major: u32,
+    llc_version_major: i16,
+    opt_version_major: i16,
+    clang_version_major: i16,
+    lld_version_major: i16,
+    link_backend: LinkBackend,
 };
+
+const ParseTiming = struct {
+    load_time_ns: u64 = 0,
+    std_time_ns: u64 = 0,
+    resolve_time_ns: u64 = 0,
+    rewrite_time_ns: u64 = 0,
+    merge_time_ns: u64 = 0,
+};
+
+const BackendObjectTask = struct {
+    cg: *codegen.CodeGenerator,
+    ir_file: []const u8,
+    obj_file: []const u8,
+    arch: []const u8,
+    optimize: bool,
+    max_threads: usize,
+    llc_time_ns: u64 = 0,
+    err: ?anyerror = null,
+};
+
+const BackendUnit = struct {
+    ir_file: []const u8,
+    obj_file: []const u8,
+    keep_ir: bool,
+};
+
+const RewriteTask = struct {
+    module: *ModuleInfo,
+    modules: []const ModuleInfo,
+    reachable_modules: *const std.StringHashMap(void),
+    alloc: std.mem.Allocator,
+    err: ?anyerror = null,
+};
+
+const ResolvePrecomputeTask = struct {
+    module: *const ModuleInfo,
+    module_names: []const []const u8,
+    module_name_indices: []const usize,
+    allocator: std.mem.Allocator,
+    matched_dep_indices: std.ArrayList(usize),
+    unmatched_dep_index: ?usize = null,
+    err: ?anyerror = null,
+
+    fn init(module: *const ModuleInfo, module_names: []const []const u8, module_name_indices: []const usize, alloc: std.mem.Allocator) ResolvePrecomputeTask {
+        return .{
+            .module = module,
+            .module_names = module_names,
+            .module_name_indices = module_name_indices,
+            .allocator = alloc,
+            .matched_dep_indices = .empty,
+        };
+    }
+
+    fn deinit(self: *ResolvePrecomputeTask) void {
+        self.matched_dep_indices.deinit(self.allocator);
+    }
+};
+
+const MergeScanTask = struct {
+    module: *const ModuleInfo,
+    function_count: usize = 0,
+    global_count: usize = 0,
+};
+
+
+fn runBackendObjectTask(task: *BackendObjectTask) void {
+    task.cg.compileIRToObjectFile(task.ir_file, task.obj_file, task.arch, task.optimize, task.max_threads, &task.llc_time_ns) catch |err| {
+        task.err = err;
+    };
+}
+
+fn compileBackendObjects(tasks: []BackendObjectTask, max_threads: usize, alloc: std.mem.Allocator) !u64 {
+    if (tasks.len == 0) return 0;
+
+    if (max_threads <= 1 or tasks.len == 1) {
+        for (tasks) |*task| runBackendObjectTask(task);
+    } else {
+        const worker_count = @min(max_threads, tasks.len);
+        var next_task_idx: usize = 0;
+        while (next_task_idx < tasks.len) {
+            const batch_count = @min(worker_count, tasks.len - next_task_idx);
+            var threads = try alloc.alloc(std.Thread, batch_count);
+            defer alloc.free(threads);
+
+            for (0..batch_count) |j| {
+                threads[j] = try std.Thread.spawn(.{}, runBackendObjectTask, .{&tasks[next_task_idx + j]});
+            }
+            for (threads) |thread| thread.join();
+            next_task_idx += batch_count;
+        }
+    }
+
+    var llc_total_ns: u64 = 0;
+    for (tasks) |task| {
+        if (task.err) |err| return err;
+        llc_total_ns += task.llc_time_ns;
+    }
+    return llc_total_ns;
+}
+
+fn cleanupBackendUnits(units: []const BackendUnit) void {
+    for (units) |unit| {
+        std.Io.Dir.cwd().deleteFile(process_io, unit.obj_file) catch {};
+        if (!unit.keep_ir) std.Io.Dir.cwd().deleteFile(process_io, unit.ir_file) catch {};
+    }
+}
+
+fn findClangTool(alloc: std.mem.Allocator) ?[]const u8 {
+    return llvm_tools.getLLVMToolPath(alloc, .clang) catch null;
+}
+
+fn compileLLViaClang(alloc: std.mem.Allocator, clang_tool: []const u8, ir_path: []const u8, obj_path: []const u8, optimize: bool) !void {
+    var args: std.ArrayList([]const u8) = .empty;
+    defer args.deinit(alloc);
+    try args.append(alloc, clang_tool);
+    try args.append(alloc, "-x");
+    try args.append(alloc, "ir");
+    try args.append(alloc, "-c");
+    if (optimize) try args.append(alloc, "-O3");
+    try args.append(alloc, "-fPIC");
+    try args.append(alloc, ir_path);
+    try args.append(alloc, "-o");
+    try args.append(alloc, obj_path);
+    var threaded: std.Io.Threaded = .init(alloc, .{});
+    defer threaded.deinit();
+    const r = std.process.run(alloc, threaded.io(), .{ .argv = args.items }) catch return error.CompilationFailed;
+    if (r.term != .exited or r.term.exited != 0) {
+        std.debug.print("clang -x ir failed: {s}\n", .{r.stderr});
+        return error.CompilationFailed;
+    }
+}
+
+fn compilePrebuiltLLVMIR(
+    alloc: std.mem.Allocator,
+    ctx: *const Context,
+    ir_paths: []const []const u8,
+) !u8 {
+    var code_generator = try codegen.CodeGenerator.init(alloc);
+    defer code_generator.deinit();
+
+    var obj_files: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (obj_files.items) |o| {
+            std.Io.Dir.cwd().deleteFile(process_io, o) catch {};
+            alloc.free(o);
+        }
+        obj_files.deinit(alloc);
+    }
+
+    const clang_tool_opt = findClangTool(alloc);
+    const nonce: u64 = @intCast(nanoTimestamp());
+    for (ir_paths, 0..) |ir, idx| {
+        const obj = try std.fmt.allocPrint(alloc, "{s}.prebuilt.{d}.{d}.o", .{ ctx.output, nonce, idx });
+        try obj_files.append(alloc, obj);
+        if (clang_tool_opt) |clang_tool| {
+            try compileLLViaClang(alloc, clang_tool, ir, obj, ctx.optimize);
+        } else {
+            var llc_ns: u64 = 0;
+            try code_generator.compileIRToObjectFile(ir, obj, ctx.arch, ctx.optimize, ctx.max_threads, &llc_ns);
+        }
+    }
+
+    var timing = codegen.CodeGenerator.BackendTiming{};
+    try code_generator.linkObjectFilesToExecutable(
+        ctx.output,
+        ctx.arch,
+        obj_files.items,
+        ctx.link_objects.items,
+        ctx.extra_args.items,
+        ctx.max_threads,
+        &timing,
+    );
+
+    if (ctx.verbose and !ctx.quiet) {
+        std.debug.print("Executable compiled to {s} (pre-built LLVM IR fast path)\n", .{ctx.output});
+    }
+    return 0;
+}
+
+fn backendSplitUnitCount(max_threads: usize) usize {
+    if (max_threads <= 1) return 1;
+    return max_threads;
+}
+
+fn runRewriteTask(task: *RewriteTask) void {
+    var use_specs: std.ArrayList(UseSpec) = .empty;
+    defer use_specs.deinit(task.alloc);
+    collectUseSpecs(task.module, &use_specs, task.alloc) catch |err| {
+        task.err = err;
+        return;
+    };
+
+    var rewrite_ctx = RewriteContext.init(task.module, use_specs.items, task.modules, task.reachable_modules, task.alloc);
+    defer rewrite_ctx.deinit();
+    rewriteModuleImportsInNode(&rewrite_ctx, task.module.ast);
+}
+
+fn rewriteReachableModulesParallel(modules: []ModuleInfo, reachable_modules: *const std.StringHashMap(void), max_threads: usize, alloc: std.mem.Allocator) !void {
+    var rewrite_count: usize = 0;
+    for (modules) |module| {
+        if (reachable_modules.contains(module.name)) rewrite_count += 1;
+    }
+    if (rewrite_count == 0) return;
+
+    var tasks = try alloc.alloc(RewriteTask, rewrite_count);
+    defer alloc.free(tasks);
+
+    var idx: usize = 0;
+    for (modules) |*module| {
+        if (!reachable_modules.contains(module.name)) continue;
+        tasks[idx] = .{
+            .module = module,
+            .modules = modules,
+            .reachable_modules = reachable_modules,
+            .alloc = alloc,
+        };
+        idx += 1;
+    }
+
+    if (max_threads <= 1 or tasks.len == 1) {
+        for (tasks) |*task| runRewriteTask(task);
+    } else {
+        const worker_count = @min(max_threads, tasks.len);
+        var next_task_idx: usize = 0;
+        while (next_task_idx < tasks.len) {
+            const batch_count = @min(worker_count, tasks.len - next_task_idx);
+            var threads = try alloc.alloc(std.Thread, batch_count);
+            defer alloc.free(threads);
+
+            for (0..batch_count) |j| {
+                threads[j] = try std.Thread.spawn(.{}, runRewriteTask, .{&tasks[next_task_idx + j]});
+            }
+            for (threads) |thread| thread.join();
+            next_task_idx += batch_count;
+        }
+    }
+
+    for (tasks) |task| {
+        if (task.err) |err| return err;
+    }
+}
+
+fn runResolvePrecomputeTask(task: *ResolvePrecomputeTask) void {
+    for (task.module.dependencies.items, 0..) |dep, dep_idx| {
+        var matched_any = false;
+        for (task.module_names, 0..) |candidate, candidate_idx| {
+            if (!moduleMatchesImport(dep, candidate)) continue;
+            matched_any = true;
+            task.matched_dep_indices.append(task.allocator, task.module_name_indices[candidate_idx]) catch |err| {
+                task.err = err;
+                return;
+            };
+        }
+        if (!matched_any) {
+            task.unmatched_dep_index = dep_idx;
+            return;
+        }
+    }
+}
+
+fn runMergeScanTask(task: *MergeScanTask) void {
+    switch (task.module.ast.data) {
+        .program => |prog| {
+            for (prog.functions.items) |func| {
+                if (func.data != .use_stmt) task.function_count += 1;
+            }
+            task.global_count = prog.globals.items.len;
+        },
+        else => {
+            task.function_count = 1;
+            task.global_count = 0;
+        },
+    }
+}
+
+fn runTasksParallel(comptime T: type, tasks: []T, max_threads: usize, alloc: std.mem.Allocator, comptime runner: fn (*T) void) !void {
+    if (tasks.len == 0) return;
+    if (max_threads <= 1 or tasks.len == 1) {
+        for (tasks) |*task| runner(task);
+        return;
+    }
+
+    const worker_count = @min(max_threads, tasks.len);
+    var next_task_idx: usize = 0;
+    while (next_task_idx < tasks.len) {
+        const batch_count = @min(worker_count, tasks.len - next_task_idx);
+        var threads = try alloc.alloc(std.Thread, batch_count);
+        defer alloc.free(threads);
+
+        for (0..batch_count) |j| {
+            threads[j] = try std.Thread.spawn(.{}, runner, .{&tasks[next_task_idx + j]});
+        }
+        for (threads) |thread| thread.join();
+        next_task_idx += batch_count;
+    }
+}
+
 
 fn printStats(stats: CompilationStats) void {
     const parse_ms = @as(f64, @floatFromInt(stats.parse_time_ns)) / 1_000_000.0;
     const codegen_ms = @as(f64, @floatFromInt(stats.codegen_time_ns)) / 1_000_000.0;
+    const backend_ms = @as(f64, @floatFromInt(stats.backend_time_ns)) / 1_000_000.0;
+    const backend_prepare_ms = @as(f64, @floatFromInt(stats.backend_prepare_time_ns)) / 1_000_000.0;
+    const backend_split_ms = @as(f64, @floatFromInt(stats.backend_split_time_ns)) / 1_000_000.0;
+    const backend_wall_ms = @as(f64, @floatFromInt(stats.backend_wall_time_ns)) / 1_000_000.0;
+    const backend_cpu_sum_ms = @as(f64, @floatFromInt(stats.backend_cpu_sum_time_ns)) / 1_000_000.0;
     const link_ms = @as(f64, @floatFromInt(stats.link_time_ns)) / 1_000_000.0;
     const total_ms = @as(f64, @floatFromInt(stats.total_time_ns)) / 1_000_000.0;
+
+    const link_backend_text = switch (stats.link_backend) {
+        .unknown => "unknown",
+        .zig_cc => "zig cc",
+        .lld => "ld.lld (pure LLVM toolkit)",
+        .clang => "clang driver",
+    };
 
     std.debug.print("Compilation Statistics:\n", .{});
     std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
     std.debug.print("  Parse time:      {d:.2} ms\n", .{parse_ms});
+    std.debug.print("  Parse breakdown: load={d:.2} std={d:.2} resolve={d:.2} rewrite={d:.2} merge={d:.2} ms\n", .{
+        @as(f64, @floatFromInt(stats.parse_load_time_ns)) / 1_000_000.0,
+        @as(f64, @floatFromInt(stats.parse_std_time_ns)) / 1_000_000.0,
+        @as(f64, @floatFromInt(stats.parse_resolve_time_ns)) / 1_000_000.0,
+        @as(f64, @floatFromInt(stats.parse_rewrite_time_ns)) / 1_000_000.0,
+        @as(f64, @floatFromInt(stats.parse_merge_time_ns)) / 1_000_000.0,
+    });
     std.debug.print("  Codegen time:    {d:.2} ms\n", .{codegen_ms});
+    std.debug.print("  Backend time:    {d:.2} ms\n", .{backend_ms});
+    std.debug.print("  Backend prepare: {d:.2} ms\n", .{backend_prepare_ms});
+    std.debug.print("  Backend split:   {d:.2} ms\n", .{backend_split_ms});
+    std.debug.print("  Backend wall:    {d:.2} ms\n", .{backend_wall_ms});
+    std.debug.print("  Backend cpu-sum: {d:.2} ms\n", .{backend_cpu_sum_ms});
+    std.debug.print("  Backend units:   {d} (unit min/max: {d:.2}/{d:.2} ms)\n", .{
+        stats.backend_units,
+        @as(f64, @floatFromInt(stats.backend_unit_min_time_ns)) / 1_000_000.0,
+        @as(f64, @floatFromInt(stats.backend_unit_max_time_ns)) / 1_000_000.0,
+    });
     std.debug.print("  Link time:       {d:.2} ms\n", .{link_ms});
+    std.debug.print("  Link backend:    {s}\n", .{link_backend_text});
+    std.debug.print("  LLVM linked:     {d}\n", .{stats.llvm_link_version_major});
+    std.debug.print("  LLVM versions:   llc={d} opt={d} lld={d} clang={d}\n", .{ stats.llc_version_major, stats.opt_version_major, stats.lld_version_major, stats.clang_version_major });
     std.debug.print("  Total time:      {d:.2} ms\n", .{total_ms});
     std.debug.print("  Lines of code:   {d}\n", .{stats.lines_of_code});
     std.debug.print("  Memory peak:     {d} KB\n", .{stats.memory_peak_kb});
@@ -73,37 +494,47 @@ pub const Context = struct {
     program_args: std.ArrayList([]const u8),
     output: []const u8,
     arch: []const u8,
+    max_threads: usize,
     keepll: bool,
     show_ast: bool,
     optimize: bool,
+    verify_ir: bool,
     verbose: bool,
     quiet: bool,
     stats: bool,
     run_mode: bool,
-    brainfuck_mode: bool,
-    bf_cell_size: i32,
     define_overrides: std.ArrayList(preprocessor.DefineOverride),
     seen_define_names: std.ArrayList([]const u8),
+    module_registrations: std.ArrayList(ModuleRegistration),
+    function_module_bindings: std.ArrayList(SymbolModuleBinding),
+    global_module_bindings: std.ArrayList(SymbolModuleBinding),
+    plugin_flags: std.ArrayList([]const u8),
+    no_extensions: bool = false,
+    isolated: bool = false,
 
     pub fn init() Context {
         return Context{
-            .input_files = std.ArrayList([]const u8){},
-            .link_objects = std.ArrayList([]const u8){},
-            .extra_args = std.ArrayList([]const u8){},
-            .program_args = std.ArrayList([]const u8){},
+            .input_files = .empty,
+            .link_objects = .empty,
+            .extra_args = .empty,
+            .program_args = .empty,
             .output = consts.DEFAULT_OUTPUT_NAME,
             .arch = "",
+            .max_threads = defaultMaxThreads(),
             .keepll = false,
             .show_ast = false,
             .optimize = false,
+            .verify_ir = false,
             .verbose = false,
             .quiet = false,
             .stats = false,
             .run_mode = false,
-            .brainfuck_mode = false,
-            .bf_cell_size = 8,
-            .define_overrides = std.ArrayList(preprocessor.DefineOverride){},
-            .seen_define_names = std.ArrayList([]const u8){},
+            .define_overrides = .empty,
+            .seen_define_names = .empty,
+            .module_registrations = .empty,
+            .function_module_bindings = .empty,
+            .global_module_bindings = .empty,
+            .plugin_flags = .empty,
         };
     }
 
@@ -121,6 +552,14 @@ pub const Context = struct {
             alloc.free(name);
         }
         self.seen_define_names.deinit(alloc);
+        for (self.module_registrations.items) |*entry| entry.deinit(alloc);
+        self.module_registrations.deinit(alloc);
+        for (self.function_module_bindings.items) |*entry| entry.deinit(alloc);
+        self.function_module_bindings.deinit(alloc);
+        for (self.global_module_bindings.items) |*entry| entry.deinit(alloc);
+        self.global_module_bindings.deinit(alloc);
+        for (self.plugin_flags.items) |flag| alloc.free(flag);
+        self.plugin_flags.deinit(alloc);
     }
 
     pub fn print(self: *const Context) void {
@@ -134,6 +573,7 @@ pub const Context = struct {
         std.debug.print("\n", .{});
         std.debug.print("Output path: {s}\n", .{self.output});
         std.debug.print("Architecture: {s}\n", .{self.arch});
+        std.debug.print("Max threads: {d}\n", .{self.max_threads});
         std.debug.print("Keep ll: {s}\n", .{if (self.keepll) "yes" else "no"});
         std.debug.print("Optimize: {s}\n", .{if (self.optimize) "yes" else "no"});
         std.debug.print("Link objects: ", .{});
@@ -145,6 +585,10 @@ pub const Context = struct {
         std.debug.print("==================================\n", .{});
     }
 };
+
+fn defaultMaxThreads() usize {
+    return std.Thread.getCpuCount() catch 1;
+}
 
 fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8)) void {
     switch (node.data) {
@@ -226,10 +670,10 @@ fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8
 }
 
 fn getStdlibPath(alloc: std.mem.Allocator) ![]const u8 {
-    if (std.process.getEnvVarOwned(alloc, "ZSTDPATH")) |zstdpath| {
+    if ((try getEnvVarOwned(alloc, "ZSTDPATH"))) |zstdpath| {
         return zstdpath;
-    } else |_| {
-        const exe_path = try std.fs.selfExePathAlloc(alloc);
+    } else {
+        const exe_path = try std.process.executablePathAlloc(process_io, alloc);
         defer alloc.free(exe_path);
         const exe_dir = std.fs.path.dirname(exe_path) orelse ".";
         return std.fs.path.join(alloc, &[_][]const u8{ exe_dir, "stdlib" });
@@ -241,10 +685,10 @@ fn resolveStdModule(module_name: []const u8, alloc: std.mem.Allocator, has_zstdp
         return null;
     }
     const module_part = module_name[4..];
-    has_zstdpath.* = if (std.process.getEnvVarOwned(alloc, "ZSTDPATH")) |path| blk: {
+    has_zstdpath.* = if ((getEnvVarOwned(alloc, "ZSTDPATH") catch null)) |path| blk: {
         alloc.free(path);
         break :blk true;
-    } else |_| false;
+    } else false;
 
     const stdlib_path = getStdlibPath(alloc) catch return null;
     defer alloc.free(stdlib_path);
@@ -254,11 +698,10 @@ fn resolveStdModule(module_name: []const u8, alloc: std.mem.Allocator, has_zstdp
 
     const full_path = std.fs.path.join(alloc, &[_][]const u8{ stdlib_path, module_file }) catch return null;
 
-    const file = std.fs.cwd().openFile(full_path, .{}) catch {
+    std.Io.Dir.cwd().access(process_io, full_path, .{}) catch {
         alloc.free(full_path);
         return null;
     };
-    file.close();
 
     return full_path;
 }
@@ -300,9 +743,16 @@ fn resolveModulePath(base_path: []const u8, module_name: []const u8, alloc: std.
     defer alloc.free(module_file);
     const full_path = try std.fs.path.join(alloc, &[_][]const u8{ base_dir, module_file });
     defer alloc.free(full_path);
-    const file = std.fs.cwd().openFile(full_path, .{}) catch return null;
-    file.close();
-    return utils.dupe(u8, alloc, full_path);
+    if (std.Io.Dir.cwd().access(process_io, full_path, .{})) {
+        return utils.dupe(u8, alloc, full_path);
+    } else |_| {}
+
+    if (plugin_module_paths) |*map| {
+        if (map.get(module_name)) |abs_path| {
+            return utils.dupe(u8, alloc, abs_path);
+        }
+    }
+    return null;
 }
 
 fn tryFindMoreErrors(alloc: std.mem.Allocator, file_path: []const u8, input: []const u8) void {
@@ -372,20 +822,123 @@ fn parseErrorHint(message: []const u8) ?[]const u8 {
     return null;
 }
 
-fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_alloc: std.mem.Allocator, ctx: *Context) !ModuleInfo {
+fn printPluginDiagnostics(alloc: std.mem.Allocator, host: *const zlx_host.Host) void {
+    for (host.diagnostics.items) |diag| {
+        const severity: diagnostics.Severity = switch (diag.level) {
+            .err => .Error,
+            .warning => .Warning,
+            .note => .Note,
+        };
+        if (diag.file) |file| {
+            diagnostics.printDiagnostic(alloc, .{
+                .file_path = file,
+                .line = if (diag.line == 0) 1 else diag.line,
+                .column = if (diag.column == 0) 1 else diag.column,
+                .message = diag.message,
+                .hint = diag.hint,
+                .severity = severity,
+            });
+        } else {
+            const label = switch (severity) {
+                .Error => "error",
+                .Warning => "warning",
+                .Note => "note",
+            };
+            std.debug.print("zlx plugin {s}: {s}\n", .{ label, diag.message });
+            if (diag.hint) |hint| std.debug.print("  hint: {s}\n", .{hint});
+        }
+    }
+}
+
+fn clearZlxSourceMaps(alloc: std.mem.Allocator) void {
+    for (zlx_source_maps.items) |*map| map.deinit(alloc);
+    zlx_source_maps.clearRetainingCapacity();
+}
+
+fn sourceOffsetAtLineColumn(source: []const u8, line: usize, column: usize) usize {
+    var current_line: usize = 1;
+    var current_column: usize = 1;
+    for (source, 0..) |ch, idx| {
+        if (current_line == line and current_column == column) return idx;
+        if (ch == '\n') {
+            current_line += 1;
+            current_column = 1;
+        } else {
+            current_column += 1;
+        }
+    }
+    return source.len;
+}
+
+fn remapZlxDiagnosticLocation(file_path: []const u8, line: usize, column: usize, parser_text: []const u8) DiagnosticLocation {
+    const generated_offset = sourceOffsetAtLineColumn(parser_text, line, column);
+    for (zlx_source_maps.items) |map| {
+        if (!std.mem.eql(u8, map.generated_path, file_path)) continue;
+        var best: ?ZlxSourceMapEntry = null;
+        for (map.entries.items) |entry| {
+            if (entry.generated_offset > generated_offset) continue;
+            if (best == null or entry.generated_offset >= best.?.generated_offset) best = entry;
+        }
+        if (best) |entry| {
+            return .{
+                .file_path = map.original_file,
+                .line = entry.original_line,
+                .column = entry.original_column,
+            };
+        }
+    }
+    return .{ .file_path = file_path, .line = line, .column = column };
+}
+
+fn countLinesInText(text: []const u8) usize {
+    if (text.len == 0) return 0;
+    var count: usize = 1;
+    for (text) |ch| {
+        if (ch == '\n') count += 1;
+    }
+    return count;
+}
+
+const PreparsedModule = struct {
+    module_name: []const u8,
+    parser_text: []const u8,
+    line_count: usize,
+    flags: std.ArrayList([]const u8),
+    defined_names: std.ArrayList([]const u8),
+
+    fn deinit(self: *PreparsedModule, alloc: std.mem.Allocator) void {
+        alloc.free(self.module_name);
+        alloc.free(self.parser_text);
+        for (self.flags.items) |flag| alloc.free(flag);
+        self.flags.deinit(alloc);
+        for (self.defined_names.items) |name| alloc.free(name);
+        self.defined_names.deinit(alloc);
+    }
+};
+
+const InitialLoadTask = struct {
+    file_path: []const u8,
+    ctx: *Context,
+    alloc: std.mem.Allocator,
+    result: ?PreparsedModule = null,
+    err: ?anyerror = null,
+};
+
+fn preprocessModuleFile(file_path: []const u8, alloc: std.mem.Allocator, ctx: *Context) !PreparsedModule {
     const input = read_file(file_path) catch |err| {
         std.debug.print("Error reading file {s}: {}\n", .{ file_path, err });
         return err;
     };
+    defer allocator.free(input);
 
-    var preprocessed = preprocessor.preprocessWithFlagsAndDefines(arena, input, ctx.define_overrides.items) catch |err| {
+    var preprocessed = preprocessor.preprocessWithFlagsAndDefines(alloc, input, ctx.define_overrides.items) catch |err| {
         const msg = switch (err) {
             errors.PreprocessError.InvalidDirective => "Invalid preprocessor directive",
             errors.PreprocessError.InvalidDefine => "Invalid #define",
             errors.PreprocessError.ExpansionLimit => "Macro expansion limit reached",
             errors.PreprocessError.OutOfMemory => "Out of memory during preprocessing",
         };
-        diagnostics.printDiagnostic(backing_alloc, .{
+        diagnostics.printDiagnostic(alloc, .{
             .file_path = file_path,
             .line = 1,
             .column = 1,
@@ -394,19 +947,13 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
         });
         return err;
     };
-    defer preprocessed.deinitFlags(arena);
+    defer preprocessed.deinitFlags(alloc);
 
-    for (preprocessed.defined_names.items) |name| {
-        if (!containsString(ctx.seen_define_names.items, name)) {
-            try ctx.seen_define_names.append(backing_alloc, utils.dupe(u8, backing_alloc, name));
-        }
-    }
-
-    const parsed_header = parseModuleHeader(arena, preprocessed.text) catch |err| {
+    const parsed_header = parseModuleHeader(alloc, preprocessed.text) catch |err| {
         if (err == error.InvalidModuleHeader) {
             const header_start = findModuleHeaderStart(preprocessed.text);
             const header_pos = sourcePosAtOffset(preprocessed.text, header_start);
-            diagnostics.printDiagnostic(backing_alloc, .{
+            diagnostics.printDiagnostic(alloc, .{
                 .file_path = file_path,
                 .line = header_pos.line,
                 .column = header_pos.column,
@@ -421,16 +968,52 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
     const module_name = if (parsed_header.module_name) |name|
         name
     else
-        defaultModuleNameFromPath(file_path);
+        try alloc.dupe(u8, defaultModuleNameFromPath(file_path));
+    const line_count = countLinesInText(input);
 
-    const ast_root = parser.parse(arena, parsed_header.text_for_parser) catch |err| {
+    var flags: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (flags.items) |flag| alloc.free(flag);
+        flags.deinit(alloc);
+    }
+    for (preprocessed.flags.items) |flag| {
+        try flags.append(alloc, utils.dupe(u8, alloc, flag));
+    }
+
+    var defined_names: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (defined_names.items) |name| alloc.free(name);
+        defined_names.deinit(alloc);
+    }
+    for (preprocessed.defined_names.items) |name| {
+        try defined_names.append(alloc, utils.dupe(u8, alloc, name));
+    }
+
+    return .{
+        .module_name = module_name,
+        .parser_text = parsed_header.text_for_parser,
+        .line_count = line_count,
+        .flags = flags,
+        .defined_names = defined_names,
+    };
+}
+
+fn parseModuleFromPrepared(file_path: []const u8, arena: std.mem.Allocator, backing_alloc: std.mem.Allocator, ctx: *Context, prep: *PreparsedModule) !ModuleInfo {
+    for (prep.defined_names.items) |name| {
+        if (!containsString(ctx.seen_define_names.items, name)) {
+            try ctx.seen_define_names.append(backing_alloc, utils.dupe(u8, backing_alloc, name));
+        }
+    }
+
+    const ast_root = parser.parse(arena, prep.parser_text) catch |err| {
         const parse_errors = parser.getParseErrors();
         if (parse_errors.len > 0) {
             for (parse_errors) |parse_err| {
+                const remapped = remapZlxDiagnosticLocation(file_path, parse_err.line, if (parse_err.column == 0) 1 else parse_err.column, prep.parser_text);
                 diagnostics.printDiagnostic(backing_alloc, .{
-                    .file_path = file_path,
-                    .line = parse_err.line,
-                    .column = if (parse_err.column == 0) 1 else parse_err.column,
+                    .file_path = remapped.file_path,
+                    .line = remapped.line,
+                    .column = remapped.column,
                     .message = parse_err.message,
                     .severity = .Error,
                     .hint = parseErrorHint(parse_err.message),
@@ -439,10 +1022,11 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
         } else {
             const loc = parser.lastParseErrorLocation();
             if (loc) |l| {
+                const remapped = remapZlxDiagnosticLocation(file_path, l.line, l.column, prep.parser_text);
                 diagnostics.printDiagnostic(backing_alloc, .{
-                    .file_path = file_path,
-                    .line = l.line,
-                    .column = l.column,
+                    .file_path = remapped.file_path,
+                    .line = remapped.line,
+                    .column = remapped.column,
                     .message = "Parse error",
                     .severity = .Error,
                 });
@@ -451,18 +1035,31 @@ fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_allo
             }
         }
 
-        tryFindMoreErrors(backing_alloc, file_path, input);
+        tryFindMoreErrors(backing_alloc, file_path, prep.parser_text);
         return err;
     };
     if (ast_root) |root| {
-        var module = ModuleInfo.init(backing_alloc, module_name, file_path, root);
+        var module = ModuleInfo.init(backing_alloc, prep.module_name, file_path, prep.line_count, root);
         collectUseStatements(root, &module.dependencies);
-        for (preprocessed.flags.items) |flag| {
+        for (prep.flags.items) |flag| {
             try module.linker_flags.append(backing_alloc, utils.dupe(u8, backing_alloc, flag));
         }
         return module;
     }
     return error.ParseFailed;
+}
+
+fn parseModuleFile(file_path: []const u8, arena: std.mem.Allocator, backing_alloc: std.mem.Allocator, ctx: *Context) !ModuleInfo {
+    var prep = try preprocessModuleFile(file_path, backing_alloc, ctx);
+    defer prep.deinit(backing_alloc);
+    return parseModuleFromPrepared(file_path, arena, backing_alloc, ctx, &prep);
+}
+
+fn runInitialLoadTask(task: *InitialLoadTask) void {
+    task.result = preprocessModuleFile(task.file_path, task.alloc, task.ctx) catch |err| {
+        task.err = err;
+        return;
+    };
 }
 
 fn containsString(list: []const []const u8, value: []const u8) bool {
@@ -478,6 +1075,64 @@ fn emitUnknownDefineOverrideWarnings(ctx: *const Context) void {
             std.debug.print("Warning: -D{s}=... was provided but #define {s} was not found in parsed .zl files\n", .{ entry.name, entry.name });
         }
     }
+}
+
+fn parseProcStatusKbValue(content: []const u8, key: []const u8) ?usize {
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, key)) continue;
+        const rest = std.mem.trimStart(u8, line[key.len..], " \t:");
+        var i: usize = 0;
+        while (i < rest.len and (rest[i] < '0' or rest[i] > '9')) : (i += 1) {}
+        var j = i;
+        while (j < rest.len and rest[j] >= '0' and rest[j] <= '9') : (j += 1) {}
+        if (j <= i) return null;
+        return std.fmt.parseInt(usize, rest[i..j], 10) catch null;
+    }
+    return null;
+}
+
+fn readMemoryPeakKb() usize {
+    if (builtin.os.tag != .linux) return 0;
+    const file = std.c.fopen("/proc/self/status", "rb") orelse return 0;
+    defer _ = std.c.fclose(file);
+
+    var buffer: [16384]u8 = undefined;
+    const bytes_read = std.c.fread(&buffer, 1, buffer.len, file);
+    const content = buffer[0..bytes_read];
+
+    return parseProcStatusKbValue(content, "VmHWM") orelse
+        parseProcStatusKbValue(content, "VmPeak") orelse 0;
+}
+
+fn printToolVersion(alloc: std.mem.Allocator, label: []const u8, tool: llvm_tools.LLVMTool) void {
+    const maybe_path = llvm_tools.getLLVMToolPath(alloc, tool) catch null;
+    if (maybe_path) |path| {
+        const major = llvm_tools.detectToolVersionMajor(alloc, path) catch null;
+        if (major) |version| {
+            std.debug.print("  {s}: {s} ({d})\n", .{ label, path, version });
+        } else {
+            std.debug.print("  {s}: {s}\n", .{ label, path });
+        }
+    } else {
+        std.debug.print("  {s}: not found\n", .{label});
+    }
+}
+
+fn printVersionInfo() void {
+    std.debug.print("{s} {s}\n", .{ consts.NAME, consts.VERSION });
+    std.debug.print("  Zig: {s}\n", .{@import("builtin").zig_version_string});
+    if (build_options.llvm_version_major != 0) {
+        std.debug.print("  LLVM linked: {d}\n", .{build_options.llvm_version_major});
+    } else {
+        std.debug.print("  LLVM linked: unknown\n", .{});
+    }
+    std.debug.print("LLVM tools:\n", .{});
+    printToolVersion(allocator, "llc", .llc);
+    printToolVersion(allocator, "opt", .opt);
+    printToolVersion(allocator, "ld.lld", .ld_lld);
+    printToolVersion(allocator, "clang", .clang);
+    printToolVersion(allocator, "lli", .lli);
 }
 
 fn resolvePathRelativeToModule(alloc: std.mem.Allocator, module_path: []const u8, raw_path: []const u8) ![]const u8 {
@@ -839,22 +1494,22 @@ fn isBuiltinTypeToken(token: []const u8) bool {
         std.mem.eql(u8, token, "_");
 }
 
-fn resolveNamespacedTypeToken(type_path: []const u8, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), owner_alloc: std.mem.Allocator) ?[]const u8 {
+fn resolveNamespacedTypeToken(type_path: []const u8, rewrite_ctx: *RewriteContext, owner_alloc: std.mem.Allocator) ?[]const u8 {
     const dot = std.mem.lastIndexOfScalar(u8, type_path, '.') orelse return null;
     if (dot == 0 or dot + 1 >= type_path.len) return null;
 
     const namespace_path = type_path[0..dot];
     const symbol_name = type_path[dot + 1 ..];
 
-    const resolved = resolveNamespacePath(namespace_path, use_specs, owner_alloc) orelse return null;
+    const resolved = resolveNamespacePath(namespace_path, rewrite_ctx.use_specs, owner_alloc) orelse return null;
     defer owner_alloc.free(resolved.import_path);
 
-    if (!hasTypeInReachableImport(modules, reachable_modules, resolved.import_path, symbol_name)) return null;
+    if (!cachedHasTypeInReachableImport(rewrite_ctx, resolved.import_path, symbol_name)) return null;
     return utils.dupe(u8, owner_alloc, symbol_name);
 }
 
-fn rewriteTypeNameForImports(type_name: []const u8, current_module: *const ModuleInfo, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), owner_alloc: std.mem.Allocator) []const u8 {
-    var out = std.ArrayList(u8){};
+fn rewriteTypeNameForImports(type_name: []const u8, rewrite_ctx: *RewriteContext, owner_alloc: std.mem.Allocator) []const u8 {
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(owner_alloc);
 
     var changed = false;
@@ -875,13 +1530,13 @@ fn rewriteTypeNameForImports(type_name: []const u8, current_module: *const Modul
             }
 
             if (std.mem.indexOfScalar(u8, token, '.')) |_| {
-                if (resolveNamespacedTypeToken(token, use_specs, modules, reachable_modules, owner_alloc)) |resolved_name| {
+                if (resolveNamespacedTypeToken(token, rewrite_ctx, owner_alloc)) |resolved_name| {
                     replacement = resolved_name;
                     owned_replacement = resolved_name;
                     changed = true;
                 }
             } else if (!isAllDigits(token) and !isBuiltinTypeToken(token)) {
-                if (isTypeHiddenByImportOverrides(current_module, use_specs, modules, reachable_modules, token)) {
+                if (cachedIsTypeHidden(rewrite_ctx, token)) {
                     if (std.fmt.allocPrint(owner_alloc, "__zlang_hidden_import__.{s}", .{token}) catch null) |hidden_name| {
                         replacement = hidden_name;
                         owned_replacement = hidden_name;
@@ -904,38 +1559,38 @@ fn rewriteTypeNameForImports(type_name: []const u8, current_module: *const Modul
     return out.toOwnedSlice(owner_alloc) catch type_name;
 }
 
-fn rewriteNodeTypeFields(current_module: *const ModuleInfo, node: *ast.Node, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void)) void {
+fn rewriteNodeTypeFields(rewrite_ctx: *RewriteContext, node: *ast.Node) void {
     switch (node.data) {
         .function => |*func| {
-            func.return_type = rewriteTypeNameForImports(func.return_type, current_module, use_specs, modules, reachable_modules, node.allocator);
+            func.return_type = rewriteTypeNameForImports(func.return_type, rewrite_ctx, node.allocator);
             for (func.parameters.items) |*param| {
-                param.type_name = rewriteTypeNameForImports(param.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+                param.type_name = rewriteTypeNameForImports(param.type_name, rewrite_ctx, node.allocator);
             }
         },
         .c_function_decl => |*decl| {
-            decl.return_type = rewriteTypeNameForImports(decl.return_type, current_module, use_specs, modules, reachable_modules, node.allocator);
+            decl.return_type = rewriteTypeNameForImports(decl.return_type, rewrite_ctx, node.allocator);
             for (decl.parameters.items) |*param| {
-                param.type_name = rewriteTypeNameForImports(param.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+                param.type_name = rewriteTypeNameForImports(param.type_name, rewrite_ctx, node.allocator);
             }
         },
         .var_decl => |*decl| {
-            decl.type_name = rewriteTypeNameForImports(decl.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+            decl.type_name = rewriteTypeNameForImports(decl.type_name, rewrite_ctx, node.allocator);
         },
         .struct_decl => |*decl| {
             for (decl.fields.items) |*field| {
-                field.type_name = rewriteTypeNameForImports(field.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+                field.type_name = rewriteTypeNameForImports(field.type_name, rewrite_ctx, node.allocator);
             }
         },
         .cast => |*cast_node| {
             if (cast_node.type_name) |type_name| {
-                cast_node.type_name = rewriteTypeNameForImports(type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+                cast_node.type_name = rewriteTypeNameForImports(type_name, rewrite_ctx, node.allocator);
             }
         },
         .expression_block => |*block| {
-            block.type_name = rewriteTypeNameForImports(block.type_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+            block.type_name = rewriteTypeNameForImports(block.type_name, rewrite_ctx, node.allocator);
         },
         .struct_initializer => |*struct_init| {
-            struct_init.struct_name = rewriteTypeNameForImports(struct_init.struct_name, current_module, use_specs, modules, reachable_modules, node.allocator);
+            struct_init.struct_name = rewriteTypeNameForImports(struct_init.struct_name, rewrite_ctx, node.allocator);
         },
         else => {},
     }
@@ -967,7 +1622,7 @@ fn appendRefPath(buf: *std.ArrayList(u8), node: *const ast.Node, alloc: std.mem.
 }
 
 fn extractRefPath(node: *const ast.Node, alloc: std.mem.Allocator) ?[]const u8 {
-    var buf = std.ArrayList(u8){};
+    var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(alloc);
     const ok = appendRefPath(&buf, node, alloc) catch return null;
     if (!ok) {
@@ -980,6 +1635,97 @@ fn extractRefPath(node: *const ast.Node, alloc: std.mem.Allocator) ?[]const u8 {
 const NamespaceResolution = struct {
     import_path: []const u8,
 };
+
+const RewriteContext = struct {
+    current_module: *const ModuleInfo,
+    use_specs: []const UseSpec,
+    modules: []const ModuleInfo,
+    reachable_modules: *const std.StringHashMap(void),
+    alloc: std.mem.Allocator,
+    hidden_functions: std.StringHashMap(bool),
+    hidden_types: std.StringHashMap(bool),
+    import_functions: std.StringHashMap(bool),
+    import_types: std.StringHashMap(bool),
+
+    fn init(current_module: *const ModuleInfo, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), alloc: std.mem.Allocator) RewriteContext {
+        return .{
+            .current_module = current_module,
+            .use_specs = use_specs,
+            .modules = modules,
+            .reachable_modules = reachable_modules,
+            .alloc = alloc,
+            .hidden_functions = std.StringHashMap(bool).init(alloc),
+            .hidden_types = std.StringHashMap(bool).init(alloc),
+            .import_functions = std.StringHashMap(bool).init(alloc),
+            .import_types = std.StringHashMap(bool).init(alloc),
+        };
+    }
+
+    fn deinit(self: *RewriteContext) void {
+        var function_it = self.import_functions.iterator();
+        while (function_it.next()) |entry| {
+            self.alloc.free(entry.key_ptr.*);
+        }
+        var type_it = self.import_types.iterator();
+        while (type_it.next()) |entry| {
+            self.alloc.free(entry.key_ptr.*);
+        }
+        self.hidden_functions.deinit();
+        self.hidden_types.deinit();
+        self.import_functions.deinit();
+        self.import_types.deinit();
+    }
+};
+
+fn cacheKey2(alloc: std.mem.Allocator, a: []const u8, b: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(alloc, "{s}\x00{s}", .{ a, b });
+}
+
+fn cachedHasFunctionInReachableImport(ctx: *RewriteContext, import_path: []const u8, function_name: []const u8) bool {
+    const key = cacheKey2(ctx.alloc, import_path, function_name) catch {
+        return hasFunctionInReachableImport(ctx.modules, ctx.reachable_modules, import_path, function_name);
+    };
+    if (ctx.import_functions.get(key)) |cached| {
+        ctx.alloc.free(key);
+        return cached;
+    }
+    const result = hasFunctionInReachableImport(ctx.modules, ctx.reachable_modules, import_path, function_name);
+    ctx.import_functions.put(key, result) catch {
+        ctx.alloc.free(key);
+    };
+    return result;
+}
+
+fn cachedHasTypeInReachableImport(ctx: *RewriteContext, import_path: []const u8, type_name: []const u8) bool {
+    const key = cacheKey2(ctx.alloc, import_path, type_name) catch {
+        return hasTypeInReachableImport(ctx.modules, ctx.reachable_modules, import_path, type_name);
+    };
+    if (ctx.import_types.get(key)) |cached| {
+        ctx.alloc.free(key);
+        return cached;
+    }
+    const result = hasTypeInReachableImport(ctx.modules, ctx.reachable_modules, import_path, type_name);
+    ctx.import_types.put(key, result) catch {
+        ctx.alloc.free(key);
+    };
+    return result;
+}
+
+fn cachedIsFunctionHidden(ctx: *RewriteContext, function_name: []const u8) bool {
+    if (moduleHasFunctionByName(ctx.current_module, function_name)) return false;
+    if (ctx.hidden_functions.get(function_name)) |cached| return cached;
+    const result = isFunctionHiddenByImportOverrides(ctx.current_module, ctx.use_specs, ctx.modules, ctx.reachable_modules, function_name);
+    ctx.hidden_functions.put(function_name, result) catch {};
+    return result;
+}
+
+fn cachedIsTypeHidden(ctx: *RewriteContext, type_name: []const u8) bool {
+    if (moduleHasTypeByName(ctx.current_module, type_name)) return false;
+    if (ctx.hidden_types.get(type_name)) |cached| return cached;
+    const result = isTypeHiddenByImportOverrides(ctx.current_module, ctx.use_specs, ctx.modules, ctx.reachable_modules, type_name);
+    ctx.hidden_types.put(type_name, result) catch {};
+    return result;
+}
 
 fn resolveNamespacePath(object_path: []const u8, use_specs: []const UseSpec, alloc: std.mem.Allocator) ?NamespaceResolution {
     var best_rank: u8 = 255;
@@ -1052,171 +1798,172 @@ fn hideFunctionCallName(call_node: *ast.Node) void {
     call.name = hidden_name;
 }
 
-fn rewriteModuleImportsInNode(current_module: *const ModuleInfo, node: *ast.Node, use_specs: []const UseSpec, modules: []const ModuleInfo, reachable_modules: *const std.StringHashMap(void), alloc: std.mem.Allocator) void {
-    rewriteNodeTypeFields(current_module, node, use_specs, modules, reachable_modules);
+fn rewriteModuleImportsInNode(rewrite_ctx: *RewriteContext, node: *ast.Node) void {
+    const alloc = rewrite_ctx.alloc;
+    rewriteNodeTypeFields(rewrite_ctx, node);
 
     switch (node.data) {
         .program => |prog| {
             for (prog.globals.items) |glob| {
-                rewriteModuleImportsInNode(current_module, glob, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, glob);
             }
             for (prog.functions.items) |func| {
-                rewriteModuleImportsInNode(current_module, func, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, func);
             }
         },
         .function => |func| {
             if (func.guard) |guard| {
-                rewriteModuleImportsInNode(current_module, guard, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, guard);
             }
             for (func.body.items) |stmt| {
-                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, stmt);
             }
         },
         .var_decl => |decl| {
             if (decl.initializer) |init| {
-                rewriteModuleImportsInNode(current_module, init, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, init);
             }
         },
         .assignment => |as| {
-            rewriteModuleImportsInNode(current_module, as.target, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, as.value, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, as.target);
+            rewriteModuleImportsInNode(rewrite_ctx, as.value);
         },
         .compound_assignment => |as| {
-            rewriteModuleImportsInNode(current_module, as.target, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, as.value, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, as.target);
+            rewriteModuleImportsInNode(rewrite_ctx, as.value);
         },
         .function_call => |*call| {
             for (call.args.items) |arg| {
-                rewriteModuleImportsInNode(current_module, arg, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, arg);
             }
 
-            if (!call.is_libc and isFunctionHiddenByImportOverrides(current_module, use_specs, modules, reachable_modules, call.name)) {
+            if (!call.is_libc and cachedIsFunctionHidden(rewrite_ctx, call.name)) {
                 hideFunctionCallName(node);
             }
         },
         .method_call => |method| {
-            rewriteModuleImportsInNode(current_module, method.object, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, method.object);
             for (method.args.items) |arg| {
-                rewriteModuleImportsInNode(current_module, arg, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, arg);
             }
 
             const object_path = extractRefPath(method.object, alloc) orelse return;
             defer alloc.free(object_path);
 
-            const resolved = resolveNamespacePath(object_path, use_specs, alloc) orelse return;
+            const resolved = resolveNamespacePath(object_path, rewrite_ctx.use_specs, alloc) orelse return;
             defer alloc.free(resolved.import_path);
 
-            if (!hasFunctionInReachableImport(modules, reachable_modules, resolved.import_path, method.method_name)) return;
+            if (!cachedHasFunctionInReachableImport(rewrite_ctx, resolved.import_path, method.method_name)) return;
             convertMethodCallToFunctionCall(node);
         },
         .return_stmt => |ret| {
             if (ret.expression) |expr| {
-                rewriteModuleImportsInNode(current_module, expr, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, expr);
             }
         },
-        .defer_stmt => |defer_stmt| rewriteModuleImportsInNode(current_module, defer_stmt.expression, use_specs, modules, reachable_modules, alloc),
+        .defer_stmt => |defer_stmt| rewriteModuleImportsInNode(rewrite_ctx, defer_stmt.expression),
         .if_stmt => |if_stmt| {
-            rewriteModuleImportsInNode(current_module, if_stmt.condition, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, if_stmt.condition);
             for (if_stmt.then_body.items) |stmt| {
-                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, stmt);
             }
             if (if_stmt.else_body) |else_body| {
                 for (else_body.items) |stmt| {
-                    rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                    rewriteModuleImportsInNode(rewrite_ctx, stmt);
                 }
             }
         },
         .for_stmt => |for_stmt| {
             if (for_stmt.condition) |cond| {
-                rewriteModuleImportsInNode(current_module, cond, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, cond);
             }
             for (for_stmt.body.items) |stmt| {
-                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, stmt);
             }
         },
         .c_for_stmt => |c_for| {
-            if (c_for.init) |init| rewriteModuleImportsInNode(current_module, init, use_specs, modules, reachable_modules, alloc);
-            if (c_for.condition) |cond| rewriteModuleImportsInNode(current_module, cond, use_specs, modules, reachable_modules, alloc);
-            if (c_for.increment) |inc| rewriteModuleImportsInNode(current_module, inc, use_specs, modules, reachable_modules, alloc);
+            if (c_for.init) |init| rewriteModuleImportsInNode(rewrite_ctx, init);
+            if (c_for.condition) |cond| rewriteModuleImportsInNode(rewrite_ctx, cond);
+            if (c_for.increment) |inc| rewriteModuleImportsInNode(rewrite_ctx, inc);
             for (c_for.body.items) |stmt| {
-                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, stmt);
             }
         },
-        .array_initializer => |arr| for (arr.elements.items) |elem| rewriteModuleImportsInNode(current_module, elem, use_specs, modules, reachable_modules, alloc),
+        .array_initializer => |arr| for (arr.elements.items) |elem| rewriteModuleImportsInNode(rewrite_ctx, elem),
         .array_index => |arr| {
-            rewriteModuleImportsInNode(current_module, arr.array, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, arr.index, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.array);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.index);
         },
         .array_assignment => |arr| {
-            rewriteModuleImportsInNode(current_module, arr.array, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, arr.index, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, arr.value, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.array);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.index);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.value);
         },
         .array_compound_assignment => |arr| {
-            rewriteModuleImportsInNode(current_module, arr.array, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, arr.index, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, arr.value, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.array);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.index);
+            rewriteModuleImportsInNode(rewrite_ctx, arr.value);
         },
         .comparison => |cmp| {
-            rewriteModuleImportsInNode(current_module, cmp.lhs, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, cmp.rhs, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, cmp.lhs);
+            rewriteModuleImportsInNode(rewrite_ctx, cmp.rhs);
         },
         .binary_op => |bin| {
-            rewriteModuleImportsInNode(current_module, bin.lhs, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, bin.rhs, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, bin.lhs);
+            rewriteModuleImportsInNode(rewrite_ctx, bin.rhs);
         },
-        .unary_op => |un| rewriteModuleImportsInNode(current_module, un.operand, use_specs, modules, reachable_modules, alloc),
-        .cast => |cast| rewriteModuleImportsInNode(current_module, cast.expr, use_specs, modules, reachable_modules, alloc),
+        .unary_op => |un| rewriteModuleImportsInNode(rewrite_ctx, un.operand),
+        .cast => |cast| rewriteModuleImportsInNode(rewrite_ctx, cast.expr),
         .expression_block => |block| {
             for (block.statements.items) |stmt| {
-                rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, stmt);
             }
-            rewriteModuleImportsInNode(current_module, block.result, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, block.result);
         },
         .handled_call_stmt => |handled| {
-            rewriteModuleImportsInNode(current_module, handled.call, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, handled.call);
             for (handled.handlers.items) |handler| {
                 for (handler.body.items) |stmt| {
-                    rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                    rewriteModuleImportsInNode(rewrite_ctx, stmt);
                 }
             }
         },
         .match_stmt => |match_stmt| {
-            rewriteModuleImportsInNode(current_module, match_stmt.condition, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, match_stmt.condition);
             for (match_stmt.cases.items) |match_case| {
                 for (match_case.values.items) |value| {
-                    rewriteModuleImportsInNode(current_module, value, use_specs, modules, reachable_modules, alloc);
+                    rewriteModuleImportsInNode(rewrite_ctx, value);
                 }
                 for (match_case.body.items) |stmt| {
-                    rewriteModuleImportsInNode(current_module, stmt, use_specs, modules, reachable_modules, alloc);
+                    rewriteModuleImportsInNode(rewrite_ctx, stmt);
                 }
             }
         },
         .struct_initializer => |struct_init| {
             for (struct_init.field_values.items) |field_val| {
-                rewriteModuleImportsInNode(current_module, field_val.value, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, field_val.value);
             }
         },
-        .qualified_identifier => |qual| rewriteModuleImportsInNode(current_module, qual.base, use_specs, modules, reachable_modules, alloc),
-        .simd_initializer => |simd_init| for (simd_init.elements.items) |elem| rewriteModuleImportsInNode(current_module, elem, use_specs, modules, reachable_modules, alloc),
+        .qualified_identifier => |qual| rewriteModuleImportsInNode(rewrite_ctx, qual.base),
+        .simd_initializer => |simd_init| for (simd_init.elements.items) |elem| rewriteModuleImportsInNode(rewrite_ctx, elem),
         .simd_index => |simd_idx| {
-            rewriteModuleImportsInNode(current_module, simd_idx.simd, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, simd_idx.index, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_idx.simd);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_idx.index);
         },
         .simd_assignment => |simd_ass| {
-            rewriteModuleImportsInNode(current_module, simd_ass.simd, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, simd_ass.index, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, simd_ass.value, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_ass.simd);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_ass.index);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_ass.value);
         },
         .simd_compound_assignment => |simd_ass| {
-            rewriteModuleImportsInNode(current_module, simd_ass.simd, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, simd_ass.index, use_specs, modules, reachable_modules, alloc);
-            rewriteModuleImportsInNode(current_module, simd_ass.value, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_ass.simd);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_ass.index);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_ass.value);
         },
         .simd_method_call => |simd_method| {
-            rewriteModuleImportsInNode(current_module, simd_method.simd, use_specs, modules, reachable_modules, alloc);
+            rewriteModuleImportsInNode(rewrite_ctx, simd_method.simd);
             for (simd_method.args.items) |arg| {
-                rewriteModuleImportsInNode(current_module, arg, use_specs, modules, reachable_modules, alloc);
+                rewriteModuleImportsInNode(rewrite_ctx, arg);
             }
         },
         else => {},
@@ -1228,11 +1975,11 @@ fn loadStdModulesForDep(dep: []const u8, modules: *std.ArrayList(ModuleInfo), lo
         const stdlib_path = try getStdlibPath(alloc);
         defer alloc.free(stdlib_path);
 
-        var dir = try std.fs.cwd().openDir(stdlib_path, .{ .iterate = true });
-        defer dir.close();
+        var dir = try std.Io.Dir.cwd().openDir(process_io, stdlib_path, .{ .iterate = true });
+        defer dir.close(process_io);
 
         var it = dir.iterate();
-        while (try it.next()) |entry| {
+        while (try it.next(process_io)) |entry| {
             if (entry.kind != .file) continue;
             if (!std.mem.endsWith(u8, entry.name, ".zl")) continue;
 
@@ -1259,11 +2006,163 @@ fn loadStdModulesForDep(dep: []const u8, modules: *std.ArrayList(ModuleInfo), lo
     try modules.append(alloc, std_module);
 }
 
-fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
+fn collectStdModulePathsForDep(dep: []const u8, pending_paths: *std.ArrayList([]const u8), loaded_paths: *std.StringHashMap(void), alloc: std.mem.Allocator) !void {
+    if (std.mem.eql(u8, dep, "std")) {
+        const stdlib_path = try getStdlibPath(alloc);
+        defer alloc.free(stdlib_path);
+
+        var dir = try std.Io.Dir.cwd().openDir(process_io, stdlib_path, .{ .iterate = true });
+        defer dir.close(process_io);
+
+        var it = dir.iterate();
+        while (try it.next(process_io)) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".zl")) continue;
+
+            const full = try std.fs.path.join(alloc, &[_][]const u8{ stdlib_path, entry.name });
+            errdefer alloc.free(full);
+            if (loaded_paths.contains(full) or containsString(pending_paths.items, full)) {
+                alloc.free(full);
+                continue;
+            }
+            try pending_paths.append(alloc, full);
+        }
+        return;
+    }
+
+    var has_zstdpath: bool = false;
+    const std_path = resolveStdModule(dep, alloc, &has_zstdpath) orelse return error.ModuleNotFound;
+    errdefer alloc.free(std_path);
+    if (loaded_paths.contains(std_path) or containsString(pending_paths.items, std_path)) {
+        alloc.free(std_path);
+        return;
+    }
+    try pending_paths.append(alloc, std_path);
+}
+
+const ExpandedPath = struct { path: []const u8, expansions: usize };
+
+fn expandPathIfNeeded(original: []const u8, idx: usize, alloc: std.mem.Allocator) !?ExpandedPath {
+    const host = plugin_host_ptr orelse return null;
+    if (host.syntax_blocks.items.len == 0) return null;
+    const bytes = std.Io.Dir.cwd().readFileAlloc(process_io, original, alloc, .limited(64 * 1024 * 1024)) catch return null;
+    defer alloc.free(bytes);
+    var result = try zlx_preprocess.expandExtensionBlocks(alloc, host, original, bytes);
+    defer result.report.deinit(alloc);
+    if (result.report.expansions == 0) {
+        alloc.free(result.source);
+        return null;
+    }
+    const tmp_path = try std.fmt.allocPrint(alloc, "/tmp/zlang-zlx-{d}-{d}-{s}", .{ @as(u64, @intCast(nanoTimestamp())), idx, std.fs.path.basename(original) });
+    var tmp = std.Io.Dir.cwd().createFile(process_io, tmp_path, .{ .truncate = true }) catch {
+        alloc.free(tmp_path);
+        alloc.free(result.source);
+        return null;
+    };
+    defer tmp.close(process_io);
+    var buf: [4096]u8 = undefined;
+    var writer = tmp.writer(process_io, &buf);
+    writer.interface.writeAll(result.source) catch {};
+    writer.interface.flush() catch {};
+    alloc.free(result.source);
+    if (result.report.source_map.items.len != 0) {
+        var entries: std.ArrayList(ZlxSourceMapEntry) = .empty;
+        errdefer entries.deinit(alloc);
+        for (result.report.source_map.items) |entry| {
+            try entries.append(alloc, .{
+                .generated_offset = entry.generated_offset,
+                .original_line = entry.original_line,
+                .original_column = entry.original_column,
+            });
+        }
+        try zlx_source_maps.append(alloc, .{
+            .generated_path = try alloc.dupe(u8, tmp_path),
+            .original_file = try alloc.dupe(u8, original),
+            .entries = entries,
+        });
+    }
+    return .{ .path = tmp_path, .expansions = result.report.expansions };
+}
+
+fn loadModulesFromPaths(paths: []const []const u8, modules: *std.ArrayList(ModuleInfo), loaded_paths: *std.StringHashMap(void), arena: std.mem.Allocator, alloc: std.mem.Allocator, ctx: *Context) !void {
+    if (paths.len == 0) return;
+
+    var effective_paths = try alloc.alloc([]const u8, paths.len);
+    defer alloc.free(effective_paths);
+    for (paths, 0..) |path, i| {
+        effective_paths[i] = path;
+        if (expandPathIfNeeded(path, i, alloc) catch null) |rewritten| {
+            effective_paths[i] = rewritten.path;
+        }
+    }
+    for (paths) |path| {
+        try loaded_paths.put(utils.dupe(u8, alloc, path), {});
+    }
+
+    if (ctx.max_threads > 1 and paths.len > 1) {
+        var tasks = try alloc.alloc(InitialLoadTask, paths.len);
+        defer alloc.free(tasks);
+
+        for (effective_paths, 0..) |path, i| {
+            tasks[i] = .{
+                .file_path = path,
+                .ctx = ctx,
+                .alloc = alloc,
+            };
+        }
+
+        const worker_count = @min(ctx.max_threads, paths.len);
+        var next_task_idx: usize = 0;
+        while (next_task_idx < tasks.len) {
+            const batch_count = @min(worker_count, tasks.len - next_task_idx);
+            var threads = try alloc.alloc(std.Thread, batch_count);
+            defer alloc.free(threads);
+
+            for (0..batch_count) |j| {
+                threads[j] = try std.Thread.spawn(.{}, runInitialLoadTask, .{&tasks[next_task_idx + j]});
+            }
+            for (threads) |thread| thread.join();
+            next_task_idx += batch_count;
+        }
+
+        for (tasks) |*task| {
+            if (task.err) |err| return err;
+            var prep = task.result.?;
+            defer prep.deinit(alloc);
+            const module = try parseModuleFromPrepared(task.file_path, arena, alloc, ctx, &prep);
+            try modules.append(alloc, module);
+        }
+        return;
+    }
+
+    for (effective_paths) |path| {
+        const module = try parseModuleFile(path, arena, alloc, ctx);
+        try modules.append(alloc, module);
+    }
+}
+
+fn clearModuleBindings(ctx: *Context, alloc: std.mem.Allocator) void {
+    for (ctx.module_registrations.items) |*entry| entry.deinit(alloc);
+    ctx.module_registrations.clearRetainingCapacity();
+    for (ctx.function_module_bindings.items) |*entry| entry.deinit(alloc);
+    ctx.function_module_bindings.clearRetainingCapacity();
+    for (ctx.global_module_bindings.items) |*entry| entry.deinit(alloc);
+    ctx.global_module_bindings.clearRetainingCapacity();
+}
+
+fn modulePathByName(module_registrations: []const ModuleRegistration, module_name: []const u8) ?[]const u8 {
+    for (module_registrations) |entry| {
+        if (std.mem.eql(u8, entry.module_name, module_name)) return entry.module_path;
+    }
+    return null;
+}
+
+fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator, timing: ?*ParseTiming) !ast.ArenaAST {
     var arena_ast = ast.ArenaAST.init(alloc);
     const arena = arena_ast.allocator();
+    clearModuleBindings(ctx, alloc);
 
-    var modules = std.ArrayList(ModuleInfo){};
+    var modules: std.ArrayList(ModuleInfo) = .empty;
     defer {
         for (modules.items) |*module| {
             module.deinit(alloc);
@@ -1274,33 +2173,123 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
     var loaded_paths = std.StringHashMap(void).init(alloc);
     defer loaded_paths.deinit();
 
-    for (ctx.input_files.items) |input_file| {
-        if (loaded_paths.contains(input_file)) continue;
-        const module = try parseModuleFile(input_file, arena, alloc, ctx);
-        try loaded_paths.put(utils.dupe(u8, alloc, input_file), {});
-        try modules.append(alloc, module);
-    }
+    const load_start = nanoTimestamp();
+    if (ctx.max_threads > 1 and ctx.input_files.items.len > 1) {
+        var unique_inputs: std.ArrayList([]const u8) = .empty;
+        defer unique_inputs.deinit(alloc);
 
+        for (ctx.input_files.items) |input_file| {
+            if (loaded_paths.contains(input_file)) continue;
+            try loaded_paths.put(utils.dupe(u8, alloc, input_file), {});
+            try unique_inputs.append(alloc, input_file);
+        }
+
+        var tasks = try alloc.alloc(InitialLoadTask, unique_inputs.items.len);
+        defer alloc.free(tasks);
+
+        for (unique_inputs.items, 0..) |input_file, i| {
+            tasks[i] = .{
+                .file_path = input_file,
+                .ctx = ctx,
+                .alloc = alloc,
+            };
+        }
+
+        const worker_count = @min(ctx.max_threads, unique_inputs.items.len);
+        var next_task_idx: usize = 0;
+        while (next_task_idx < tasks.len) {
+            const batch_count = @min(worker_count, tasks.len - next_task_idx);
+            var threads = try alloc.alloc(std.Thread, batch_count);
+            defer alloc.free(threads);
+
+            for (0..batch_count) |j| {
+                threads[j] = try std.Thread.spawn(.{}, runInitialLoadTask, .{&tasks[next_task_idx + j]});
+            }
+            for (threads) |thread| thread.join();
+            next_task_idx += batch_count;
+        }
+
+        for (tasks) |*task| {
+            if (task.err) |err| return err;
+            var prep = task.result.?;
+            defer prep.deinit(alloc);
+            const module = try parseModuleFromPrepared(task.file_path, arena, alloc, ctx, &prep);
+            try modules.append(alloc, module);
+        }
+    } else {
+        for (ctx.input_files.items) |input_file| {
+            if (loaded_paths.contains(input_file)) continue;
+            const module = try parseModuleFile(input_file, arena, alloc, ctx);
+            try loaded_paths.put(utils.dupe(u8, alloc, input_file), {});
+            try modules.append(alloc, module);
+        }
+    }
+    if (timing) |t| t.load_time_ns = @intCast(nanoTimestamp() - load_start);
+
+    const std_start = nanoTimestamp();
     var scan_idx: usize = 0;
     while (scan_idx < modules.items.len) : (scan_idx += 1) {
         const module = modules.items[scan_idx];
+        var pending_std_paths: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (pending_std_paths.items) |path| alloc.free(path);
+            pending_std_paths.deinit(alloc);
+        }
+
         for (module.dependencies.items) |dep| {
             if (!(std.mem.eql(u8, dep, "std") or std.mem.startsWith(u8, dep, "std."))) continue;
             if (hasModuleByName(modules.items, dep)) continue;
 
-            loadStdModulesForDep(dep, &modules, &loaded_paths, arena, alloc, ctx) catch {
+            collectStdModulePathsForDep(dep, &pending_std_paths, &loaded_paths, alloc) catch {
                 std.debug.print("\x1b[31mError:\x1b[0m Cannot resolve module '\x1b[33m{s}\x1b[0m' imported from {s}\n", .{ dep, module.path });
                 arena_ast.deinit();
                 return error.ModuleNotFound;
             };
         }
-    }
 
+        for (module.dependencies.items) |dep| {
+            if (std.mem.eql(u8, dep, "std") or std.mem.startsWith(u8, dep, "std.")) continue;
+            if (hasModuleByName(modules.items, dep)) continue;
+            const map = if (plugin_module_paths) |*m| m else continue;
+            const abs = map.get(dep) orelse continue;
+            if (loaded_paths.contains(abs) or containsString(pending_std_paths.items, abs)) continue;
+            const dup = utils.dupe(u8, alloc, abs);
+            try pending_std_paths.append(alloc, dup);
+        }
+
+        loadModulesFromPaths(pending_std_paths.items, &modules, &loaded_paths, arena, alloc, ctx) catch {
+            std.debug.print("\x1b[31mError:\x1b[0m Failed to load std dependencies imported from {s}\n", .{module.path});
+            arena_ast.deinit();
+            return error.ModuleNotFound;
+        };
+    }
+    if (timing) |t| t.std_time_ns = @intCast(nanoTimestamp() - std_start);
+
+    const resolve_start = nanoTimestamp();
     var module_names = std.StringHashMap(void).init(alloc);
     defer module_names.deinit();
     for (modules.items) |module| {
         try module_names.put(module.name, {});
     }
+
+    var module_name_list: std.ArrayList([]const u8) = .empty;
+    defer module_name_list.deinit(alloc);
+    var module_name_indices: std.ArrayList(usize) = .empty;
+    defer module_name_indices.deinit(alloc);
+    for (modules.items, 0..) |module, i| {
+        try module_name_list.append(alloc, module.name);
+        try module_name_indices.append(alloc, i);
+    }
+
+    var resolve_tasks = try alloc.alloc(ResolvePrecomputeTask, modules.items.len);
+    defer {
+        for (resolve_tasks) |*task| task.deinit();
+        alloc.free(resolve_tasks);
+    }
+    for (modules.items, 0..) |*module, i| {
+        resolve_tasks[i] = ResolvePrecomputeTask.init(module, module_name_list.items, module_name_indices.items, alloc);
+    }
+    try runTasksParallel(ResolvePrecomputeTask, resolve_tasks, ctx.max_threads, alloc, runResolvePrecomputeTask);
 
     var root_modules = std.StringHashMap(void).init(alloc);
     defer root_modules.deinit();
@@ -1321,7 +2310,7 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
 
     var reachable_modules = std.StringHashMap(void).init(alloc);
     defer reachable_modules.deinit();
-    var queue = std.ArrayList([]const u8){};
+    var queue: std.ArrayList([]const u8) = .empty;
     defer queue.deinit(alloc);
 
     var root_it = root_modules.iterator();
@@ -1334,36 +2323,47 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
     while (q_idx < queue.items.len) : (q_idx += 1) {
         const current_module_name = queue.items[q_idx];
 
-        for (modules.items) |module| {
+        for (modules.items, 0..) |module, module_idx| {
             if (!std.mem.eql(u8, module.name, current_module_name)) continue;
+            const task = &resolve_tasks[module_idx];
+            if (task.err) |err| return err;
+            if (task.unmatched_dep_index) |dep_idx| {
+                const dep = module.dependencies.items[dep_idx];
+                std.debug.print("\x1b[31mError:\x1b[0m Cannot resolve module '\x1b[33m{s}\x1b[0m' imported from module {s}\n", .{ dep, current_module_name });
+                arena_ast.deinit();
+                return error.ModuleNotFound;
+            }
 
-            for (module.dependencies.items) |dep| {
-                var matched_any = false;
-                var names_it = module_names.iterator();
-                while (names_it.next()) |name_entry| {
-                    const candidate = name_entry.key_ptr.*;
-                    if (!moduleMatchesImport(dep, candidate)) continue;
-                    matched_any = true;
-                    if (!reachable_modules.contains(candidate)) {
-                        try reachable_modules.put(candidate, {});
-                        try queue.append(alloc, candidate);
-                    }
-                }
-                if (!matched_any) {
-                    std.debug.print("\x1b[31mError:\x1b[0m Cannot resolve module '\x1b[33m{s}\x1b[0m' imported from module {s}\n", .{ dep, current_module_name });
-                    arena_ast.deinit();
-                    return error.ModuleNotFound;
+            for (task.matched_dep_indices.items) |matched_idx| {
+                const candidate = modules.items[matched_idx].name;
+                if (!reachable_modules.contains(candidate)) {
+                    try reachable_modules.put(candidate, {});
+                    try queue.append(alloc, candidate);
                 }
             }
         }
     }
+    if (timing) |t| t.resolve_time_ns = @intCast(nanoTimestamp() - resolve_start);
 
-    for (modules.items) |*module| {
-        if (!reachable_modules.contains(module.name)) continue;
-        var use_specs = std.ArrayList(UseSpec){};
-        defer use_specs.deinit(alloc);
-        try collectUseSpecs(module, &use_specs, alloc);
-        rewriteModuleImportsInNode(module, module.ast, use_specs.items, modules.items, &reachable_modules, alloc);
+    const rewrite_start = nanoTimestamp();
+    try rewriteReachableModulesParallel(modules.items, &reachable_modules, ctx.max_threads, alloc);
+    if (timing) |t| t.rewrite_time_ns = @intCast(nanoTimestamp() - rewrite_start);
+
+    const merge_start = nanoTimestamp();
+    var merge_scan_tasks = try alloc.alloc(MergeScanTask, modules.items.len);
+    defer alloc.free(merge_scan_tasks);
+    for (modules.items, 0..) |*module, i| {
+        merge_scan_tasks[i] = .{ .module = module };
+    }
+    try runTasksParallel(MergeScanTask, merge_scan_tasks, ctx.max_threads, alloc, runMergeScanTask);
+
+    var expected_functions: usize = 0;
+    var expected_globals: usize = 0;
+    for (merge_scan_tasks, 0..) |task, i| {
+        _ = i;
+        if (!reachable_modules.contains(task.module.name)) continue;
+        expected_functions += task.function_count;
+        expected_globals += task.global_count;
     }
 
     for (modules.items) |*module| {
@@ -1374,24 +2374,49 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
 
     const merged_program_data = ast.NodeData{
         .program = ast.Program{
-            .functions = std.ArrayList(*ast.Node){},
-            .globals = std.ArrayList(*ast.Node){},
+            .functions = .empty,
+            .globals = .empty,
         },
     };
 
     const merged_program = ast.Node.create(arena, merged_program_data);
+    try merged_program.data.program.functions.ensureTotalCapacity(arena, expected_functions);
+    try merged_program.data.program.globals.ensureTotalCapacity(arena, expected_globals);
 
     for (modules.items) |module| {
         if (!reachable_modules.contains(module.name)) continue;
+
+        var module_registration = ModuleRegistration{
+            .module_name = utils.dupe(u8, alloc, module.name),
+            .module_path = utils.dupe(u8, alloc, module.path),
+            .line_count = module.line_count,
+            .dependencies = .empty,
+        };
+        for (module.dependencies.items) |dep| {
+            try module_registration.dependencies.append(alloc, utils.dupe(u8, alloc, dep));
+        }
+        try ctx.module_registrations.append(alloc, module_registration);
 
         switch (module.ast.data) {
             .program => |prog| {
                 for (prog.functions.items) |func| {
                     if (func.data != .use_stmt) {
+                        if (func.data == .function) {
+                            try ctx.function_module_bindings.append(alloc, .{
+                                .symbol_name = utils.dupe(u8, alloc, func.data.function.name),
+                                .module_name = utils.dupe(u8, alloc, module.name),
+                            });
+                        }
                         try merged_program.data.program.functions.append(arena, func);
                     }
                 }
                 for (prog.globals.items) |glob| {
+                    if (glob.data == .var_decl) {
+                        try ctx.global_module_bindings.append(alloc, .{
+                            .symbol_name = utils.dupe(u8, alloc, glob.data.var_decl.name),
+                            .module_name = utils.dupe(u8, alloc, module.name),
+                        });
+                    }
                     try merged_program.data.program.globals.append(arena, glob);
                 }
             },
@@ -1400,29 +2425,27 @@ fn parseMultiFile(ctx: *Context, alloc: std.mem.Allocator) !ast.ArenaAST {
             },
         }
     }
+    if (timing) |t| t.merge_time_ns = @intCast(nanoTimestamp() - merge_start);
 
     arena_ast.setRoot(merged_program);
     return arena_ast;
 }
 
 pub fn read_file(file_name: []const u8) anyerror![]const u8 {
-    const cwd = std.fs.cwd();
-    cwd.access(file_name, .{}) catch |err| {
+    const cwd = std.Io.Dir.cwd();
+    cwd.access(process_io, file_name, .{}) catch |err| {
         if (err == error.FileNotFound) {
             return errors.ReadFileError.FileNotFound;
         }
         return errors.ReadFileError.AccessDenied;
     };
 
-    const file_stat = try cwd.statFile(file_name);
+    const file_stat = try cwd.statFile(process_io, file_name, .{});
     if (file_stat.kind == .file) {
-        const file = cwd.openFile(file_name, .{ .mode = .read_only }) catch {
-            return errors.ReadFileError.AccessDenied;
-        };
-        defer file.close();
-        const buffer = utils.alloc(u8, allocator, consts.MAX_BUFF_SIZE);
-        const bytes_read = try file.readAll(buffer);
-        return buffer[0..bytes_read];
+        if (file_stat.size == 0) {
+            return utils.dupe(u8, allocator, "");
+        }
+        return try cwd.readFileAlloc(process_io, file_name, allocator, .limited(file_stat.size + 1));
     }
 
     return errors.ReadFileError.InvalidPath;
@@ -1460,22 +2483,7 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
         switch (args[i][0]) {
             '-' => {
                 const flag = args[i];
-                if (std.mem.eql(u8, flag, "-b")) {
-                    context.brainfuck_mode = true;
-                    context.bf_cell_size = 8;
-                } else if (std.mem.eql(u8, flag, "-b8")) {
-                    context.brainfuck_mode = true;
-                    context.bf_cell_size = 8;
-                } else if (std.mem.eql(u8, flag, "-b16")) {
-                    context.brainfuck_mode = true;
-                    context.bf_cell_size = 16;
-                } else if (std.mem.eql(u8, flag, "-b32")) {
-                    context.brainfuck_mode = true;
-                    context.bf_cell_size = 32;
-                } else if (std.mem.eql(u8, flag, "-b64")) {
-                    context.brainfuck_mode = true;
-                    context.bf_cell_size = 64;
-                } else if (std.mem.eql(u8, flag, "-keepll")) {
+                if (std.mem.eql(u8, flag, "-keepll")) {
                     context.keepll = true;
                 } else if (std.mem.eql(u8, flag, "-dast")) {
                     context.show_ast = true;
@@ -1488,6 +2496,8 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     context.stats = true;
                 } else if (std.mem.eql(u8, flag, "-optimize")) {
                     context.optimize = true;
+                } else if (std.mem.eql(u8, flag, "-verify-ir")) {
+                    context.verify_ir = true;
                 } else if (std.mem.eql(u8, flag, "-o")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoOutputPath;
@@ -1496,6 +2506,12 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.NoArch;
                     context.arch = args[i];
+                } else if (std.mem.eql(u8, flag, "-j")) {
+                    i += 1;
+                    if (i >= args.len) return errors.CLIError.InvalidArgument;
+                    const parsed = std.fmt.parseInt(usize, args[i], 10) catch return errors.CLIError.InvalidArgument;
+                    if (parsed == 0) return errors.CLIError.InvalidArgument;
+                    context.max_threads = parsed;
                 } else if (std.mem.eql(u8, flag, "-link")) {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.InvalidArgument;
@@ -1546,7 +2562,12 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     try context.extra_args.append(allocator, combined);
                 } else if (std.mem.startsWith(u8, flag, "-Wl,")) {
                     try context.extra_args.append(allocator, flag);
-                } else if (std.mem.eql(u8, flag, "-help") or std.mem.eql(u8, flag, "--help")) {
+                } else if (std.mem.eql(u8, flag, "-no-extensions")) {
+                    context.no_extensions = true;
+                } else if (std.mem.eql(u8, flag, "-isolated")) {
+                    context.isolated = true;
+                    context.no_extensions = true;
+                } else if (std.mem.eql(u8, flag, "-help")) {
                     return errors.CLIError.NoHelp;
                 } else {
                     try context.extra_args.append(allocator, flag);
@@ -1556,10 +2577,13 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                 const arg = args[i];
                 if (std.mem.endsWith(u8, arg, ".zl")) {
                     try context.input_files.append(allocator, arg);
-                } else if (std.mem.endsWith(u8, arg, ".b") or std.mem.endsWith(u8, arg, ".bf")) {
-                    try context.input_files.append(allocator, arg);
                 } else {
-                    const stat = std.fs.cwd().statFile(arg) catch |err| {
+                    // Files claimed by plugin-registered file extensions (e.g. an
+                    // extension's own source type) are not known at parse time,
+                    // since plugins load after argument parsing. Such files land
+                    // in link_objects here and are reclassified into input_files
+                    // once the plugin host is loaded.
+                    const stat = std.Io.Dir.cwd().statFile(process_io, arg, .{}) catch |err| {
                         if (err == error.FileNotFound) {
                             try context.link_objects.append(allocator, arg);
                             continue;
@@ -1576,7 +2600,10 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
             },
         }
     }
-    return if (context.input_files.items.len == 0)
+    // link_objects may still hold files claimed by a plugin-registered file
+    // extension; those are reclassified into input_files after the plugin host
+    // loads, so a bare link_objects list is not necessarily an empty input.
+    return if (context.input_files.items.len == 0 and context.link_objects.items.len == 0)
         errors.CLIError.NoInputPath
     else
         context;
@@ -1654,7 +2681,7 @@ fn loadModuleIntoZli(loaded_modules: *std.ArrayList(ZliLoadedModule), file_path_
     }
 
     const raw_path = stripMatchingQuotes(trimmed);
-    const abs_path = std.fs.cwd().realpathAlloc(alloc, raw_path) catch |err| {
+    const abs_path = std.Io.Dir.cwd().realPathFileAlloc(process_io, raw_path, alloc) catch |err| {
         std.debug.print("zli: cannot load '{s}': {}\n", .{ raw_path, err });
         return;
     };
@@ -1741,7 +2768,7 @@ fn isLikelyCalculatorExpression(expr: []const u8) bool {
 }
 
 fn rewriteCalcIntegersToFloat(expr: []const u8, alloc: std.mem.Allocator) ![]const u8 {
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
 
     var i: usize = 0;
@@ -1804,9 +2831,11 @@ const ZliSnippetMode = enum {
 };
 
 fn buildZliSnippetSource(loaded_modules: []const ZliLoadedModule, imports: []const []const u8, statement_line: []const u8, mode: ZliSnippetMode, alloc: std.mem.Allocator) ![]const u8 {
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
-    var writer = out.writer(alloc);
+    var out_writer = std.Io.Writer.Allocating.fromArrayList(alloc, &out);
+    defer out = out_writer.toArrayList();
+    var writer = &out_writer.writer;
 
     try writer.print("module zli.session;\n", .{});
 
@@ -1839,26 +2868,29 @@ fn buildZliSnippetSource(loaded_modules: []const ZliLoadedModule, imports: []con
     defer alloc.free(statement);
 
     try writer.print("\nfun main() >> i32 {{\n    {s}\n    return 0;\n}}\n", .{statement});
-    return out.toOwnedSlice(alloc);
+    return try out_writer.toOwnedSlice();
 }
 
 fn runZliSnippet(exe_path: []const u8, loaded_modules: []const ZliLoadedModule, imports: []const []const u8, line: []const u8, mode: ZliSnippetMode, alloc: std.mem.Allocator) !u8 {
     const snippet_src = try buildZliSnippetSource(loaded_modules, imports, line, mode, alloc);
     defer alloc.free(snippet_src);
 
-    const tmp_path = try std.fmt.allocPrint(alloc, "__zli_eval_{d}.zl", .{std.time.nanoTimestamp()});
+    const tmp_path = try std.fmt.allocPrint(alloc, "__zli_eval_{d}.zl", .{nanoTimestamp()});
     defer alloc.free(tmp_path);
 
-    var tmp_file = std.fs.cwd().createFile(tmp_path, .{ .truncate = true }) catch |err| {
+    var tmp_file = std.Io.Dir.cwd().createFile(process_io, tmp_path, .{ .truncate = true }) catch |err| {
         std.debug.print("zli: failed to create temp file: {}\n", .{err});
         return 1;
     };
-    defer tmp_file.close();
+    defer tmp_file.close(process_io);
 
-    try tmp_file.writeAll(snippet_src);
-    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = tmp_file.writer(process_io, &file_buffer);
+    try file_writer.interface.writeAll(snippet_src);
+    try file_writer.interface.flush();
+    defer std.Io.Dir.cwd().deleteFile(process_io, tmp_path) catch {};
 
-    var argv = std.ArrayList([]const u8){};
+    var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(alloc);
 
     try argv.append(alloc, exe_path);
@@ -1868,39 +2900,10 @@ fn runZliSnippet(exe_path: []const u8, loaded_modules: []const ZliLoadedModule, 
     }
     try argv.append(alloc, tmp_path);
 
-    var child = std.process.Child.init(argv.items, alloc);
-    child.stdin_behavior = .Inherit;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-
-    var env_map = std.process.getEnvMap(alloc) catch null;
-    defer if (env_map) |*map| map.deinit();
-
-    var zstdpath_for_child: ?[]const u8 = null;
-    defer if (zstdpath_for_child) |p| alloc.free(p);
-
-    var has_zstdpath = false;
-    if (std.process.getEnvVarOwned(alloc, "ZSTDPATH")) |existing_path| {
-        has_zstdpath = true;
-        alloc.free(existing_path);
-    } else |_| {}
-
-    if (!has_zstdpath) {
-        if (std.fs.cwd().realpathAlloc(alloc, "stdlib") catch null) |stdlib_path| {
-            zstdpath_for_child = stdlib_path;
-            if (env_map) |*map| {
-                try map.put("ZSTDPATH", stdlib_path);
-            }
-        }
-    }
-
-    if (env_map) |*map| {
-        child.env_map = map;
-    }
-
-    const term = try child.spawnAndWait();
+    var child = try std.process.spawn(process_io, .{ .argv = argv.items });
+    const term = try child.wait(process_io);
     return switch (term) {
-        .Exited => |code| code,
+        .exited => |code| code,
         else => 1,
     };
 }
@@ -1915,19 +2918,22 @@ fn runZliSnippetCaptured(exe_path: []const u8, loaded_modules: []const ZliLoaded
     const snippet_src = try buildZliSnippetSource(loaded_modules, imports, line, mode, alloc);
     defer alloc.free(snippet_src);
 
-    const tmp_path = try std.fmt.allocPrint(alloc, "__zli_eval_{d}.zl", .{std.time.nanoTimestamp()});
+    const tmp_path = try std.fmt.allocPrint(alloc, "__zli_eval_{d}.zl", .{nanoTimestamp()});
     defer alloc.free(tmp_path);
 
-    var tmp_file = std.fs.cwd().createFile(tmp_path, .{ .truncate = true }) catch |err| {
+    var tmp_file = std.Io.Dir.cwd().createFile(process_io, tmp_path, .{ .truncate = true }) catch |err| {
         std.debug.print("zli: failed to create temp file: {}\n", .{err});
         return error.TempFileFailed;
     };
-    defer tmp_file.close();
+    defer tmp_file.close(process_io);
 
-    try tmp_file.writeAll(snippet_src);
-    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = tmp_file.writer(process_io, &file_buffer);
+    try file_writer.interface.writeAll(snippet_src);
+    try file_writer.interface.flush();
+    defer std.Io.Dir.cwd().deleteFile(process_io, tmp_path) catch {};
 
-    var argv = std.ArrayList([]const u8){};
+    var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(alloc);
 
     try argv.append(alloc, exe_path);
@@ -1937,38 +2943,15 @@ fn runZliSnippetCaptured(exe_path: []const u8, loaded_modules: []const ZliLoaded
     }
     try argv.append(alloc, tmp_path);
 
-    var env_map = std.process.getEnvMap(alloc) catch null;
-    defer if (env_map) |*map| map.deinit();
-
-    var zstdpath_for_child: ?[]const u8 = null;
-    defer if (zstdpath_for_child) |p| alloc.free(p);
-
-    var has_zstdpath = false;
-    if (std.process.getEnvVarOwned(alloc, "ZSTDPATH")) |existing_path| {
-        has_zstdpath = true;
-        alloc.free(existing_path);
-    } else |_| {}
-
-    if (!has_zstdpath) {
-        if (std.fs.cwd().realpathAlloc(alloc, "stdlib") catch null) |stdlib_path| {
-            zstdpath_for_child = stdlib_path;
-            if (env_map) |*map| {
-                try map.put("ZSTDPATH", stdlib_path);
-            }
-        }
-    }
-
-    const env_map_ptr: ?*const std.process.EnvMap = if (env_map) |*map| map else null;
-    const run_res = try std.process.Child.run(.{
-        .allocator = alloc,
+    const run_res = try std.process.run(alloc, process_io, .{
         .argv = argv.items,
-        .env_map = env_map_ptr,
-        .max_output_bytes = 1024 * 1024,
+        .stdout_limit = .limited(1024 * 1024),
+        .stderr_limit = .limited(1024 * 1024),
     });
 
     return .{
         .exit_code = switch (run_res.term) {
-            .Exited => |code| code,
+            .exited => |code| code,
             else => 1,
         },
         .stdout = run_res.stdout,
@@ -2004,11 +2987,18 @@ fn zliPushHistory(history: *std.ArrayList([]const u8), line: []const u8, alloc: 
     try history.append(alloc, utils.dupe(u8, alloc, line));
 }
 
-fn zliReadByte(stdin_file: std.fs.File) !?u8 {
+fn zliReadByte(stdin_file: std.Io.File) !?u8 {
     var b: [1]u8 = undefined;
-    const n = try stdin_file.read(&b);
+    const n = try std.posix.read(stdin_file.handle, &b);
     if (n == 0) return null;
     return b[0];
+}
+
+fn writeStdoutAll(bytes: []const u8) !void {
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.File.stdout().writer(process_io, &buffer);
+    try writer.interface.writeAll(bytes);
+    try writer.interface.flush();
 }
 
 fn zliReplaceLine(buf: *std.ArrayList(u8), cursor: *usize, text: []const u8, alloc: std.mem.Allocator) !void {
@@ -2018,22 +3008,21 @@ fn zliReplaceLine(buf: *std.ArrayList(u8), cursor: *usize, text: []const u8, all
 }
 
 fn zliRedraw(prompt: []const u8, line: []const u8, cursor: usize, alloc: std.mem.Allocator) !void {
-    const stdout_file = std.fs.File.stdout();
-    try stdout_file.writeAll("\r");
-    try stdout_file.writeAll(prompt);
-    try stdout_file.writeAll(line);
-    try stdout_file.writeAll("\x1b[K");
+    try writeStdoutAll("\r");
+    try writeStdoutAll(prompt);
+    try writeStdoutAll(line);
+    try writeStdoutAll("\x1b[K");
 
     const tail = line.len - cursor;
     if (tail > 0) {
         const move_left = try std.fmt.allocPrint(alloc, "\x1b[{d}D", .{tail});
         defer alloc.free(move_left);
-        try stdout_file.writeAll(move_left);
+        try writeStdoutAll(move_left);
     }
 }
 
 fn readZliLineInteractive(prompt: []const u8, history: *std.ArrayList([]const u8), alloc: std.mem.Allocator) !?[]const u8 {
-    const stdin_file = std.fs.File.stdin();
+    const stdin_file = std.Io.File.stdin();
 
     const orig_termios = try std.posix.tcgetattr(stdin_file.handle);
     var raw_termios = orig_termios;
@@ -2044,10 +3033,10 @@ fn readZliLineInteractive(prompt: []const u8, history: *std.ArrayList([]const u8
     try std.posix.tcsetattr(stdin_file.handle, .NOW, raw_termios);
     defer std.posix.tcsetattr(stdin_file.handle, .NOW, orig_termios) catch {};
 
-    var line_buf = std.ArrayList(u8){};
+    var line_buf: std.ArrayList(u8) = .empty;
     defer line_buf.deinit(alloc);
 
-    var draft_buf = std.ArrayList(u8){};
+    var draft_buf: std.ArrayList(u8) = .empty;
     defer draft_buf.deinit(alloc);
 
     var cursor: usize = 0;
@@ -2058,8 +3047,7 @@ fn readZliLineInteractive(prompt: []const u8, history: *std.ArrayList([]const u8
     while (true) {
         const maybe_ch = try zliReadByte(stdin_file);
         if (maybe_ch == null) {
-            const stdout_file = std.fs.File.stdout();
-            try stdout_file.writeAll("\n");
+            try writeStdoutAll("\n");
             if (line_buf.items.len == 0) return null;
             const out = try line_buf.toOwnedSlice(alloc);
             try zliPushHistory(history, out, alloc);
@@ -2069,21 +3057,18 @@ fn readZliLineInteractive(prompt: []const u8, history: *std.ArrayList([]const u8
         const ch = maybe_ch.?;
         switch (ch) {
             '\r', '\n' => {
-                const stdout_file = std.fs.File.stdout();
-                try stdout_file.writeAll("\r\n");
+                try writeStdoutAll("\r\n");
                 const out = try line_buf.toOwnedSlice(alloc);
                 try zliPushHistory(history, out, alloc);
                 return out;
             },
             3 => {
-                const stdout_file = std.fs.File.stdout();
-                try stdout_file.writeAll("^C\r\n");
+                try writeStdoutAll("^C\r\n");
                 return utils.dupe(u8, alloc, "");
             },
             4 => {
                 if (line_buf.items.len == 0) {
-                    const stdout_file = std.fs.File.stdout();
-                    try stdout_file.writeAll("\r\n");
+                    try writeStdoutAll("\r\n");
                     return null;
                 }
             },
@@ -2105,8 +3090,7 @@ fn readZliLineInteractive(prompt: []const u8, history: *std.ArrayList([]const u8
                 try zliRedraw(prompt, line_buf.items, cursor, alloc);
             },
             12 => {
-                const stdout_file = std.fs.File.stdout();
-                try stdout_file.writeAll("\x1b[2J\x1b[H");
+                try writeStdoutAll("\x1b[2J\x1b[H");
                 try zliRedraw(prompt, line_buf.items, cursor, alloc);
             },
             27 => {
@@ -2193,13 +3177,13 @@ fn runZli(cli_args: [][:0]u8, alloc: std.mem.Allocator) !u8 {
         return 1;
     }
 
-    const exe_path = try std.fs.selfExePathAlloc(alloc);
+    const exe_path = try std.process.executablePathAlloc(process_io, alloc);
     defer alloc.free(exe_path);
 
-    var loaded_modules = std.ArrayList(ZliLoadedModule){};
+    var loaded_modules: std.ArrayList(ZliLoadedModule) = .empty;
     defer deinitZliLoadedModules(&loaded_modules, alloc);
 
-    var imports = std.ArrayList([]const u8){};
+    var imports: std.ArrayList([]const u8) = .empty;
     defer deinitOwnedStringList(&imports, alloc);
 
     for (cli_args) |arg| {
@@ -2208,14 +3192,14 @@ fn runZli(cli_args: [][:0]u8, alloc: std.mem.Allocator) !u8 {
 
     std.debug.print("zli: interactive mode (type :help for commands)\n", .{});
 
-    const stdin_file = std.fs.File.stdin();
-    const stdin_is_tty = stdin_file.isTty();
+    const stdin_file = std.Io.File.stdin();
+    const stdin_is_tty = stdin_file.isTty(process_io) catch false;
 
-    var history = std.ArrayList([]const u8){};
+    var history: std.ArrayList([]const u8) = .empty;
     defer deinitOwnedStringList(&history, alloc);
 
     var stdin_buf: [4096]u8 = undefined;
-    var stdin_reader = stdin_file.reader(&stdin_buf);
+    var stdin_reader = stdin_file.reader(process_io, &stdin_buf);
 
     while (true) {
         var owned_line: ?[]const u8 = null;
@@ -2312,82 +3296,18 @@ fn runZli(cli_args: [][:0]u8, alloc: std.mem.Allocator) !u8 {
     return 0;
 }
 
-fn compileBrainfuck(ctx: *Context, alloc: std.mem.Allocator) !u8 {
-    const bf = @import("codegen/bf.zig");
-    const c_bindings = @import("codegen/c_bindings.zig");
-    const c = c_bindings.c;
-
-    const input_file = ctx.input_files.items[0];
-    const bf_code = read_file(input_file) catch |err| {
-        std.debug.print("Error reading file {s}: {}\n", .{ input_file, err });
-        return 1;
-    };
-
-    var code_generator = codegen.CodeGenerator.init(alloc) catch |err| {
-        const error_msg = switch (err) {
-            error.ModuleCreationFailed => "Failed to create LLVM module.",
-            error.BuilderCreationFailed => "Failed to create LLVM builder.",
-            error.OutOfMemory => "Out of memory during codegen initialization.",
-            else => "Unknown codegen initialization error.",
-        };
-        std.debug.print("Error initializing codegen: {s}\n", .{error_msg});
-        return 1;
-    };
-    defer code_generator.deinit();
-
-    const main_func_type = c.LLVMFunctionType(
-        c.LLVMInt32TypeInContext(code_generator.context),
-        null,
-        0,
-        0,
-    );
-    const main_func = c.LLVMAddFunction(code_generator.module, "main", main_func_type);
-    code_generator.current_function = main_func;
-
-    const entry_block = c.LLVMAppendBasicBlockInContext(
-        code_generator.context,
-        main_func,
-        "entry",
-    );
-    c.LLVMPositionBuilderAtEnd(code_generator.builder, entry_block);
-
-    const bf_context_str = try std.fmt.allocPrint(alloc, "?cell_size {d}?\n?len 30000?\n{s}", .{ ctx.bf_cell_size, bf_code });
-    defer alloc.free(bf_context_str);
-
-    const bf_ast = ast.Brainfuck{ .code = bf_context_str };
-    _ = bf.generateBrainfuck(&code_generator, bf_ast, ctx.optimize) catch |err| {
-        std.debug.print("Error generating brainfuck code: {}\n", .{err});
-        return 1;
-    };
-
-    const ret_val = c.LLVMConstInt(c.LLVMInt32TypeInContext(code_generator.context), 0, 0);
-    _ = c.LLVMBuildRet(code_generator.builder, ret_val);
-
-    code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items) catch |err| {
-        std.debug.print("Error compiling to executable: {}\n", .{err});
-        return 1;
-    };
-
-    if (ctx.verbose and !ctx.quiet) {
-        std.debug.print("Brainfuck executable compiled to {s}\n", .{ctx.output});
-    }
-    return 0;
-}
 
 fn collectZlFilesFromDir(alloc: std.mem.Allocator, dir_path: []const u8, files_list: *std.ArrayList([]const u8)) !void {
-    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
-    defer dir.close();
+    var threaded: std.Io.Threaded = .init(alloc, .{});
+    defer threaded.deinit();
+    const run = try std.process.run(alloc, threaded.io(), .{ .argv = &[_][]const u8{ "find", dir_path, "-type", "f", "-name", "*.zl" } });
+    defer alloc.free(run.stdout);
+    defer alloc.free(run.stderr);
+    if (run.term != .exited or run.term.exited != 0) return error.FileNotFound;
 
-    var walker = try dir.walk(alloc);
-    defer walker.deinit();
-
-    while (try walker.next()) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.path, ".zl")) {
-            const full_path = try std.fs.path.join(alloc, &[_][]const u8{ dir_path, entry.path });
-            defer alloc.free(full_path);
-            const path_copy = utils.dupe(u8, alloc, full_path);
-            try files_list.append(alloc, path_copy);
-        }
+    var it = std.mem.tokenizeScalar(u8, run.stdout, '\n');
+    while (it.next()) |path| {
+        try files_list.append(alloc, utils.dupe(u8, alloc, path));
     }
 }
 
@@ -2412,7 +3332,7 @@ fn asciiLower(a: []const u8, alloc: std.mem.Allocator) ![]u8 {
 }
 
 fn stripCommentsAndPreproc(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
     var i: usize = 0;
     while (i < input.len) : (i += 1) {
@@ -2440,8 +3360,8 @@ fn stripCommentsAndPreproc(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 fn collectStatements(alloc: std.mem.Allocator, content: []const u8) !std.ArrayList([]const u8) {
-    var stmts = std.ArrayList([]const u8){};
-    var buf = std.ArrayList(u8){};
+    var stmts: std.ArrayList([]const u8) = .empty;
+    var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(alloc);
     var depth: usize = 0;
     for (content) |ch| {
@@ -2538,7 +3458,7 @@ fn mapCTypeToZType(alloc: std.mem.Allocator, raw0: []const u8) !?[]u8 {
     if (raw.len == 0) return null;
     var ptr_depth: usize = 0;
     {
-        var tmp = std.ArrayList(u8){};
+        var tmp: std.ArrayList(u8) = .empty;
         defer tmp.deinit(alloc);
         for (raw) |ch| {
             if (ch == '*') {
@@ -2552,7 +3472,7 @@ fn mapCTypeToZType(alloc: std.mem.Allocator, raw0: []const u8) !?[]u8 {
 
     var lower = try asciiLower(raw, alloc);
     {
-        var tmp = std.ArrayList(u8){};
+        var tmp: std.ArrayList(u8) = .empty;
         defer tmp.deinit(alloc);
         var seen_space = false;
         for (lower) |ch| {
@@ -2639,7 +3559,7 @@ fn parseAndWriteWrapper(alloc: std.mem.Allocator, stmt_in: []const u8) !?[]const
     if (name.len == 0) return null;
     const ret_raw = trimSpaces(stmt[0..name_start]);
     const ret_z = try mapCTypeToZType(alloc, ret_raw) orelse return null;
-    var params_buf = std.ArrayList([]const u8){};
+    var params_buf: std.ArrayList([]const u8) = .empty;
     defer params_buf.deinit(alloc);
     const inner_trim = trimSpaces(inner);
     if (!(inner_trim.len == 0 or std.mem.eql(u8, inner_trim, "void"))) {
@@ -2653,7 +3573,7 @@ fn parseAndWriteWrapper(alloc: std.mem.Allocator, stmt_in: []const u8) !?[]const
         }
     }
 
-    var output = std.ArrayList(u8){};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(alloc);
 
     const wrap_start = try std.fmt.allocPrint(alloc, "wrap @{s}(", .{name});
@@ -2682,13 +3602,16 @@ fn generateWrapperFromHeader(alloc: std.mem.Allocator, header_path: []const u8, 
     defer arena.deinit();
     const a = arena.allocator();
     const header_src = try read_file(header_path);
+    defer allocator.free(header_src);
     const cleaned = try stripCommentsAndPreproc(a, header_src);
     var stmts = try collectStatements(a, cleaned);
     defer stmts.deinit(a);
-    var file = try std.fs.cwd().createFile(out_path, .{ .truncate = true });
-    defer file.close();
+    var file = try std.Io.Dir.cwd().createFile(process_io, out_path, .{ .truncate = true });
+    defer file.close(process_io);
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(process_io, &file_buffer);
     const header_comment = try std.fmt.allocPrint(a, "// Auto-generated by zlang wrap from: {s}\n", .{header_path});
-    try file.writeAll(header_comment);
+    try file_writer.interface.writeAll(header_comment);
     for (stmts.items) |stmt| {
         const maybe_wrapper_str = parseAndWriteWrapper(a, stmt) catch |e| {
             switch (e) {
@@ -2696,14 +3619,27 @@ fn generateWrapperFromHeader(alloc: std.mem.Allocator, header_path: []const u8, 
             }
         };
         if (maybe_wrapper_str) |wrapper_str| {
-            try file.writeAll(wrapper_str);
+            try file_writer.interface.writeAll(wrapper_str);
             a.free(wrapper_str);
         }
     }
+    try file_writer.interface.flush();
 }
-pub fn main() !u8 {
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+pub fn main(init: std.process.Init) !u8 {
+    process_io = init.io;
+
+    var arg_it = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
+    defer arg_it.deinit();
+
+    var args_list: std.ArrayList([:0]u8) = .empty;
+    defer {
+        for (args_list.items) |arg| allocator.free(arg);
+        args_list.deinit(allocator);
+    }
+    while (arg_it.next()) |arg| {
+        try args_list.append(allocator, try allocator.dupeZ(u8, arg));
+    }
+    const args = args_list.items;
     if (args.len < 2) {
         help.printHelp();
         return 1;
@@ -2713,12 +3649,23 @@ pub fn main() !u8 {
             help.printHelpSyntax();
         } else {
             help.printHelp();
+            var plugin_host = zlx_host.Host.init(allocator);
+            defer plugin_host.deinit();
+            _ = zlx_runtime.loadAllInstalled(allocator, process_io, &plugin_host) catch {};
+            zlx_runtime.printPluginExtensions(&plugin_host);
         }
+        return 0;
+    }
+    if (std.mem.eql(u8, args[1], "-version") or std.mem.eql(u8, args[1], "--version") or std.mem.eql(u8, args[1], "version")) {
+        printVersionInfo();
         return 0;
     }
     if (std.mem.eql(u8, args[1], "zli")) {
         const zli_args = if (args.len > 2) args[2..] else args[args.len..args.len];
         return runZli(zli_args, allocator);
+    }
+    if (try zlx_commands.handle(args, allocator, process_io)) |exit_code| {
+        return exit_code;
     }
     if (std.mem.eql(u8, args[1], "wrap") or std.mem.eql(u8, args[1], "wrap-clang")) {
         const use_clang = std.mem.eql(u8, args[1], "wrap-clang");
@@ -2794,43 +3741,287 @@ pub fn main() !u8 {
     };
     defer ctx.deinit(allocator);
 
-    const total_start = std.time.nanoTimestamp();
+    var plugin_host = zlx_host.Host.init(allocator);
+    defer plugin_host.deinit();
+    plugin_host.setCliArgs(ctx.extra_args.items) catch {};
+    if (!ctx.no_extensions) {
+        _ = zlx_runtime.loadAllInstalled(allocator, process_io, &plugin_host) catch {};
+        plugin_host_ptr = &plugin_host;
+    } else if (!ctx.isolated) {
+        zlx_runtime.loadManifestModulesOnly(allocator, process_io, &plugin_host) catch {};
+        plugin_host_ptr = &plugin_host;
+    }
+    defer plugin_host_ptr = null;
+    if (ctx.verbose and !ctx.quiet and ctx.no_extensions) {
+        if (ctx.isolated) {
+            std.debug.print("zlx: isolated mode, plugins and extension modules disabled\n", .{});
+        } else {
+            std.debug.print("zlx: -no-extensions, native plugins disabled\n", .{});
+        }
+    }
+
+    // Reclassify link objects whose extension is claimed by a loaded plugin's
+    // registered file extension: move them from link_objects to input_files so
+    // the file-extension dispatch below can hand them to the owning plugin.
+    if (plugin_host.file_extensions.items.len != 0) {
+        var li: usize = 0;
+        while (li < ctx.link_objects.items.len) {
+            const obj = ctx.link_objects.items[li];
+            var claimed = false;
+            for (plugin_host.file_extensions.items) |reg| {
+                if (std.mem.endsWith(u8, obj, reg.extension)) {
+                    claimed = true;
+                    break;
+                }
+            }
+            if (claimed) {
+                _ = ctx.link_objects.orderedRemove(li);
+                try ctx.input_files.append(allocator, obj);
+            } else li += 1;
+        }
+    }
+
+    plugin_module_paths = .init(allocator);
+    if (zlx_store.Store.init(allocator)) |store| {
+        var st = store;
+        defer st.deinit(allocator);
+        for (plugin_host.modules.items) |entry| {
+            const owner = entry.owner orelse continue;
+            const modules_root = st.pluginModulesDir(allocator, owner) catch continue;
+            defer allocator.free(modules_root);
+            const abs = std.fs.path.join(allocator, &.{ modules_root, entry.path }) catch continue;
+            errdefer allocator.free(abs);
+            std.Io.Dir.cwd().access(process_io, abs, .{}) catch {
+                allocator.free(abs);
+                continue;
+            };
+            const name_owned = allocator.dupe(u8, entry.name) catch {
+                allocator.free(abs);
+                continue;
+            };
+            _ = plugin_module_paths.?.put(name_owned, abs) catch {
+                allocator.free(name_owned);
+                allocator.free(abs);
+            };
+        }
+    } else |_| {}
+    defer if (plugin_module_paths) |*map| {
+        var it = map.iterator();
+        while (it.next()) |e| {
+            allocator.free(e.key_ptr.*);
+            allocator.free(e.value_ptr.*);
+        }
+        map.deinit();
+        plugin_module_paths = null;
+    };
+    {
+        var ei: usize = 0;
+        while (ei < ctx.extra_args.items.len) {
+            const arg = ctx.extra_args.items[ei];
+            var matched_flag: ?[]const u8 = null;
+            for (plugin_host.cli_flags.items) |flag| {
+                if (std.mem.eql(u8, flag.name, arg) or
+                    (arg.len > flag.name.len and arg[flag.name.len] == '=' and std.mem.eql(u8, flag.name, arg[0..flag.name.len])))
+                {
+                    matched_flag = flag.name;
+                    break;
+                }
+            }
+            if (matched_flag) |flag_name| {
+                try ctx.plugin_flags.append(allocator, try allocator.dupe(u8, flag_name));
+                _ = ctx.extra_args.orderedRemove(ei);
+            } else {
+                ei += 1;
+            }
+        }
+    }
+    var used_owners: std.StringHashMap(void) = .init(allocator);
+    defer used_owners.deinit();
+    for (ctx.plugin_flags.items) |used_flag| {
+        for (plugin_host.cli_flags.items) |flag| {
+            if (!std.mem.eql(u8, flag.name, used_flag)) continue;
+            if (flag.owner) |o| _ = used_owners.put(o, {}) catch {};
+        }
+    }
+    if (zlx_runtime.scanUseImports(allocator, process_io, ctx.input_files.items)) |imports_const| {
+        var imports = imports_const;
+        defer zlx_runtime.freeUseImports(allocator, &imports);
+        for (plugin_host.modules.items) |mod| {
+            if (!imports.contains(mod.name)) continue;
+            if (mod.owner) |o| _ = used_owners.put(o, {}) catch {};
+        }
+    } else |_| {}
+    var injected_link_flags: usize = 0;
+    for (plugin_host.link_flags.items) |entry| {
+        const owner = entry.owner orelse continue;
+        if (!used_owners.contains(owner)) continue;
+        const flag_copy = utils.dupe(u8, allocator, entry.flag);
+        if (!containsString(ctx.extra_args.items, flag_copy)) {
+            try ctx.extra_args.append(allocator, flag_copy);
+            injected_link_flags += 1;
+        } else {
+            allocator.free(flag_copy);
+        }
+    }
+    if (ctx.verbose and !ctx.quiet) {
+        if (ctx.plugin_flags.items.len != 0) {
+            std.debug.print("zlx: consumed {d} plugin CLI flag(s)\n", .{ctx.plugin_flags.items.len});
+        }
+        if (injected_link_flags != 0) {
+            std.debug.print("zlx: activated {d} plugin link flag(s)\n", .{injected_link_flags});
+        }
+    }
+
+    var zlx_session_started = false;
+    if (plugin_host_ptr) |host| {
+        host.clearDiagnostics();
+        host.sessionBegin();
+        zlx_session_started = true;
+    }
+    defer if (zlx_session_started) {
+        plugin_host.sessionEnd();
+        printPluginDiagnostics(allocator, &plugin_host);
+    };
+
+    var prebuilt_llvm_ir: std.ArrayList([]const u8) = .empty;
+    defer prebuilt_llvm_ir.deinit(allocator);
+    {
+        var want_continue: c_int = 0;
+        var ext_handler_fired = false;
+        for (ctx.extra_args.items) |a| if (std.mem.eql(u8, a, "-c")) { want_continue = 1; };
+
+        var write_idx: usize = 0;
+        var i: usize = 0;
+        while (i < ctx.input_files.items.len) : (i += 1) {
+            const path = ctx.input_files.items[i];
+            var matched: ?zlx_abi.FileExtensionHandler = null;
+            for (plugin_host.file_extensions.items) |reg| {
+                if (std.mem.endsWith(u8, path, reg.extension)) { matched = reg.handler; break; }
+            }
+            if (matched) |handler| {
+                const in_z = allocator.dupeZ(u8, path) catch {
+                    ctx.input_files.items[write_idx] = path;
+                    write_idx += 1;
+                    continue;
+                };
+                defer allocator.free(in_z);
+                const out_z: ?[:0]u8 = if (ctx.output.len != 0) (allocator.dupeZ(u8, ctx.output) catch null) else null;
+                defer if (out_z) |o| allocator.free(o);
+                const req = zlx_abi.FileExtensionRequest{
+                    .input_path = in_z.ptr,
+                    .output_path = if (out_z) |o| o.ptr else null,
+                    .want_continue = want_continue,
+                };
+                var result = zlx_abi.FileExtensionResult{ .continue_path = null, .llvm_ir_path = null };
+                const rc = handler(&plugin_host.api, &req, &result);
+                if (rc != 0) {
+                    std.debug.print("zlx: file extension handler failed for {s} (rc={d})\n", .{ path, rc });
+                    return 1;
+                }
+                ext_handler_fired = true;
+                if (result.llvm_ir_path) |lp| {
+                    const owned = allocator.dupe(u8, std.mem.span(lp)) catch {
+                        ctx.input_files.items[write_idx] = path;
+                        write_idx += 1;
+                        continue;
+                    };
+                    prebuilt_llvm_ir.append(allocator, owned) catch {};
+                    continue;
+                }
+                if (result.continue_path) |cp| {
+                    const owned = allocator.dupe(u8, std.mem.span(cp)) catch {
+                        ctx.input_files.items[write_idx] = path;
+                        write_idx += 1;
+                        continue;
+                    };
+                    ctx.input_files.items[write_idx] = owned;
+                    write_idx += 1;
+                }
+                continue;
+            }
+            ctx.input_files.items[write_idx] = path;
+            write_idx += 1;
+        }
+        ctx.input_files.shrinkRetainingCapacity(write_idx);
+        if (ext_handler_fired and want_continue == 1) {
+            var j: usize = 0;
+            while (j < ctx.extra_args.items.len) {
+                if (std.mem.eql(u8, ctx.extra_args.items[j], "-c")) {
+                    _ = ctx.extra_args.orderedRemove(j);
+                } else j += 1;
+            }
+            if (std.mem.eql(u8, ctx.output, "output.o")) ctx.output = "a.out";
+        }
+        if (ctx.input_files.items.len == 0 and prebuilt_llvm_ir.items.len > 0) {
+            return compilePrebuiltLLVMIR(allocator, &ctx, prebuilt_llvm_ir.items) catch |err| blk: {
+                std.debug.print("Error compiling pre-built LLVM IR: {}\n", .{err});
+                break :blk 1;
+            };
+        }
+        if (ctx.input_files.items.len == 0) return 0;
+    }
+
+    if (plugin_host.syntax_blocks.items.len != 0) {
+        clearZlxSourceMaps(allocator);
+        var total_expansions: usize = 0;
+        for (ctx.input_files.items, 0..) |path, idx| {
+            if (expandPathIfNeeded(path, idx, allocator)) |maybe| {
+                if (maybe) |rewritten| {
+                    ctx.input_files.items[idx] = rewritten.path;
+                    total_expansions += rewritten.expansions;
+                }
+            } else |err| {
+                std.debug.print("zlx: extension block expansion failed for {s}: {s}\n", .{ path, @errorName(err) });
+                return 1;
+            }
+        }
+        if (ctx.verbose and !ctx.quiet and total_expansions != 0) {
+            std.debug.print("zlx: expanded {d} extension block(s)\n", .{total_expansions});
+        }
+    }
+
+    const total_start = nanoTimestamp();
     var stats = CompilationStats{
         .parse_time_ns = 0,
+        .parse_load_time_ns = 0,
+        .parse_std_time_ns = 0,
+        .parse_resolve_time_ns = 0,
+        .parse_rewrite_time_ns = 0,
+        .parse_merge_time_ns = 0,
         .codegen_time_ns = 0,
+        .backend_time_ns = 0,
+        .backend_prepare_time_ns = 0,
+        .backend_split_time_ns = 0,
+        .backend_wall_time_ns = 0,
+        .backend_cpu_sum_time_ns = 0,
+        .backend_units = 0,
+        .backend_unit_max_time_ns = 0,
+        .backend_unit_min_time_ns = 0,
         .link_time_ns = 0,
         .total_time_ns = 0,
         .lines_of_code = 0,
         .memory_peak_kb = 0,
+        .llvm_link_version_major = build_options.llvm_version_major,
+        .llc_version_major = 0,
+        .opt_version_major = 0,
+        .clang_version_major = 0,
+        .lld_version_major = 0,
+        .link_backend = .unknown,
     };
 
-    if (ctx.brainfuck_mode) {
-        if (ctx.input_files.items.len == 0) {
-            std.debug.print("Error: No input file specified for brainfuck mode\n", .{});
-            return 1;
-        }
-        const input_file = ctx.input_files.items[0];
-        const has_valid_ext = std.mem.endsWith(u8, input_file, ".b") or std.mem.endsWith(u8, input_file, ".bf");
-        if (!has_valid_ext) {
-            std.debug.print("Error: Brainfuck mode requires input file with .b or .bf extension\n", .{});
-            return 1;
-        }
-        const result = compileBrainfuck(&ctx, allocator);
-        if (ctx.stats) {
-            stats.total_time_ns = @intCast(std.time.nanoTimestamp() - total_start);
-            std.debug.print("\n", .{});
-            printStats(stats);
-        }
-        return result;
-    }
-
-    const parse_start = std.time.nanoTimestamp();
-    var ast_root = parseMultiFile(&ctx, allocator) catch {
+    const parse_start = nanoTimestamp();
+    var parse_timing = ParseTiming{};
+    var ast_root = parseMultiFile(&ctx, allocator, &parse_timing) catch {
         return 1;
     };
     emitUnknownDefineOverrideWarnings(&ctx);
-    const parse_end = std.time.nanoTimestamp();
+    const parse_end = nanoTimestamp();
     stats.parse_time_ns = @intCast(parse_end - parse_start);
+    stats.parse_load_time_ns = parse_timing.load_time_ns;
+    stats.parse_std_time_ns = parse_timing.std_time_ns;
+    stats.parse_resolve_time_ns = parse_timing.resolve_time_ns;
+    stats.parse_rewrite_time_ns = parse_timing.rewrite_time_ns;
+    stats.parse_merge_time_ns = parse_timing.merge_time_ns;
 
     defer ast_root.deinit();
     if (ctx.show_ast) {
@@ -2838,19 +4029,37 @@ pub fn main() !u8 {
     }
 
     if (ctx.stats) {
-        for (ctx.input_files.items) |input_file| {
-            const input = read_file(input_file) catch continue;
-            var line_count: usize = 0;
-            var it = std.mem.splitScalar(u8, input, '\n');
-            while (it.next()) |_| {
-                line_count += 1;
+        if (ctx.module_registrations.items.len > 0) {
+            for (ctx.module_registrations.items) |entry| {
+                stats.lines_of_code += entry.line_count;
             }
-            stats.lines_of_code += line_count;
+        } else {
+            for (ctx.input_files.items) |input_file| {
+                const input = read_file(input_file) catch continue;
+                defer allocator.free(input);
+                stats.lines_of_code += countLinesInText(input);
+            }
         }
     }
 
     const semantic_file_path = if (ctx.input_files.items.len > 0) ctx.input_files.items[0] else "<input>";
-    semantic.analyzeProgram(allocator, ast_root.getRoot(), semantic_file_path) catch |err| {
+    var semantic_function_file_paths = std.StringHashMap([]const u8).init(allocator);
+    defer semantic_function_file_paths.deinit();
+    var semantic_global_file_paths = std.StringHashMap([]const u8).init(allocator);
+    defer semantic_global_file_paths.deinit();
+
+    for (ctx.function_module_bindings.items) |binding| {
+        if (modulePathByName(ctx.module_registrations.items, binding.module_name)) |module_path| {
+            try semantic_function_file_paths.put(binding.symbol_name, module_path);
+        }
+    }
+    for (ctx.global_module_bindings.items) |binding| {
+        if (modulePathByName(ctx.module_registrations.items, binding.module_name)) |module_path| {
+            try semantic_global_file_paths.put(binding.symbol_name, module_path);
+        }
+    }
+
+    semantic.analyzeProgramWithSourceMaps(allocator, ast_root.getRoot(), semantic_file_path, &semantic_function_file_paths, &semantic_global_file_paths) catch |err| {
         const error_msg = switch (err) {
             error.SemanticFailed => "Semantic analysis failed.",
             error.OutOfMemory => "Out of memory during semantic analysis.",
@@ -2858,8 +4067,7 @@ pub fn main() !u8 {
         std.debug.print("{s}\n", .{error_msg});
         return 1;
     };
-
-    const codegen_start = std.time.nanoTimestamp();
+    const codegen_start = nanoTimestamp();
     var code_generator = codegen.CodeGenerator.init(allocator) catch |err| {
         const error_msg = switch (err) {
             error.ModuleCreationFailed => "Failed to create LLVM module.",
@@ -2871,19 +4079,86 @@ pub fn main() !u8 {
         return 1;
     };
 
+    code_generator.optimize_enabled = ctx.optimize;
     defer code_generator.deinit();
+
+    for (ctx.module_registrations.items) |entry| {
+        try code_generator.registerModule(entry.module_name, entry.module_path, entry.dependencies.items);
+    }
+    for (ctx.function_module_bindings.items) |entry| {
+        try code_generator.registerFunctionModule(entry.symbol_name, entry.module_name);
+    }
+    for (ctx.global_module_bindings.items) |entry| {
+        try code_generator.registerGlobalModule(entry.symbol_name, entry.module_name);
+    }
+
     code_generator.generateCode(ast_root.getRoot()) catch |err| {
+        if (err == error.TypeMismatch and code_generator.emitted_error) {
+            return 1;
+        }
+        var owned_error_msg: ?[]u8 = null;
         const error_msg = switch (err) {
             error.FunctionCreationFailed => "Failed to create function.",
-            error.TypeMismatch => "Type mismatch in code generation.",
+            error.TypeMismatch => blk: {
+                if (code_generator.current_line > 0) {
+                    const file_path = code_generator.module_manager.getCurrentModulePath();
+                    const diag_msg = if (code_generator.current_token_text) |tok|
+                        std.fmt.allocPrint(allocator, "Type mismatch near '{s}'", .{tok}) catch null
+                    else
+                        std.fmt.allocPrint(allocator, "Type mismatch in code generation", .{}) catch null;
+                    if (diag_msg) |msg| {
+                        defer allocator.free(msg);
+                        diagnostics.printDiagnostic(allocator, .{
+                            .file_path = file_path,
+                            .line = code_generator.current_line,
+                            .column = if (code_generator.current_column > 0) code_generator.current_column else 1,
+                            .message = msg,
+                            .severity = .Error,
+                            .hint = "Check operand and assignment types",
+                            .token_text = code_generator.current_token_text,
+                        });
+                        break :blk "Type mismatch in code generation.";
+                    }
+                }
+                break :blk "Type mismatch in code generation.";
+            },
             error.NullNotAllowedInNonPointerType => "Null can only be assigned to pointer types. Cannot assign null to non-pointer type.",
             error.UndefinedFunction => "Undefined function called.",
-            error.UndefinedVariable => "Undefined variable used.",
-            error.UnsupportedOperation => "Unsupported operator used",
+            error.UndefinedVariable => blk: {
+                if (code_generator.current_line > 0) {
+                    owned_error_msg = std.fmt.allocPrint(allocator, "Undefined variable used at line {d}.", .{code_generator.current_line}) catch null;
+                    if (owned_error_msg) |msg| break :blk msg;
+                }
+                break :blk "Undefined variable used.";
+            },
+            error.UnsupportedOperation => blk: {
+                if (code_generator.current_line > 0) {
+                    const file_path = code_generator.module_manager.getCurrentModulePath();
+                    const diag_msg = if (code_generator.current_token_text) |tok|
+                        std.fmt.allocPrint(allocator, "Unsupported operator near '{s}'", .{tok}) catch null
+                    else
+                        std.fmt.allocPrint(allocator, "Unsupported operator used", .{}) catch null;
+                    if (diag_msg) |msg| {
+                        defer allocator.free(msg);
+                        diagnostics.printDiagnostic(allocator, .{
+                            .file_path = file_path,
+                            .line = code_generator.current_line,
+                            .column = if (code_generator.current_column > 0) code_generator.current_column else 1,
+                            .message = msg,
+                            .severity = .Error,
+                            .hint = "Operator is not supported for these operand types",
+                            .token_text = code_generator.current_token_text,
+                        });
+                        break :blk "Unsupported operator used";
+                    }
+                }
+                break :blk "Unsupported operator used";
+            },
             error.OutOfMemory => "Out of memory during code generation.",
             error.RedeclaredVariable => "Variable reinitialization",
             else => "Unknown code generation error.",
         };
+        defer if (owned_error_msg) |msg| allocator.free(msg);
         std.debug.print("Error generating code: {s}\n", .{error_msg});
         return 1;
     };
@@ -2907,7 +4182,15 @@ pub fn main() !u8 {
             code_generator.template_substitutions = old_subs;
         }
     }
-    const codegen_end = std.time.nanoTimestamp();
+
+    if (!ctx.optimize or ctx.verify_ir) {
+        code_generator.verifyModule() catch {
+            std.debug.print("Error: generated LLVM IR failed verification\n", .{});
+            return 1;
+        };
+    }
+
+    const codegen_end = nanoTimestamp();
     stats.codegen_time_ns = @intCast(codegen_end - codegen_start);
 
     if (ctx.run_mode) {
@@ -2917,13 +4200,20 @@ pub fn main() !u8 {
             return 1;
         }
 
-        const ir_file = code_generator.emitLLVMIR("__zlang_run_temp", ctx.optimize) catch |err| {
+        const run_nonce: u64 = @intCast(nanoTimestamp());
+        const run_temp_base = std.fmt.allocPrint(allocator, "__zlang_run_temp_{d}_{d}", .{ nanoTimestamp(), run_nonce }) catch {
+            std.debug.print("Error preparing temporary run file name\n", .{});
+            return 1;
+        };
+        defer allocator.free(run_temp_base);
+
+        const ir_file = code_generator.emitLLVMIR(run_temp_base, ctx.optimize) catch |err| {
             std.debug.print("Error emitting LLVM IR: {}\n", .{err});
             return 1;
         };
         defer {
             if (!ctx.keepll) {
-                std.fs.cwd().deleteFile(ir_file) catch {};
+                std.Io.Dir.cwd().deleteFile(process_io, ir_file) catch {};
             }
             allocator.free(ir_file);
         }
@@ -2938,47 +4228,157 @@ pub fn main() !u8 {
         };
 
         if (ctx.stats) {
-            stats.total_time_ns = @intCast(std.time.nanoTimestamp() - total_start);
+            stats.total_time_ns = @intCast(nanoTimestamp() - total_start);
             std.debug.print("\n", .{});
             printStats(stats);
         }
         return exit_code;
     } else {
-        const link_start = std.time.nanoTimestamp();
-        code_generator.compileToExecutable(ctx.output, ctx.arch, ctx.link_objects.items, ctx.keepll, ctx.optimize, ctx.extra_args.items) catch |err| {
-            std.debug.print("Error compiling to executable: {}\n", .{err});
+        var backend_timing = codegen.CodeGenerator.BackendTiming{};
+        const backend_prepare_start = nanoTimestamp();
+        var backend_units: std.ArrayList(BackendUnit) = .empty;
+        defer backend_units.deinit(allocator);
+
+        const backend_nonce: u64 = @intCast(nanoTimestamp());
+        const backend_temp_base = std.fmt.allocPrint(allocator, "{s}.tmp.{d}.{d}", .{ ctx.output, nanoTimestamp(), backend_nonce }) catch {
+            std.debug.print("Error preparing backend temporary prefix\n", .{});
             return 1;
         };
-        const link_end = std.time.nanoTimestamp();
-        stats.link_time_ns = @intCast(link_end - link_start);
-        stats.total_time_ns = @intCast(std.time.nanoTimestamp() - total_start);
+        defer allocator.free(backend_temp_base);
+
+        const primary_bc_file = std.fmt.allocPrint(allocator, "{s}.bc", .{backend_temp_base}) catch {
+            std.debug.print("Error preparing backend bitcode path\n", .{});
+            return 1;
+        };
+        errdefer allocator.free(primary_bc_file);
+
+        code_generator.writeBitcodeToFile(primary_bc_file) catch |err| {
+            std.debug.print("Error writing LLVM bitcode: {}\n", .{err});
+            return 1;
+        };
+
+        if (ctx.keepll) {
+            const kept_ll_file = std.fmt.allocPrint(allocator, "{s}.ll", .{ctx.output}) catch {
+                std.debug.print("Error preparing kept LLVM IR path\n", .{});
+                return 1;
+            };
+            defer allocator.free(kept_ll_file);
+            code_generator.writeToFile(kept_ll_file) catch |err| {
+                std.debug.print("Error writing LLVM IR: {}\n", .{err});
+                return 1;
+            };
+        }
+
+        var split_unit_paths: std.ArrayList([]const u8) = .empty;
+        defer split_unit_paths.deinit(allocator);
+
+        const split_prefix = std.fmt.allocPrint(allocator, "{s}.unit.bc", .{backend_temp_base}) catch {
+            std.debug.print("Error preparing split prefix\n", .{});
+            return 1;
+        };
+        defer allocator.free(split_prefix);
+
+        const split_start = nanoTimestamp();
+        const split_success = code_generator.splitBitcodeIntoUnits(primary_bc_file, split_prefix, backendSplitUnitCount(ctx.max_threads), ctx.arch, &split_unit_paths) catch false;
+        const split_end = nanoTimestamp();
+        stats.backend_split_time_ns = @intCast(split_end - split_start);
+
+        if (split_success) {
+            for (split_unit_paths.items) |unit_bc| {
+                const unit_obj = std.fmt.allocPrint(allocator, "{s}.o", .{unit_bc}) catch {
+                    std.debug.print("Error preparing split object path\n", .{});
+                    return 1;
+                };
+                try backend_units.append(allocator, .{
+                    .ir_file = unit_bc,
+                    .obj_file = unit_obj,
+                    .keep_ir = false,
+                });
+            }
+            std.Io.Dir.cwd().deleteFile(process_io, primary_bc_file) catch {};
+            allocator.free(primary_bc_file);
+        } else {
+            const primary_obj_file = std.fmt.allocPrint(allocator, "{s}.o", .{backend_temp_base}) catch {
+                std.debug.print("Error preparing backend object path\n", .{});
+                return 1;
+            };
+            try backend_units.append(allocator, .{
+                .ir_file = primary_bc_file,
+                .obj_file = primary_obj_file,
+                .keep_ir = false,
+            });
+        }
+
+        defer {
+            cleanupBackendUnits(backend_units.items);
+            for (backend_units.items) |unit| {
+                allocator.free(unit.ir_file);
+                allocator.free(unit.obj_file);
+            }
+        }
+
+        var generated_objects: std.ArrayList([]const u8) = .empty;
+        defer generated_objects.deinit(allocator);
+        for (backend_units.items) |unit| {
+            try generated_objects.append(allocator, unit.obj_file);
+        }
+
+        var object_tasks = try allocator.alloc(BackendObjectTask, generated_objects.items.len);
+        defer allocator.free(object_tasks);
+        const llc_task_threads: usize = if (generated_objects.items.len > 1) 1 else ctx.max_threads;
+        for (generated_objects.items, 0..) |obj_file, i| {
+            object_tasks[i] = .{
+                .cg = &code_generator,
+                .ir_file = backend_units.items[i].ir_file,
+                .obj_file = obj_file,
+                .arch = ctx.arch,
+                .optimize = ctx.optimize,
+                .max_threads = llc_task_threads,
+            };
+        }
+        stats.backend_prepare_time_ns = @intCast(nanoTimestamp() - backend_prepare_start);
+
+        const backend_compile_start = nanoTimestamp();
+        backend_timing.llc_time_ns = compileBackendObjects(object_tasks, ctx.max_threads, allocator) catch |err| {
+            std.debug.print("Error compiling IR to object: {}\n", .{err});
+            return 1;
+        };
+        const backend_compile_end = nanoTimestamp();
+
+        var unit_max: u64 = 0;
+        var unit_min: u64 = 0;
+        if (object_tasks.len > 0) {
+            unit_min = object_tasks[0].llc_time_ns;
+            for (object_tasks) |task| {
+                if (task.llc_time_ns > unit_max) unit_max = task.llc_time_ns;
+                if (task.llc_time_ns < unit_min) unit_min = task.llc_time_ns;
+            }
+        }
+
+        code_generator.linkObjectFilesToExecutable(ctx.output, ctx.arch, generated_objects.items, ctx.link_objects.items, ctx.extra_args.items, ctx.max_threads, &backend_timing) catch |err| {
+            std.debug.print("Error linking executable: {}\n", .{err});
+            return 1;
+        };
+        stats.backend_time_ns = backend_timing.opt_time_ns + backend_timing.llc_time_ns;
+        stats.backend_wall_time_ns = @intCast(backend_compile_end - backend_compile_start);
+        stats.backend_cpu_sum_time_ns = backend_timing.llc_time_ns;
+        stats.backend_units = generated_objects.items.len;
+        stats.backend_unit_max_time_ns = unit_max;
+        stats.backend_unit_min_time_ns = unit_min;
+        stats.link_time_ns = backend_timing.link_time_ns;
+        stats.llc_version_major = backend_timing.llc_version_major;
+        stats.opt_version_major = backend_timing.opt_version_major;
+        stats.clang_version_major = backend_timing.clang_version_major;
+        stats.lld_version_major = backend_timing.lld_version_major;
+        stats.link_backend = backend_timing.link_backend;
+        stats.total_time_ns = @intCast(nanoTimestamp() - total_start);
 
         if (ctx.verbose and !ctx.quiet) {
             std.debug.print("Executable compiled to {s}\n", .{ctx.output});
         }
 
         if (ctx.stats) {
-            if (builtin.os.tag == .linux) {
-                const stat_file = "/proc/self/status";
-                const file = std.fs.cwd().openFile(stat_file, .{}) catch null;
-                if (file) |f| {
-                    defer f.close();
-                    var buffer: [4096]u8 = undefined;
-                    const bytes_read = f.readAll(&buffer) catch 0;
-                    const content = buffer[0..bytes_read];
-                    var lines = std.mem.splitScalar(u8, content, '\n');
-                    while (lines.next()) |line| {
-                        if (std.mem.startsWith(u8, line, "VmPeak:")) {
-                            var it = std.mem.splitScalar(u8, line, ' ');
-                            _ = it.next();
-                            if (it.next()) |kb_str| {
-                                stats.memory_peak_kb = std.fmt.parseInt(usize, kb_str, 10) catch 0;
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
+            stats.memory_peak_kb = readMemoryPeakKb();
             std.debug.print("\n", .{});
             printStats(stats);
         }

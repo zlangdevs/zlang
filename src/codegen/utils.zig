@@ -183,7 +183,11 @@ pub fn getDefaultValueForType(cg: *codegen.CodeGenerator, type_name: []const u8)
         }
         return c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0);
     }
-    return c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0);
+    if (getLLVMTypeSilent(cg, type_name)) |llvm_type| {
+        return c.LLVMConstNull(llvm_type);
+    } else |_| {
+        return c.LLVMConstInt(c.LLVMInt32TypeInContext(@ptrCast(cg.context)), 0, 0);
+    }
 }
 
 pub fn isConstPointer(type_name: []const u8) bool {
@@ -232,7 +236,7 @@ pub fn getLLVMFunctionType(self: *codegen.CodeGenerator, sig: []const u8) errors
 
     const ret_part = std.mem.trim(u8, sig[0..lp], " \t");
     const args_part_full = sig[lp + 1 .. rp];
-    var args_list = std.ArrayList(c.LLVMTypeRef){};
+    var args_list: std.ArrayList(c.LLVMTypeRef) = .empty;
     defer args_list.deinit(self.allocator);
     var it = std.mem.tokenizeAny(u8, args_part_full, ",");
     var is_vararg_llvm: c.LLVMBool = 0;
@@ -319,7 +323,7 @@ fn getLLVMTypeInternal(self: *codegen.CodeGenerator, type_name: []const u8, verb
         try self.struct_types.put(type_name_dupe, @ptrCast(struct_type));
 
         // Register dummy declaration so field access works
-        var fields = std.ArrayList(ast.StructField){};
+        var fields: std.ArrayList(ast.StructField) = .empty;
         const ptr_type_name = try std.fmt.allocPrint(self.allocator, "ptr<{s}>", .{element_type_name});
         try fields.append(self.allocator, ast.StructField{ .name = "ptr", .type_name = ptr_type_name, .default_value = null });
         try fields.append(self.allocator, ast.StructField{ .name = "len", .type_name = "i64", .default_value = null });
@@ -433,6 +437,14 @@ pub fn isUnsignedType(type_name: []const u8) bool {
     return std.mem.startsWith(u8, type_name, "u") or std.mem.eql(u8, type_name, "bool");
 }
 
+pub fn isIntPrimitive(type_name: []const u8) bool {
+    const ints = [_][]const u8{ "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64" };
+    for (ints) |t| {
+        if (std.mem.eql(u8, t, type_name)) return true;
+    }
+    return false;
+}
+
 pub fn isFloatType(type_name: []const u8) bool {
     return std.mem.eql(u8, type_name, "f16") or
         std.mem.eql(u8, type_name, "f32") or
@@ -527,6 +539,10 @@ pub fn getStructSizeBytes(cg: *codegen.CodeGenerator, struct_type: c.LLVMTypeRef
 
 pub fn shouldUseByVal(cg: *codegen.CodeGenerator, struct_type: c.LLVMTypeRef) bool {
     return getStructSizeBytes(cg, struct_type) > 16;
+}
+
+pub fn shouldAttachByValAttr(cg: *codegen.CodeGenerator, struct_type: c.LLVMTypeRef) bool {
+    return getStructSizeBytes(cg, struct_type) <= 512;
 }
 
 pub fn isByValType(cg: *codegen.CodeGenerator, type_name: []const u8) bool {

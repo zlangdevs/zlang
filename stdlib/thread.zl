@@ -1,0 +1,80 @@
+module std.thread;
+
+struct Thread {
+    id u64,
+}
+
+?? pthread_mutex_t is 40 bytes on x86_64 glibc
+struct Mutex {
+    raw arr<u64, 5>,
+}
+
+?? pthread_cond_t is 48 bytes on x86_64 glibc
+struct CondVar {
+    raw arr<u64, 6>,
+}
+
+wrap @pthread_create(thread: ptr<u64>, attr: ptr<void>, start_routine: ptr<ptr<void>(ptr<void>)>, arg: ptr<void>) >> i32;
+wrap @pthread_join(thread: u64, retval: ptr<ptr<void>>) >> i32;
+wrap @pthread_detach(thread: u64) >> i32;
+
+wrap @pthread_mutex_init(mutex: ptr<Mutex>, attr: ptr<void>) >> i32;
+wrap @pthread_mutex_destroy(mutex: ptr<Mutex>) >> i32;
+wrap @pthread_mutex_lock(mutex: ptr<Mutex>) >> i32;
+wrap @pthread_mutex_unlock(mutex: ptr<Mutex>) >> i32;
+
+wrap @pthread_cond_init(cond: ptr<CondVar>, attr: ptr<void>) >> i32;
+wrap @pthread_cond_destroy(cond: ptr<CondVar>) >> i32;
+wrap @pthread_cond_wait(cond: ptr<CondVar>, mutex: ptr<Mutex>) >> i32;
+wrap @pthread_cond_signal(cond: ptr<CondVar>) >> i32;
+wrap @pthread_cond_broadcast(cond: ptr<CondVar>) >> i32;
+
+fun threadCreate(out_thread: ptr<Thread>, entry: ptr<ptr<void>(ptr<void>)>, arg: ptr<void>) >> bool {
+    i32 rc = @pthread_create(&out_thread.id, null, entry, arg);
+    return rc == 0;
+}
+
+fun threadJoin(thread: Thread) >> bool {
+    ptr<void> retval = null;
+    return @pthread_join(thread.id, &retval) == 0;
+}
+
+fun threadDetach(thread: Thread) >> bool {
+    return @pthread_detach(thread.id) == 0;
+}
+
+fun mutexInit(mutex: ptr<Mutex>) >> bool {
+    return @pthread_mutex_init(mutex, null) == 0;
+}
+
+fun mutexDestroy(mutex: ptr<Mutex>) >> bool {
+    return @pthread_mutex_destroy(mutex) == 0;
+}
+
+fun mutexLock(mutex: ptr<Mutex>) >> bool {
+    return @pthread_mutex_lock(mutex) == 0;
+}
+
+fun mutexUnlock(mutex: ptr<Mutex>) >> bool {
+    return @pthread_mutex_unlock(mutex) == 0;
+}
+
+fun condInit(cond: ptr<CondVar>) >> bool {
+    return @pthread_cond_init(cond, null) == 0;
+}
+
+fun condDestroy(cond: ptr<CondVar>) >> bool {
+    return @pthread_cond_destroy(cond) == 0;
+}
+
+fun condWait(cond: ptr<CondVar>, mutex: ptr<Mutex>) >> bool {
+    return @pthread_cond_wait(cond, mutex) == 0;
+}
+
+fun condSignal(cond: ptr<CondVar>) >> bool {
+    return @pthread_cond_signal(cond) == 0;
+}
+
+fun condBroadcast(cond: ptr<CondVar>) >> bool {
+    return @pthread_cond_broadcast(cond) == 0;
+}

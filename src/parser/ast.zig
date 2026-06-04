@@ -20,7 +20,6 @@ pub const NodeType = enum {
     bool_literal,
     null_literal,
     binary_op,
-    brainfuck,
     comparison,
     if_stmt,
     for_stmt,
@@ -154,10 +153,6 @@ pub const Function = struct {
 pub const Program = struct {
     functions: std.ArrayList(*Node),
     globals: std.ArrayList(*Node),
-};
-
-pub const Brainfuck = struct {
-    code: []const u8,
 };
 
 pub const IfStmt = struct {
@@ -369,7 +364,6 @@ pub const NodeData = union(NodeType) {
     bool_literal: BoolLiteral,
     null_literal: NullLiteral,
     binary_op: BinaryOp,
-    brainfuck: Brainfuck,
     comparison: Comparison,
     if_stmt: IfStmt,
     for_stmt: ForStmt,
@@ -1054,9 +1048,6 @@ fn writeASTNodeJson(writer: anytype, node: *Node, level: usize) anyerror!void {
         .binary_op => |binary_op| {
             try writeJsonStringField(writer, level + 1, &first_field, "op", binaryOpText(binary_op.op));
         },
-        .brainfuck => |bf| {
-            try writeJsonStringField(writer, level + 1, &first_field, "code", bf.code);
-        },
         .comparison => |comp| {
             try writeJsonStringField(writer, level + 1, &first_field, "op", comparisonOpText(comp.op));
         },
@@ -1224,7 +1215,6 @@ fn writeASTNodeJson(writer: anytype, node: *Node, level: usize) anyerror!void {
             try appendJsonChild(writer, binary_op.lhs, level + 2, &first_child);
             try appendJsonChild(writer, binary_op.rhs, level + 2, &first_child);
         },
-        .brainfuck => {},
         .comparison => |comp| {
             try appendJsonChild(writer, comp.lhs, level + 2, &first_child);
             try appendJsonChild(writer, comp.rhs, level + 2, &first_child);
@@ -1476,34 +1466,6 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
             std.debug.print("🧮 BinaryOp: \x1b[35m{s}\x1b[0m\n", .{binaryOpText(binary_op.op)});
             printAST(binary_op.lhs, indent + 1, false, false);
             printAST(binary_op.rhs, indent + 1, true, false);
-        },
-        .brainfuck => |bf| {
-            std.debug.print("🧠 Brainfuck:\n", .{});
-            var lines = std.mem.splitScalar(u8, bf.code, '\n');
-            var line_list = std.ArrayList([]const u8){};
-            defer line_list.deinit(std.heap.page_allocator);
-            while (lines.next()) |line| {
-                const trimmed = std.mem.trim(u8, line, " \t\r");
-                if (trimmed.len > 0) {
-                    line_list.append(std.heap.page_allocator, trimmed) catch continue;
-                }
-            }
-            for (line_list.items, 0..) |line, i| {
-                const is_line_last = i == line_list.items.len - 1;
-                printIndent(indent + 1, is_line_last, false);
-                if (std.mem.startsWith(u8, line, "?") and std.mem.endsWith(u8, line, "?")) {
-                    const content = line[1 .. line.len - 1];
-                    if (std.mem.indexOf(u8, content, " ")) |space_idx| {
-                        const key = content[0..space_idx];
-                        const value = content[space_idx + 1 ..];
-                        std.debug.print("\x1b[90m{s}: {s}\x1b[0m\n", .{ key, value });
-                    } else {
-                        std.debug.print("\x1b[90m{s}\x1b[0m\n", .{content});
-                    }
-                } else {
-                    std.debug.print("\x1b[35m{s}\x1b[0m\n", .{line});
-                }
-            }
         },
         .identifier => |ident| {
             std.debug.print("🔤 Identifier: \x1b[36m{s}\x1b[0m\n", .{ident.name});
@@ -1831,7 +1793,9 @@ pub fn printAST(node: *Node, indent: u32, is_last: bool, is_root: bool) void {
 
 pub fn printASTTree(root: *Node) void {
     var buffer: [8192]u8 = undefined;
-    var stdout_file_writer = std.fs.File.stdout().writer(&buffer);
+    var threaded: std.Io.Threaded = .init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    var stdout_file_writer = std.Io.File.stdout().writer(threaded.io(), &buffer);
     writeASTNodeJson(&stdout_file_writer.interface, root, 0) catch |err| {
         std.debug.print("Failed to write AST JSON: {any}\n", .{err});
         return;

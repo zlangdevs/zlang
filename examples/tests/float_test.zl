@@ -15,7 +15,7 @@ fun main() >> i32 {
     f32 m4 = m1 / 1.136;
     f32 mixed = m3 + m4;
     i32 float_mul_div_ok = 0;
-    if (mixed > (1.7 as f32) && mixed < (1.8 as f32)) {
+    if (mixed > (1.7) && mixed < (1.8)) {
         float_mul_div_ok = 1;
     }
     @printf("(expected 1):%d\n", float_mul_div_ok);

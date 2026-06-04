@@ -6,8 +6,102 @@ struct Game {
     theme_index i32,
 }
 
+struct Metrics {
+    value i32,
+    other i32,
+}
+
+struct DirEntry {
+    d_name arr<u8, 256>,
+}
+
+arr<u8, 48> g_path_buf = {0};
+arr<u8, 2560> g_music_buf = {0};
+
+fun slotPath(slot: i32) >> ptr<u8> {
+    return &g_path_buf[slot * 16];
+}
+
+fun copyPath(slot: i32, src: ptr<u8>) >> void {
+    ptr<u8> dst = slotPath(slot);
+    i32 i = 0;
+    for (src[i] != 0) {
+        dst[i] = src[i];
+        i += 1;
+    }
+    dst[i] = 0 as u8;
+}
+
+fun basenamePtr(slot: i32) >> ptr<u8> {
+    ptr<u8> path = slotPath(slot);
+    ptr<u8> last_slash = path;
+    i32 i = 0;
+    for (path[i] != 0) {
+        if path[i] == ('/' as u8) {
+            last_slash = path + i + 1;
+        }
+        i += 1;
+    }
+    return last_slash;
+}
+
+fun musicPathPtr(slot: i32) >> ptr<u8> {
+    return &g_music_buf[slot * 320];
+}
+
+fun copyMusicPath(slot: i32, src: ptr<u8>) >> void {
+    ptr<u8> dst = musicPathPtr(slot);
+    i32 i = 0;
+    for (src[i] != 0) {
+        dst[i] = src[i];
+        i += 1;
+    }
+    dst[i] = 0 as u8;
+}
+
+fun basenamePtrLarge(slot: i32) >> ptr<u8> {
+    ptr<u8> path = musicPathPtr(slot);
+    ptr<u8> last_slash = path;
+    i32 i = 0;
+    for (path[i] != 0) {
+        if path[i] == ('/' as u8) {
+            last_slash = path + i + 1;
+        }
+        i += 1;
+    }
+    return last_slash;
+}
+
+fun basenameAbsLarge(slot: i32) >> ptr<u8> {
+    i32 base = slot * 320;
+    i32 last_slash = base;
+    i32 i = base;
+    for (g_music_buf[i] != 0) {
+        if g_music_buf[i] == ('/' as u8) {
+            last_slash = i + 1;
+        }
+        i += 1;
+    }
+    return &g_music_buf[last_slash];
+}
+
+arr<i32, 4> g_values = {0};
+
+fun values() >> ptr<i32> {
+    return &g_values[0];
+}
+
 fun bump(v: ptr<i32>) >> void {
     v[0] += 1;
+}
+
+fun fill(metrics: ptr<Metrics>) >> void {
+    metrics[0].value = 10;
+    metrics[0].other = 5;
+}
+
+fun score(metrics: ptr<Metrics>, add: i32) >> i32 {
+    return metrics[0].value + metrics[0].other + add;
 }
 
 fun testAllTypes() >> i32 {
@@ -192,5 +286,35 @@ fun main() >> i32 {
     Game g = {0};
     bump(&g.theme_index);
     @printf("(expected 1):%d\n", g.theme_index);
+
+    Metrics m = {0};
+    fill(&m);
+    @printf("(expected 22):%d\n", score(&m, 7));
+
+    values()[0] = 7;
+    @printf("(expected 7):%d\n", values()[0]);
+
+    DirEntry dir_entry = {0};
+    ptr<DirEntry> ent = &dir_entry;
+    ptr<u8> name = &ent.d_name[0];
+    name[0] = 65;
+    @printf("(expected 65):%d\n", name[0]);
+
+    copyPath(0, "x/a");
+    copyPath(1, "x/b");
+    copyPath(2, "x/c");
+    @printf("(expected 97):%d\n", basenamePtr(0)[0]);
+    @printf("(expected 98):%d\n", basenamePtr(1)[0]);
+    @printf("(expected 99):%d\n", basenamePtr(2)[0]);
+
+    copyMusicPath(0, "assets/songs/a.mp3");
+    copyMusicPath(1, "assets/songs/b.mp3");
+    copyMusicPath(2, "assets/songs/c.mp3");
+    @printf("(expected 97):%d\n", basenamePtrLarge(0)[0]);
+    @printf("(expected 98):%d\n", basenamePtrLarge(1)[0]);
+    @printf("(expected 99):%d\n", basenamePtrLarge(2)[0]);
+    @printf("(expected 97):%d\n", basenameAbsLarge(0)[0]);
+    @printf("(expected 98):%d\n", basenameAbsLarge(1)[0]);
+    @printf("(expected 99):%d\n", basenameAbsLarge(2)[0]);
     return 0;
 }
