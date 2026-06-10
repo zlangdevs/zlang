@@ -1,29 +1,33 @@
-name: CI
+name: Release
 
 on:
   push:
-  pull_request:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
 
 jobs:
-  unit-tests:
-    name: Unit tests (pure Zig)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-      - name: zig build test
-        run: zig build test --summary all
+  appimage:
+    name: AppImage (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
 
-  build-and-integration:
-    name: Build + integration suite
-    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -41,9 +45,12 @@ jobs:
           done
           so=$(find /usr/lib -name 'libLLVM-22.so*' -o -name 'libLLVM.so.22*' 2>/dev/null | sort | tail -1)
           [ -n "$so" ] && sudo ln -sf "$so" /usr/lib/libLLVM-22.so || true
-      - name: Build
-        run: zig build -Doptimize=ReleaseFast
-      - name: Run integration suite
-        run: ./run_tests.sh
-        env:
-          ZSTDPATH: ${{ github.workspace }}/stdlib
+
+      - name: Build AppImage
+        run: zig build appimage
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: zig-out/zlang-*.AppImage
+          generate_release_notes: true
