@@ -35,7 +35,7 @@ extended.
 ## Quick start
 
 ```sh
-zig build install
+zig build system-install
 zlang examples/hello_world.zl
 zlang examples/hello_world.zl -o hello -optimize
 ```
