@@ -24,9 +24,9 @@ pub const RegisterResult = enum(c_int) {
 };
 
 pub const core_keywords = [_][]const u8{
-    "as",    "break", "const",  "continue", "defer", "else",
-    "enum",  "error", "for",    "fun",      "goto",  "if",
-    "match", "null",  "on",     "return",   "send",  "solicit",
+    "as",     "break", "const", "continue", "defer", "else",
+    "enum",   "error", "for",   "fun",      "goto",  "if",
+    "match",  "null",  "on",    "return",   "send",  "solicit",
     "struct", "union", "use",   "when",     "wrap",
 };
 

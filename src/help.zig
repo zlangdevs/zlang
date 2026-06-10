@@ -59,10 +59,9 @@ pub fn printHelp() void {
         \\
     , .{
         bold, reset, green, reset, yellow, reset,
-        bold, reset,
-        cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset,
-        cyan, reset, cyan, reset,
-        cyan, reset,
+        bold, reset, cyan,  reset, cyan,   reset,
+        cyan, reset, cyan,  reset, cyan,   reset,
+        cyan, reset, cyan,  reset, cyan,   reset,
     });
 
     std.debug.print(
@@ -84,12 +83,23 @@ pub fn printHelp() void {
         \\  {s}-l<lib>{s}      Link with library
         \\  {s}-L<path>{s}     Add library search path
         \\
-, .{
+    , .{
         bold,   reset,
-        yellow, reset, yellow, reset, yellow, reset, yellow, reset,
-        yellow, reset, yellow, reset, yellow, reset, yellow, reset,
-        yellow, reset, yellow, reset, yellow, reset, yellow, reset,
-        yellow, reset, yellow, reset, yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
+        yellow, reset,
     });
 
     std.debug.print(
