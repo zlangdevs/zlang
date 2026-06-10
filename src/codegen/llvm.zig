@@ -3535,6 +3535,8 @@ pub const CodeGenerator = struct {
 
         const from_name = self.getTypeNameFromLLVMType(@ptrCast(from_ty));
         const to_name = self.getTypeNameFromLLVMType(@ptrCast(target_type));
+        const hint = std.fmt.allocPrint(self.allocator, "This conversion may lose information; use an explicit cast: `<value> as {s}`", .{to_name}) catch null;
+        defer if (hint) |h| self.allocator.free(h);
         if (value_node) |vn| {
             const old_line = self.current_line;
             const old_col = self.current_column;
@@ -3542,12 +3544,12 @@ pub const CodeGenerator = struct {
             if (vn.line > 0) self.current_line = vn.line;
             if (vn.column > 0) self.current_column = vn.column;
             self.current_token_text = tokenTextForNode(vn);
-            self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
+            self.reportErrorFmt("Type mismatch: cannot convert {s} to {s} implicitly", .{ from_name, to_name }, hint);
             self.current_line = old_line;
             self.current_column = old_col;
             self.current_token_text = old_token_text;
         } else {
-            self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
+            self.reportErrorFmt("Type mismatch: cannot convert {s} to {s} implicitly", .{ from_name, to_name }, hint);
         }
         return errors.CodegenError.TypeMismatch;
     }
@@ -3741,6 +3743,8 @@ pub const CodeGenerator = struct {
         }
         const from_name = self.getTypeNameFromLLVMType(@ptrCast(from_ty));
         const to_name = self.getTypeNameFromLLVMType(@ptrCast(target_type));
+        const hint = std.fmt.allocPrint(self.allocator, "This conversion may lose information; use an explicit cast: `<value> as {s}`", .{to_name}) catch null;
+        defer if (hint) |h| self.allocator.free(h);
         if (value_node) |vn| {
             const old_line = self.current_line;
             const old_col = self.current_column;
@@ -3748,12 +3752,12 @@ pub const CodeGenerator = struct {
             if (vn.line > 0) self.current_line = vn.line;
             if (vn.column > 0) self.current_column = vn.column;
             self.current_token_text = tokenTextForNode(vn);
-            self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
+            self.reportErrorFmt("Type mismatch: cannot convert {s} to {s} implicitly", .{ from_name, to_name }, hint);
             self.current_line = old_line;
             self.current_column = old_col;
             self.current_token_text = old_token_text;
         } else {
-            self.reportErrorFmt("Type mismatch: cannot convert {s} to {s}", .{ from_name, to_name }, "Check variable types");
+            self.reportErrorFmt("Type mismatch: cannot convert {s} to {s} implicitly", .{ from_name, to_name }, hint);
         }
         return errors.CodegenError.TypeMismatch;
     }

@@ -54,3 +54,7 @@ jobs:
         with:
           files: zig-out/zlang-*.AppImage
           generate_release_notes: true
+          body: |
+            **Platform support: Linux only** (x86_64 and aarch64 AppImages).
+
+            First release. See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md).
