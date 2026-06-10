@@ -430,9 +430,9 @@ fn alignTo(v: i32, a: i32) i32 {
 fn splitTopComma(s: []const u8) ?usize {
     var depth: i32 = 0;
     for (s, 0..) |c, i| {
-        if (c == '<' or c == '(' or c == '[') depth += 1
-        else if (c == '>' or c == ')' or c == ']') { if (depth > 0) depth -= 1; }
-        else if (c == ',' and depth == 0) return i;
+        if (c == '<' or c == '(' or c == '[') depth += 1 else if (c == '>' or c == ')' or c == ']') {
+            if (depth > 0) depth -= 1;
+        } else if (c == ',' and depth == 0) return i;
     }
     return null;
 }
@@ -465,8 +465,10 @@ fn computeStructSize(alloc: std.mem.Allocator, src: []const u8, name: []const u8
     var depth: i32 = 0;
     var close: usize = open;
     while (close < src.len) : (close += 1) {
-        if (src[close] == '{') depth += 1
-        else if (src[close] == '}') { depth -= 1; if (depth == 0) break; }
+        if (src[close] == '{') depth += 1 else if (src[close] == '}') {
+            depth -= 1;
+            if (depth == 0) break;
+        }
     }
     if (close >= src.len) return -1;
     var body = alloc.dupe(u8, src[open + 1 .. close]) catch return -1;

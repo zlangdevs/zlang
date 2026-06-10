@@ -204,7 +204,6 @@ const MergeScanTask = struct {
     global_count: usize = 0,
 };
 
-
 fn runBackendObjectTask(task: *BackendObjectTask) void {
     task.cg.compileIRToObjectFile(task.ir_file, task.obj_file, task.arch, task.optimize, task.max_threads, &task.llc_time_ns) catch |err| {
         task.err = err;
@@ -436,7 +435,6 @@ fn runTasksParallel(comptime T: type, tasks: []T, max_threads: usize, alloc: std
         next_task_idx += batch_count;
     }
 }
-
 
 fn printStats(stats: CompilationStats) void {
     const parse_ms = @as(f64, @floatFromInt(stats.parse_time_ns)) / 1_000_000.0;
@@ -3296,7 +3294,6 @@ fn runZli(cli_args: [][:0]u8, alloc: std.mem.Allocator) !u8 {
     return 0;
 }
 
-
 fn collectZlFilesFromDir(alloc: std.mem.Allocator, dir_path: []const u8, files_list: *std.ArrayList([]const u8)) !void {
     var threaded: std.Io.Threaded = .init(alloc, .{});
     defer threaded.deinit();
@@ -3888,7 +3885,9 @@ pub fn main(init: std.process.Init) !u8 {
     {
         var want_continue: c_int = 0;
         var ext_handler_fired = false;
-        for (ctx.extra_args.items) |a| if (std.mem.eql(u8, a, "-c")) { want_continue = 1; };
+        for (ctx.extra_args.items) |a| if (std.mem.eql(u8, a, "-c")) {
+            want_continue = 1;
+        };
 
         var write_idx: usize = 0;
         var i: usize = 0;
@@ -3896,7 +3895,10 @@ pub fn main(init: std.process.Init) !u8 {
             const path = ctx.input_files.items[i];
             var matched: ?zlx_abi.FileExtensionHandler = null;
             for (plugin_host.file_extensions.items) |reg| {
-                if (std.mem.endsWith(u8, path, reg.extension)) { matched = reg.handler; break; }
+                if (std.mem.endsWith(u8, path, reg.extension)) {
+                    matched = reg.handler;
+                    break;
+                }
             }
             if (matched) |handler| {
                 const in_z = allocator.dupeZ(u8, path) catch {

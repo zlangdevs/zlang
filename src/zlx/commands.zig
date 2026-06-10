@@ -723,8 +723,8 @@ fn buildModule(args: []const [:0]u8, alloc: std.mem.Allocator, io: std.Io) !u8 {
         const emit = try std.fmt.allocPrint(alloc, "-femit-bin={s}", .{out_so});
         defer alloc.free(emit);
         runCommand(io, &.{
-            "zig",          "build-lib", "-dynamic", "-OReleaseSafe", "-fPIC",
-            "-lc",          "--dep",     "zlx",      mroot,           mzlx,
+            "zig", "build-lib", "-dynamic", "-OReleaseSafe", "-fPIC",
+            "-lc", "--dep",     "zlx",      mroot,           mzlx,
             emit,
         }, null) catch |err| {
             std.debug.print("zlx: zig build-lib failed: {}\n", .{err});

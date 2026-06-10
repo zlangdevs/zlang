@@ -5,7 +5,7 @@
     .api_min = 1,
     .api_max = 3,
     .entry = "lib/plugin.so",
-    .targets = .{ "linux-x86_64" },
+    .targets = .{"linux-x86_64"},
     .dependencies = .{},
     .provides = .{
         "syntax.block",

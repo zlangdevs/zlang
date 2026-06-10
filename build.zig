@@ -6,6 +6,8 @@ fn makeNoOp(_: *std.Build.Step, _: std.Build.Step.MakeOptions) anyerror!void {}
 const LlvmLinkInfo = struct {
     lib_name: []const u8,
     version_major: u32,
+    include_dir: ?[]const u8 = null,
+    lib_dir: ?[]const u8 = null,
 };
 
 fn parseLlvmMajor(version: []const u8) ?u32 {
@@ -72,43 +74,64 @@ fn detectLlvmLinkInfo(b: *std.Build) LlvmLinkInfo {
             detected_major = parseLlvmMajor(version_stdout) orelse 0;
         }
 
-        return .{ .lib_name = lib_name.?, .version_major = detected_major };
+        const inc_raw = b.runAllowFail(&[_][]const u8{ exe, "--includedir" }, &out_code, .ignore) catch "";
+        const lib_raw = b.runAllowFail(&[_][]const u8{ exe, "--libdir" }, &out_code, .ignore) catch "";
+        const inc_trimmed = std.mem.trim(u8, inc_raw, " \t\r\n");
+        const lib_trimmed = std.mem.trim(u8, lib_raw, " \t\r\n");
+        const include_dir = if (inc_trimmed.len > 0) allocator.dupe(u8, inc_trimmed) catch null else null;
+        const lib_dir = if (lib_trimmed.len > 0) allocator.dupe(u8, lib_trimmed) catch null else null;
+
+        return .{ .lib_name = lib_name.?, .version_major = detected_major, .include_dir = include_dir, .lib_dir = lib_dir };
     }
 
     var best_name: ?[]const u8 = null;
     var best_major: u32 = 0;
+    var best_lib_dir: ?[]const u8 = null;
+    var best_inc_dir: ?[]const u8 = null;
     var out_code: u8 = 0;
     const lib_names = b.runAllowFail(&[_][]const u8{
         "sh",
         "-c",
-        "for d in /usr/local/lib /lib64 /lib /usr/lib64 /usr/lib; do for f in \"$d\"/libLLVM*.so \"$d\"/libLLVM*.so.* \"$d\"/libLLVM*.a \"$d\"/libLLVM*.dylib; do [ -e \"$f\" ] && basename \"$f\"; done; done",
+        \\for d in /usr/local/lib /lib64 /lib /usr/lib64 /usr/lib $(echo /usr/lib/llvm/*/lib 2>/dev/null); do
+        \\  for f in "$d"/libLLVM*.so "$d"/libLLVM*.so.* "$d"/libLLVM*.a "$d"/libLLVM*.dylib; do
+        \\    [ -e "$f" ] && printf '%s\t%s\n' "$(basename "$f")" "$d"
+        \\  done
+        \\done
     }, &out_code, .ignore) catch "";
     var lib_it = std.mem.tokenizeAny(u8, lib_names, "\r\n");
-    while (lib_it.next()) |file_name| {
+    while (lib_it.next()) |line| {
+        const tab = std.mem.indexOfScalar(u8, line, '\t') orelse continue;
+        const file_name = line[0..tab];
+        const dir = line[tab + 1 ..];
         const lib_name = llvmLibNameFromFile(allocator, file_name) orelse continue;
         const major = majorFromLlvmLibName(lib_name);
         if (major >= best_major) {
             best_name = lib_name;
             best_major = major;
+            best_lib_dir = allocator.dupe(u8, dir) catch null;
+            if (std.fs.path.dirname(dir)) |p|
+                best_inc_dir = std.fs.path.join(allocator, &[_][]const u8{ p, "include" }) catch null;
         }
     }
-    if (best_name) |lib_name| return .{ .lib_name = lib_name, .version_major = best_major };
+    if (best_name) |lib_name| return .{ .lib_name = lib_name, .version_major = best_major, .lib_dir = best_lib_dir, .include_dir = best_inc_dir };
 
     return .{ .lib_name = "LLVM", .version_major = 0 };
 }
 
-fn addCommonSystemLibraryPaths(mod: *std.Build.Module) void {
+fn addCommonSystemLibraryPaths(mod: *std.Build.Module, llvm_info: LlvmLinkInfo) void {
     const paths = [_][]const u8{ "/usr/local/lib", "/lib64", "/lib", "/usr/lib64", "/usr/lib" };
     for (paths) |path| {
         mod.addLibraryPath(.{ .cwd_relative = path });
     }
+    if (llvm_info.lib_dir) |dir| mod.addLibraryPath(.{ .cwd_relative = dir });
 }
 
-fn addCommonSystemIncludePaths(mod: *std.Build.Module) void {
+fn addCommonSystemIncludePaths(mod: *std.Build.Module, llvm_info: LlvmLinkInfo) void {
     const paths = [_][]const u8{ "/usr/local/include", "/usr/include" };
     for (paths) |path| {
         mod.addIncludePath(.{ .cwd_relative = path });
     }
+    if (llvm_info.include_dir) |dir| mod.addIncludePath(.{ .cwd_relative = dir });
 }
 
 pub fn build(b: *std.Build) void {
@@ -334,8 +357,8 @@ pub fn build(b: *std.Build) void {
 
     //exe.linkSystemLibrary("fl");
     exe.root_module.link_libc = true;
-    addCommonSystemIncludePaths(exe.root_module);
-    addCommonSystemLibraryPaths(exe.root_module);
+    addCommonSystemIncludePaths(exe.root_module, detected_llvm);
+    addCommonSystemLibraryPaths(exe.root_module, detected_llvm);
     exe.root_module.linkSystemLibrary(llvm_lib, .{});
     exe.step.dependOn(&flex_cmd.step);
     exe.step.dependOn(&bison_cmd.step);
@@ -365,8 +388,8 @@ pub fn build(b: *std.Build) void {
     });
 
     appimage_exe.root_module.link_libc = true;
-    addCommonSystemIncludePaths(appimage_exe.root_module);
-    addCommonSystemLibraryPaths(appimage_exe.root_module);
+    addCommonSystemIncludePaths(appimage_exe.root_module, detected_llvm);
+    addCommonSystemLibraryPaths(appimage_exe.root_module, detected_llvm);
     appimage_exe.root_module.linkSystemLibrary(llvm_lib, .{});
     appimage_exe.step.dependOn(&flex_cmd.step);
     appimage_exe.step.dependOn(&bison_cmd.step);
