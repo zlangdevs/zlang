@@ -180,10 +180,12 @@ The work's in progress, see [EXTENSIONS_ROADMAP.md](EXTENSIONS_ROADMAP.md).
 
 ## Building from source
 
+See [INSTALL.md](INSTALL.md) for full instructions, dependency lists per distro, AppImage download, and verified platforms.
+
 ```sh
 git clone https://github.com/zlangdevs/zlang
 cd zlang
-zig build install -Doptimize=ReleaseFast
+zig build system-install
 ```
 
 ## Architecture
@@ -236,6 +238,8 @@ ZLang projects under the `zlangdevs` org:
 Active development. Open areas: stdlib coverage, more optimization passes,
 error message polish, IDE plugins, documentation. Extensions are especially
 welcome — write a `.zlx` against the v1 C ABI in `include/` and ship it.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build setup, test conventions, and PR guidelines.
 
 ## License
 
