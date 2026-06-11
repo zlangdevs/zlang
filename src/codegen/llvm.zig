@@ -3994,6 +3994,11 @@ pub const CodeGenerator = struct {
                             else => errors.CodegenError.UnsupportedOperation,
                         };
                     } else if (kind == c.LLVMIntegerTypeKind) {
+                        if (c.LLVMGetTypeKind(c.LLVMTypeOf(lhs_val)) == c.LLVMPointerTypeKind or
+                            c.LLVMGetTypeKind(c.LLVMTypeOf(rhs_val)) == c.LLVMPointerTypeKind)
+                        {
+                            return self.generateBinaryOp(b);
+                        }
                         var lhs_int = lhs_val;
                         var rhs_int = rhs_val;
                         if (c.LLVMTypeOf(lhs_int) != target_ty) {
