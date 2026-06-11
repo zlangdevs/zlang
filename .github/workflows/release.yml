@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -50,6 +51,7 @@ jobs:
         run: zig build appimage
 
       - name: Upload to release
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           files: zig-out/zlang-*.AppImage
@@ -58,3 +60,11 @@ jobs:
             **Platform support: Linux only** (x86_64 and aarch64 AppImages).
 
             First release. See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md).
+
+      - name: Upload artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: zlang-${{ matrix.arch }}.AppImage
+          path: zig-out/zlang-*.AppImage
+          retention-days: 7
