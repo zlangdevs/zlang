@@ -255,6 +255,9 @@ pub fn build(b: *std.Build) void {
         \\        ;;
         \\    esac
         \\    if [ -n "$lib_path" ] && [ -f "$lib_path" ]; then
+        \\      case "$(basename "$lib_path")" in
+        \\        libc.so*|libpthread.so*|libm.so*|libdl.so*|librt.so*|ld-linux*.so*|ld-*.so*) continue ;;
+        \\      esac
         \\      cp -nL "$lib_path" "$APPDIR/usr/lib/" 2>/dev/null || true
         \\    fi
         \\  done
