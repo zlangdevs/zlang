@@ -1,0 +1,11 @@
+use std
+
+fun main() >> i32 {
+    ptr<u8> s = "hello";
+    @printf("(expected 104):%d\n", *s);
+    @printf("(expected 101):%d\n", *(s + 1));
+    @printf("(expected 108):%d\n", *(2 + s));
+    ptr<u8> p = s + 4;
+    @printf("(expected 111):%d\n", *p);
+    return 0;
+}

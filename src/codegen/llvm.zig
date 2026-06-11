@@ -4706,6 +4706,14 @@ pub const CodeGenerator = struct {
                             if (CodeGenerator.getVariable(self, ident.name)) |var_info| {
                                 const ptr_ty = var_info.type_ref;
                                 const ptr_val = c.LLVMBuildLoad2(self.builder, @ptrCast(ptr_ty), @ptrCast(var_info.value), "load_ptr_for_deref");
+                                if (std.mem.startsWith(u8, var_info.type_name, "ptr<") and std.mem.endsWith(u8, var_info.type_name, ">")) {
+                                    const elem_type_name = var_info.type_name[4 .. var_info.type_name.len - 1];
+                                    const elem_ty: c.LLVMTypeRef = @ptrCast(try self.getLLVMType(elem_type_name));
+                                    if (c.LLVMGetTypeKind(elem_ty) == c.LLVMFunctionTypeKind) {
+                                        return ptr_val;
+                                    }
+                                    return c.LLVMBuildLoad2(self.builder, elem_ty, ptr_val, "deref");
+                                }
                                 const ptr_val_ty = c.LLVMTypeOf(ptr_val);
                                 const elem_ty = c.LLVMGetElementType(@ptrCast(ptr_val_ty));
                                 if (c.LLVMGetTypeKind(elem_ty) == c.LLVMFunctionTypeKind) {
@@ -4714,10 +4722,19 @@ pub const CodeGenerator = struct {
                                 return c.LLVMBuildLoad2(self.builder, elem_ty, ptr_val, "deref");
                             }
                         }
+                        const operand_type_name = try self.inferType(un.operand);
                         const operand_val = try self.generateExpression(un.operand);
                         const operand_type = c.LLVMTypeOf(operand_val);
                         if (c.LLVMGetTypeKind(operand_type) != c.LLVMPointerTypeKind) {
                             return errors.CodegenError.TypeMismatch;
+                        }
+                        if (std.mem.startsWith(u8, operand_type_name, "ptr<") and std.mem.endsWith(u8, operand_type_name, ">")) {
+                            const elem_type_name = operand_type_name[4 .. operand_type_name.len - 1];
+                            const pointee_type: c.LLVMTypeRef = @ptrCast(try self.getLLVMType(elem_type_name));
+                            if (c.LLVMGetTypeKind(pointee_type) == c.LLVMFunctionTypeKind) {
+                                return operand_val;
+                            }
+                            return c.LLVMBuildLoad2(self.builder, pointee_type, operand_val, "deref");
                         }
                         const pointee_type = c.LLVMGetElementType(operand_type);
                         if (c.LLVMGetTypeKind(pointee_type) == c.LLVMFunctionTypeKind) {
