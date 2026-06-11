@@ -7,36 +7,25 @@ const c_abi = @import("../c_abi.zig");
 const c_bindings = @import("c_bindings.zig");
 const c = c_bindings.c;
 
+fn fatalOom() noreturn {
+    std.debug.print("error: zlang compiler ran out of memory\n", .{});
+    std.process.exit(1);
+}
+
 pub fn alloc(comptime T: type, allocator: std.mem.Allocator, n: usize) []T {
-    return allocator.alloc(T, n) catch |err| {
-        std.debug.print("Fatal: Memory allocation failed for {d} items of type {s}\n", .{ n, @typeName(T) });
-        std.debug.print("Error: {any}\n", .{err});
-        @panic("Out of memory");
-    };
+    return allocator.alloc(T, n) catch fatalOom();
 }
 
 pub fn dupe(comptime T: type, allocator: std.mem.Allocator, slice: []const T) []T {
-    return allocator.dupe(T, slice) catch |err| {
-        std.debug.print("Fatal: Memory duplication failed for {d} items of type {s}\n", .{ slice.len, @typeName(T) });
-        std.debug.print("Error: {any}\n", .{err});
-        @panic("Out of memory");
-    };
+    return allocator.dupe(T, slice) catch fatalOom();
 }
 
 pub fn dupeZ(allocator: std.mem.Allocator, slice: []const u8) [:0]u8 {
-    return allocator.dupeZ(u8, slice) catch |err| {
-        std.debug.print("Fatal: Memory duplication failed for null-terminated string of length {d}\n", .{slice.len});
-        std.debug.print("Error: {any}\n", .{err});
-        @panic("Out of memory");
-    };
+    return allocator.dupeZ(u8, slice) catch fatalOom();
 }
 
 pub fn create(comptime T: type, allocator: std.mem.Allocator) *T {
-    return allocator.create(T) catch |err| {
-        std.debug.print("Fatal: Memory allocation failed for single item of type {s}\n", .{@typeName(T)});
-        std.debug.print("Error: {any}\n", .{err});
-        @panic("Out of memory");
-    };
+    return allocator.create(T) catch fatalOom();
 }
 
 pub const LibcType = enum {

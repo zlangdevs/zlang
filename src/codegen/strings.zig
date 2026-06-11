@@ -55,8 +55,8 @@ pub fn generateStringLiteral(cg: *llvm.CodeGenerator, str_lit: ast.StringLiteral
     );
 }
 
-fn getOrAddFunction(cg: *llvm.CodeGenerator, name: []const u8, ret_ty: c.LLVMTypeRef, param_tys: []const c.LLVMTypeRef, is_varargs: bool) c.LLVMValueRef {
-    const name_z = cg.allocator.dupeZ(u8, name) catch unreachable;
+fn getOrAddFunction(cg: *llvm.CodeGenerator, name: []const u8, ret_ty: c.LLVMTypeRef, param_tys: []const c.LLVMTypeRef, is_varargs: bool) errors.CodegenError!c.LLVMValueRef {
+    const name_z = try cg.allocator.dupeZ(u8, name);
     defer cg.allocator.free(name_z);
 
     if (c.LLVMGetNamedFunction(cg.module, name_z.ptr)) |f| {
@@ -91,14 +91,14 @@ fn ensureInterpolationPool(cg: *llvm.CodeGenerator) struct { pool: c.LLVMValueRe
     return .{ .pool = pool, .index = idx, .outer_ty = outer_ty };
 }
 
-fn appendFormatted(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, fmt: []const u8, args: []const c.LLVMValueRef) c.LLVMValueRef {
+fn appendFormatted(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, fmt: []const u8, args: []const c.LLVMValueRef) errors.CodegenError!c.LLVMValueRef {
     const i8_ty = c.LLVMInt8TypeInContext(cg.context);
     const i8_ptr_ty = c.LLVMPointerType(i8_ty, 0);
     const size_t_ty = c.LLVMInt64TypeInContext(cg.context);
     const i32_ty = c.LLVMInt32TypeInContext(cg.context);
 
-    const strlen = getOrAddFunction(cg, "strlen", size_t_ty, &[_]c.LLVMTypeRef{i8_ptr_ty}, false);
-    const snprintf = getOrAddFunction(cg, "snprintf", i32_ty, &[_]c.LLVMTypeRef{ i8_ptr_ty, size_t_ty, i8_ptr_ty }, true);
+    const strlen = try getOrAddFunction(cg, "strlen", size_t_ty, &[_]c.LLVMTypeRef{i8_ptr_ty}, false);
+    const snprintf = try getOrAddFunction(cg, "snprintf", i32_ty, &[_]c.LLVMTypeRef{ i8_ptr_ty, size_t_ty, i8_ptr_ty }, true);
 
     var strlen_args = [_]c.LLVMValueRef{dst};
     const cur_len = c.LLVMBuildCall2(cg.builder, c.LLVMGlobalGetValueType(strlen), strlen, &strlen_args, 1, "interp_len");
@@ -109,16 +109,16 @@ fn appendFormatted(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, fmt: []const u8
     var idxs = [_]c.LLVMValueRef{cur_len};
     const dst_tail = c.LLVMBuildGEP2(cg.builder, i8_ty, dst, &idxs, 1, "interp_tail");
 
-    const fmt_z = cg.allocator.dupeZ(u8, fmt) catch unreachable;
+    const fmt_z = try cg.allocator.dupeZ(u8, fmt);
     defer cg.allocator.free(fmt_z);
     const fmt_ptr = c.LLVMBuildGlobalStringPtr(cg.builder, fmt_z.ptr, "interp_fmt");
 
     var call_args: std.ArrayList(c.LLVMValueRef) = .empty;
     defer call_args.deinit(cg.allocator);
-    call_args.append(cg.allocator, dst_tail) catch unreachable;
-    call_args.append(cg.allocator, remain) catch unreachable;
-    call_args.append(cg.allocator, fmt_ptr) catch unreachable;
-    for (args) |a| call_args.append(cg.allocator, a) catch unreachable;
+    try call_args.append(cg.allocator, dst_tail);
+    try call_args.append(cg.allocator, remain);
+    try call_args.append(cg.allocator, fmt_ptr);
+    for (args) |a| try call_args.append(cg.allocator, a);
 
     _ = c.LLVMBuildCall2(cg.builder, c.LLVMGlobalGetValueType(snprintf), snprintf, call_args.items.ptr, @intCast(call_args.items.len), "");
     return dst;
@@ -126,7 +126,7 @@ fn appendFormatted(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, fmt: []const u8
 
 fn appendAnyValue(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, value: c.LLVMValueRef, hint_type_name: ?[]const u8) errors.CodegenError!void {
     if (value == null) {
-        _ = appendFormatted(cg, dst, "<null>", &[_]c.LLVMValueRef{});
+        _ = try appendFormatted(cg, dst, "<null>", &[_]c.LLVMValueRef{});
         return;
     }
 
@@ -140,18 +140,18 @@ fn appendAnyValue(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, value: c.LLVMVal
     if (kind == c.LLVMPointerTypeKind) {
         if (hint_type_name) |hint| {
             if (std.mem.eql(u8, hint, "ptr<u8>")) {
-                _ = appendFormatted(cg, dst, "%s", &[_]c.LLVMValueRef{value});
+                _ = try appendFormatted(cg, dst, "%s", &[_]c.LLVMValueRef{value});
                 return;
             }
         }
 
         if (c.LLVMIsNull(value) != 0) {
-            _ = appendFormatted(cg, dst, "null", &[_]c.LLVMValueRef{});
+            _ = try appendFormatted(cg, dst, "null", &[_]c.LLVMValueRef{});
             return;
         }
 
         const as_void_ptr = c.LLVMBuildBitCast(cg.builder, value, i8_ptr_ty, "interp_ptr");
-        _ = appendFormatted(cg, dst, "%p", &[_]c.LLVMValueRef{as_void_ptr});
+        _ = try appendFormatted(cg, dst, "%p", &[_]c.LLVMValueRef{as_void_ptr});
         return;
     }
 
@@ -160,11 +160,11 @@ fn appendAnyValue(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, value: c.LLVMVal
             const t = c.LLVMBuildGlobalStringPtr(cg.builder, "true", "interp_true");
             const f = c.LLVMBuildGlobalStringPtr(cg.builder, "false", "interp_false");
             const b = c.LLVMBuildSelect(cg.builder, value, t, f, "interp_bool");
-            _ = appendFormatted(cg, dst, "%s", &[_]c.LLVMValueRef{b});
+            _ = try appendFormatted(cg, dst, "%s", &[_]c.LLVMValueRef{b});
             return;
         }
         const i64_val = c.LLVMBuildSExt(cg.builder, value, i64_ty, "interp_i64");
-        _ = appendFormatted(cg, dst, "%lld", &[_]c.LLVMValueRef{i64_val});
+        _ = try appendFormatted(cg, dst, "%lld", &[_]c.LLVMValueRef{i64_val});
         return;
     }
 
@@ -173,7 +173,7 @@ fn appendAnyValue(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, value: c.LLVMVal
             value
         else
             c.LLVMBuildFPExt(cg.builder, value, f64_ty, "interp_f64");
-        _ = appendFormatted(cg, dst, "%g", &[_]c.LLVMValueRef{f64_val});
+        _ = try appendFormatted(cg, dst, "%g", &[_]c.LLVMValueRef{f64_val});
         return;
     }
 
@@ -182,14 +182,14 @@ fn appendAnyValue(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, value: c.LLVMVal
         const arr_len = c.LLVMGetArrayLength(ty);
         const i32_ty = c.LLVMInt32TypeInContext(cg.context);
 
-        _ = appendFormatted(cg, dst, "[", &[_]c.LLVMValueRef{});
+        _ = try appendFormatted(cg, dst, "[", &[_]c.LLVMValueRef{});
 
         const tmp = c.LLVMBuildAlloca(cg.builder, ty, "interp_array_tmp");
         _ = c.LLVMBuildStore(cg.builder, value, tmp);
 
         var i: u32 = 0;
         while (i < arr_len) : (i += 1) {
-            if (i > 0) _ = appendFormatted(cg, dst, ", ", &[_]c.LLVMValueRef{});
+            if (i > 0) _ = try appendFormatted(cg, dst, ", ", &[_]c.LLVMValueRef{});
 
             var idxs = [_]c.LLVMValueRef{
                 c.LLVMConstInt(i32_ty, 0, 0),
@@ -200,7 +200,7 @@ fn appendAnyValue(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, value: c.LLVMVal
             try appendAnyValue(cg, dst, elem_val, null);
         }
 
-        _ = appendFormatted(cg, dst, "]", &[_]c.LLVMValueRef{});
+        _ = try appendFormatted(cg, dst, "]", &[_]c.LLVMValueRef{});
         return;
     }
 
@@ -214,24 +214,24 @@ fn appendAnyValue(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, value: c.LLVMVal
         };
 
         if (struct_name.len == 0) {
-            _ = appendFormatted(cg, dst, "{...}", &[_]c.LLVMValueRef{});
+            _ = try appendFormatted(cg, dst, "{...}", &[_]c.LLVMValueRef{});
             return;
         }
 
         const decl = cg.struct_declarations.get(struct_name) orelse {
-            _ = appendFormatted(cg, dst, "{...}", &[_]c.LLVMValueRef{});
+            _ = try appendFormatted(cg, dst, "{...}", &[_]c.LLVMValueRef{});
             return;
         };
 
-        _ = appendFormatted(cg, dst, "{", &[_]c.LLVMValueRef{});
+        _ = try appendFormatted(cg, dst, "{", &[_]c.LLVMValueRef{});
 
         const tmp = c.LLVMBuildAlloca(cg.builder, ty, "interp_struct_tmp");
         _ = c.LLVMBuildStore(cg.builder, value, tmp);
 
         for (decl.fields.items, 0..) |field, idx| {
-            if (idx > 0) _ = appendFormatted(cg, dst, ", ", &[_]c.LLVMValueRef{});
-            _ = appendFormatted(cg, dst, field.name, &[_]c.LLVMValueRef{});
-            _ = appendFormatted(cg, dst, " = ", &[_]c.LLVMValueRef{});
+            if (idx > 0) _ = try appendFormatted(cg, dst, ", ", &[_]c.LLVMValueRef{});
+            _ = try appendFormatted(cg, dst, field.name, &[_]c.LLVMValueRef{});
+            _ = try appendFormatted(cg, dst, " = ", &[_]c.LLVMValueRef{});
 
             const field_ptr = c.LLVMBuildStructGEP2(cg.builder, ty, tmp, @intCast(idx), "interp_field_ptr");
             const field_ty = c.LLVMStructGetTypeAtIndex(ty, @intCast(idx));
@@ -239,11 +239,11 @@ fn appendAnyValue(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, value: c.LLVMVal
             try appendAnyValue(cg, dst, field_val, field.type_name);
         }
 
-        _ = appendFormatted(cg, dst, "}", &[_]c.LLVMValueRef{});
+        _ = try appendFormatted(cg, dst, "}", &[_]c.LLVMValueRef{});
         return;
     }
 
-    _ = appendFormatted(cg, dst, "<value>", &[_]c.LLVMValueRef{});
+    _ = try appendFormatted(cg, dst, "<value>", &[_]c.LLVMValueRef{});
 }
 
 pub fn generateInterpolationBuiltin(cg: *llvm.CodeGenerator, call: ast.FunctionCall) errors.CodegenError!c.LLVMValueRef {
@@ -266,7 +266,7 @@ pub fn generateInterpolationBuiltin(cg: *llvm.CodeGenerator, call: ast.FunctionC
 
     for (call.args.items) |arg| {
         if (arg.data == .null_literal) {
-            _ = appendFormatted(cg, dst, "null", &[_]c.LLVMValueRef{});
+            _ = try appendFormatted(cg, dst, "null", &[_]c.LLVMValueRef{});
             continue;
         }
 
@@ -287,12 +287,12 @@ pub fn generateInterpolationBuiltin(cg: *llvm.CodeGenerator, call: ast.FunctionC
 
         if (arg.data == .string_literal) {
             const as_cstr = c.LLVMBuildBitCast(cg.builder, val, i8_ptr_ty, "interp_cstr");
-            _ = appendFormatted(cg, dst, "%s", &[_]c.LLVMValueRef{as_cstr});
+            _ = try appendFormatted(cg, dst, "%s", &[_]c.LLVMValueRef{as_cstr});
         } else if (arg.data == .function_call or arg.data == .method_call) {
             const val_ty = c.LLVMTypeOf(val);
             if (c.LLVMGetTypeKind(val_ty) == c.LLVMPointerTypeKind) {
                 const as_cstr = c.LLVMBuildBitCast(cg.builder, val, i8_ptr_ty, "interp_call_cstr");
-                _ = appendFormatted(cg, dst, "%s", &[_]c.LLVMValueRef{as_cstr});
+                _ = try appendFormatted(cg, dst, "%s", &[_]c.LLVMValueRef{as_cstr});
             } else {
                 try appendAnyValue(cg, dst, val, hint_type_name);
             }
