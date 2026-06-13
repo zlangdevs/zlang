@@ -6,7 +6,7 @@
 
 [![Zig](https://img.shields.io/badge/Zig-0.16.0-f7a41d?logo=zig&logoColor=white)](https://ziglang.org)
 [![LLVM](https://img.shields.io/badge/LLVM-22-262d3a?logo=llvm&logoColor=white)](https://llvm.org)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/zlangdevs/zlang/releases)
+[![Version](https://img.shields.io/badge/version-0.1.1-blue)](https://github.com/zlangdevs/zlang/releases)
 [![Platform](https://img.shields.io/badge/platform-linux--x86__64-555?logo=linux&logoColor=white)](#)
 [![License](https://img.shields.io/badge/license-GPL--3.0-green)](LICENSE)
 [![Extensions](https://img.shields.io/badge/.zlx-extensible-purple)](EXTENSIONS_ROADMAP.md)
@@ -178,9 +178,24 @@ fun main() >> i32 {
 
 The work's in progress, see [EXTENSIONS_ROADMAP.md](EXTENSIONS_ROADMAP.md).
 
-## Building from source
+## Installation
 
-See [INSTALL.md](INSTALL.md) for full instructions, dependency lists per distro, AppImage download, and verified platforms.
+**Arch Linux (AUR):**
+
+```sh
+# AppImage — no build needed, comes with bundled stdlib
+yay -S zlang-bin
+
+# Build from source, tracks latest git
+yay -S zlang-git
+```
+
+- [`zlang-bin`](https://aur.archlinux.org/packages/zlang-bin) — pre-built AppImage, installs as `/usr/bin/zlang`
+- [`zlang-git`](https://aur.archlinux.org/packages/zlang-git) — builds from source, requires LLVM + Zig 0.16
+
+**Build from source:**
+
+See [INSTALL.md](INSTALL.md) for full instructions, dependency lists per distro, and verified platforms.
 
 ```sh
 git clone https://github.com/zlangdevs/zlang

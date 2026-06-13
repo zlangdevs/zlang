@@ -1,6 +1,19 @@
 # Installing ZLang
 
-## Option 1: AppImage (no build required)
+## Option 1: AUR (Arch Linux)
+
+```sh
+# Pre-built AppImage — no LLVM or Zig needed
+yay -S zlang-bin
+
+# Build from latest source
+yay -S zlang-git
+```
+
+- [`zlang-bin`](https://aur.archlinux.org/packages/zlang-bin) — installs AppImage as `/usr/bin/zlang`, bundles stdlib
+- [`zlang-git`](https://aur.archlinux.org/packages/zlang-git) — builds from HEAD, makedepends: `zig>=0.16.0 llvm flex bison`
+
+## Option 3: AppImage (no build required)
 
 Download the latest AppImage from the [releases page](https://github.com/zlangdevs/zlang/releases):
 
@@ -17,7 +30,7 @@ sudo mv zlang-x86_64.AppImage /usr/local/bin/zlang
 
 The AppImage bundles the compiler and stdlib — no LLVM or other dependencies needed at runtime.
 
-## Option 2: Build from source
+## Option 4: Build from source
 
 ### Dependencies
 

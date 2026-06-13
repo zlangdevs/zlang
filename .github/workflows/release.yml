@@ -59,7 +59,9 @@ jobs:
           body: |
             **Platform support: Linux only** (x86_64 and aarch64 AppImages).
 
-            First release. See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md).
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for what changed.
+
+            **Arch Linux:** install with `yay -S zlang-bin` (AppImage) or `yay -S zlang-git` (build from source).
 
       - name: Upload artifact
         if: github.ref_type != 'tag'
