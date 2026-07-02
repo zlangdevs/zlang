@@ -256,7 +256,7 @@ test_compile_fail_file() {
     local test_file="$1"
     local filename=$(basename "$test_file")
     local expected_file="${test_file%.zl}.expected"
-    local strict_compile_fail="${STRICT_COMPILE_FAIL:-0}"
+    local strict_compile_fail="${STRICT_COMPILE_FAIL:-1}"
 
     echo "Testing compile-fail $filename..."
     echo "====================================================="
@@ -408,7 +408,7 @@ test_warning_file() {
     local test_file="$1"
     local filename=$(basename "$test_file")
     local expected_file="${test_file%.zl}.expected"
-    local strict_warning="${STRICT_WARNING:-0}"
+    local strict_warning="${STRICT_WARNING:-1}"
 
     echo "Testing warning $filename..."
     echo "====================================================="
@@ -1181,6 +1181,8 @@ fi
 
 if [ $FAILED_COMPILE -eq 0 ] && [ $FAILED_EXPECTED -eq 0 ] && [ $FAILED_COMPILE_FAIL -eq 0 ] && [ $FAILED_RUNTIME_FAIL -eq 0 ] && [ $FAILED_WARNING -eq 0 ]; then
     echo "🎉 All tests passed!"
+    exit 0
 else
     echo "❌ Some tests failed."
+    exit 1
 fi
