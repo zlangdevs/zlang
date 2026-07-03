@@ -13,6 +13,8 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+      - name: zig fmt check
+        run: zig fmt --check .
       - name: zig build test
         run: zig build test --summary all
 
