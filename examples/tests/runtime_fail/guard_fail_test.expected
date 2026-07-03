@@ -1,0 +1,2 @@
+panic: guard failed in incrementPositive
+x = -1

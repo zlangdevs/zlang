@@ -1,0 +1,7 @@
+fun nonZeroDiv(a: i32, b: i32) when (b != 0) >> i32 {
+    return a / b;
+}
+
+fun main() >> i32 {
+    return nonZeroDiv(20, 0);
+}

@@ -1,0 +1,3 @@
+panic: guard failed in nonZeroDiv
+a = 20
+b = 0

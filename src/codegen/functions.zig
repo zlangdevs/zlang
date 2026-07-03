@@ -10,6 +10,16 @@ const strings = @import("strings.zig");
 const c_bindings = @import("c_bindings.zig");
 const c = c_bindings.c;
 
+fn ensureStderrGlobal(cg: *llvm.CodeGenerator) c.LLVMValueRef {
+    if (c.LLVMGetNamedGlobal(cg.module, "stderr")) |existing| {
+        return existing;
+    }
+    const i8_ptr_ty = c.LLVMPointerType(c.LLVMInt8TypeInContext(cg.context), 0);
+    const global_var = c.LLVMAddGlobal(cg.module, i8_ptr_ty, "stderr");
+    c.LLVMSetLinkage(global_var, c.LLVMExternalLinkage);
+    return global_var;
+}
+
 pub fn declareLibcFunction(cg: *llvm.CodeGenerator, func_name: []const u8) !c.LLVMValueRef {
     if (cg.functions.get(func_name)) |existing| {
         return @ptrCast(existing);
@@ -384,28 +394,20 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
 
         c.LLVMPositionBuilderAtEnd(@ptrCast(cg.builder), fail_block);
 
-        var values_buf: std.ArrayList(u8) = .empty;
-        defer values_buf.deinit(cg.allocator);
-        for (func.parameters.items, 0..) |p, i| {
-            if (i > 0) try values_buf.appendSlice(cg.allocator, ", ");
-            try values_buf.appendSlice(cg.allocator, p.name);
-        }
-        const values_text = if (values_buf.items.len == 0) "<none>" else values_buf.items;
+        const msg_ptr = try strings.buildGuardPanicMessage(cg, func);
 
-        const panic_message = try std.fmt.allocPrint(cg.allocator, "panic: values: {s} do not match condition in function {s}", .{ values_text, func.name });
-        defer cg.allocator.free(panic_message);
-        const panic_message_z = utils.dupeZ(cg.allocator, panic_message);
-        defer cg.allocator.free(panic_message_z);
-
-        const msg_ptr = c.LLVMBuildGlobalStringPtr(cg.builder, panic_message_z.ptr, "guard_panic_msg");
-        const puts_fn = try declareLibcFunction(cg, "puts");
-        const puts_ty = c.LLVMGlobalGetValueType(puts_fn);
-        var puts_args = [_]c.LLVMValueRef{msg_ptr};
-        _ = c.LLVMBuildCall2(cg.builder, puts_ty, puts_fn, &puts_args, 1, "");
+        const i8_ptr_ty = c.LLVMPointerType(c.LLVMInt8TypeInContext(cg.context), 0);
+        const stderr_global = ensureStderrGlobal(cg);
+        const stderr_val = c.LLVMBuildLoad2(cg.builder, i8_ptr_ty, stderr_global, "stderr");
+        const fmt_ptr = c.LLVMBuildGlobalStringPtr(cg.builder, "%s\n", "guard_panic_fmt");
+        const fprintf_fn = try declareLibcFunction(cg, "fprintf");
+        const fprintf_ty = c.LLVMGlobalGetValueType(fprintf_fn);
+        var fprintf_args = [_]c.LLVMValueRef{ stderr_val, fmt_ptr, msg_ptr };
+        _ = c.LLVMBuildCall2(cg.builder, fprintf_ty, fprintf_fn, &fprintf_args, 3, "");
 
         const exit_fn = try declareLibcFunction(cg, "exit");
         const exit_ty = c.LLVMGlobalGetValueType(exit_fn);
-        const exit_code = c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 1, 0);
+        const exit_code = c.LLVMConstInt(c.LLVMInt32TypeInContext(cg.context), 101, 0);
         var exit_args = [_]c.LLVMValueRef{exit_code};
         _ = c.LLVMBuildCall2(cg.builder, exit_ty, exit_fn, &exit_args, 1, "");
         _ = c.LLVMBuildUnreachable(cg.builder);

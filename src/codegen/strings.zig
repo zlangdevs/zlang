@@ -246,6 +246,46 @@ fn appendAnyValue(cg: *llvm.CodeGenerator, dst: c.LLVMValueRef, value: c.LLVMVal
     _ = try appendFormatted(cg, dst, "<value>", &[_]c.LLVMValueRef{});
 }
 
+pub fn buildGuardPanicMessage(cg: *llvm.CodeGenerator, func: ast.Function) errors.CodegenError!c.LLVMValueRef {
+    const i8_ty = c.LLVMInt8TypeInContext(cg.context);
+    const i32_ty = c.LLVMInt32TypeInContext(cg.context);
+
+    const pool_info = ensureInterpolationPool(cg);
+    const cur_idx = c.LLVMBuildLoad2(cg.builder, i32_ty, pool_info.index, "guard_idx");
+    const one = c.LLVMConstInt(i32_ty, 1, 0);
+    const count = c.LLVMConstInt(i32_ty, INTERP_POOL_COUNT, 0);
+    const next = c.LLVMBuildURem(cg.builder, c.LLVMBuildAdd(cg.builder, cur_idx, one, "guard_next_idx"), count, "guard_mod");
+    _ = c.LLVMBuildStore(cg.builder, next, pool_info.index);
+
+    const zero = c.LLVMConstInt(i32_ty, 0, 0);
+    var idxs = [_]c.LLVMValueRef{ zero, next, zero };
+    const dst = c.LLVMBuildGEP2(cg.builder, pool_info.outer_ty, pool_info.pool, &idxs, 3, "guard_buf");
+    _ = c.LLVMBuildStore(cg.builder, c.LLVMConstInt(i8_ty, 0, 0), dst);
+
+    const prefix = try std.fmt.allocPrint(cg.allocator, "panic: guard failed in {s}: ", .{func.name});
+    defer cg.allocator.free(prefix);
+    _ = try appendFormatted(cg, dst, prefix, &[_]c.LLVMValueRef{});
+
+    if (func.parameters.items.len == 0) {
+        _ = try appendFormatted(cg, dst, "<no parameters>", &[_]c.LLVMValueRef{});
+        return dst;
+    }
+
+    for (func.parameters.items, 0..) |p, i| {
+        if (i > 0) _ = try appendFormatted(cg, dst, ", ", &[_]c.LLVMValueRef{});
+        _ = try appendFormatted(cg, dst, p.name, &[_]c.LLVMValueRef{});
+        _ = try appendFormatted(cg, dst, " = ", &[_]c.LLVMValueRef{});
+        if (llvm.CodeGenerator.getVariable(cg, p.name)) |var_info| {
+            const loaded = c.LLVMBuildLoad2(cg.builder, var_info.type_ref, var_info.value, "guard_arg");
+            try appendAnyValue(cg, dst, loaded, p.type_name);
+        } else {
+            _ = try appendFormatted(cg, dst, "<unknown>", &[_]c.LLVMValueRef{});
+        }
+    }
+
+    return dst;
+}
+
 pub fn generateInterpolationBuiltin(cg: *llvm.CodeGenerator, call: ast.FunctionCall) errors.CodegenError!c.LLVMValueRef {
     const i8_ty = c.LLVMInt8TypeInContext(cg.context);
     const i32_ty = c.LLVMInt32TypeInContext(cg.context);
