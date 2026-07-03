@@ -1,0 +1,3 @@
+# Incrementing a non-numeric (struct) value must be rejected, not crash the compiler
+Unsupported operator near 'p'
+Operator is not supported for these operand types

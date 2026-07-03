@@ -4167,7 +4167,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     // Process pending template instantiations
     while (code_generator.pending_template_instantiations.items.len > 0) {
-        const pending = code_generator.pending_template_instantiations.toOwnedSlice(allocator) catch unreachable;
+        const pending = try code_generator.pending_template_instantiations.toOwnedSlice(allocator);
         defer {
             for (pending) |*p| p.substitutions.deinit();
             allocator.free(pending);

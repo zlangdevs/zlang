@@ -1008,7 +1008,7 @@ const c = c_bindings.c;
                                         const one = c.LLVMConstReal(var_type, 1.0);
                                         break :blk c.LLVMBuildFSub(cg.builder, current_val, one, "fdec");
                                     },
-                                    else => unreachable,
+                                    else => return errors.CodegenError.UnsupportedOperation,
                                 };
 
                                 _ = c.LLVMBuildStore(cg.builder, new_val, var_ptr);
@@ -1054,7 +1054,7 @@ const c = c_bindings.c;
                                         const one = c.LLVMConstReal(element_type, 1.0);
                                         break :blk c.LLVMBuildFSub(cg.builder, current_val, one, "fdec");
                                     },
-                                    else => unreachable,
+                                    else => return errors.CodegenError.UnsupportedOperation,
                                 };
 
                                 _ = c.LLVMBuildStore(cg.builder, new_val, element_ptr);
@@ -1140,7 +1140,7 @@ const c = c_bindings.c;
                                         const one = c.LLVMConstReal(var_type, 1.0);
                                         break :blk c.LLVMBuildFAdd(cg.builder, current_val, one, "finc");
                                     },
-                                    else => unreachable,
+                                    else => return errors.CodegenError.UnsupportedOperation,
                                 };
                                 _ = c.LLVMBuildStore(cg.builder, new_val, var_ptr);
                                 return new_val;
@@ -1184,7 +1184,7 @@ const c = c_bindings.c;
                                         const one = c.LLVMConstReal(element_type, 1.0);
                                         break :blk c.LLVMBuildFAdd(cg.builder, current_val, one, "finc");
                                     },
-                                    else => unreachable,
+                                    else => return errors.CodegenError.UnsupportedOperation,
                                 };
 
                                 _ = c.LLVMBuildStore(cg.builder, new_val, element_ptr);
