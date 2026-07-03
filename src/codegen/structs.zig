@@ -189,7 +189,10 @@ pub fn generateRecursiveFieldAssignment(cg: *llvm.CodeGenerator, base_value: c.L
                 return errors.CodegenError.TypeMismatch;
             };
             const field_map = cg.struct_fields.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
-            const field_index = field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable;
+            const field_index = field_map.get(field_name) orelse {
+                cg.reportErrorFmt("Unknown field '{s}' on struct '{s}'", .{ field_name, current_type_name }, "Field must be declared in the struct");
+                return errors.CodegenError.UndefinedVariable;
+            };
 
             const field_ptr = try getStructFieldPointer(cg, struct_type, current_value, field_index);
 
@@ -403,7 +406,10 @@ pub fn generateRecursiveFieldAccess(cg: *llvm.CodeGenerator, base_value: c.LLVMV
                 return errors.CodegenError.TypeMismatch;
             };
             const field_map = cg.struct_fields.get(current_type_name) orelse return errors.CodegenError.TypeMismatch;
-            const field_index = field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable;
+            const field_index = field_map.get(field_name) orelse {
+                cg.reportErrorFmt("Unknown field '{s}' on struct '{s}'", .{ field_name, current_type_name }, "Field must be declared in the struct");
+                return errors.CodegenError.UndefinedVariable;
+            };
 
             const field_ptr = try getStructFieldPointer(cg, struct_type, current_value, field_index);
 
@@ -518,7 +524,10 @@ pub fn generateStructInitializer(cg: *llvm.CodeGenerator, struct_init: ast.Struc
 
     for (struct_init.field_values.items, 0..) |field_val, idx| {
         const field_index = if (field_val.field_name) |field_name|
-            field_map.get(field_name) orelse return errors.CodegenError.UndefinedVariable
+            field_map.get(field_name) orelse {
+                cg.reportErrorFmt("Unknown field '{s}' on struct '{s}'", .{ field_name, struct_init.struct_name }, "Field must be declared in the struct");
+                return errors.CodegenError.UndefinedVariable;
+            }
         else
             @as(c_uint, @intCast(idx));
         const field_ptr = try getStructFieldPointer(cg, struct_type, struct_ptr, field_index);

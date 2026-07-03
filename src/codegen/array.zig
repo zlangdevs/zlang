@@ -379,6 +379,11 @@ pub fn generateArrayAssignment(self: *CodeGenerator, arr_ass: ast.ArrayAssignmen
 
     index_value = self.castToType(index_value, c.LLVMInt32TypeInContext(self.context));
     try collected_indices.append(self.allocator, index_value);
+    const base_type_kind = c.LLVMGetTypeKind(base_type);
+    if (base_type_kind != c.LLVMArrayTypeKind and base_type_kind != c.LLVMVectorTypeKind) {
+        self.reportErrorFmt("Cannot index into non-array value of type '{s}'", .{base_type_name}, "Indexing with '[]' requires an array, pointer, or slice");
+        return errors.CodegenError.TypeMismatch;
+    }
     var final_type = base_type;
     for (0..collected_indices.items.len) |_| {
         final_type = c.LLVMGetElementType(@ptrCast(final_type));

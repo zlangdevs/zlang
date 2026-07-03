@@ -689,7 +689,10 @@ pub fn generateExpression(cg: *llvm.CodeGenerator, expr: *ast.Node) errors.Codeg
                 }
                 const struct_type = cg.struct_types.get(result_type_name) orelse return errors.CodegenError.TypeMismatch;
                 const field_map = cg.struct_fields.get(result_type_name) orelse return errors.CodegenError.TypeMismatch;
-                const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
+                const field_index = field_map.get(qual_id.field) orelse {
+                    cg.reportErrorFmt("Unknown field '{s}' on struct '{s}'", .{ qual_id.field, result_type_name }, "Field must be declared in the struct");
+                    return errors.CodegenError.UndefinedVariable;
+                };
                 var struct_ptr = result_value;
                 if (c.LLVMGetTypeKind(c.LLVMTypeOf(result_value)) != c.LLVMPointerTypeKind) {
                     const temp_alloca = cg.buildAllocaAtEntry(c.LLVMTypeOf(result_value), "temp_struct");
@@ -715,7 +718,10 @@ pub fn generateExpression(cg: *llvm.CodeGenerator, expr: *ast.Node) errors.Codeg
                             const inner_type_name = base_type_name[4 .. base_type_name.len - 1];
                             const struct_type = cg.struct_types.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
                             const field_map = cg.struct_fields.get(inner_type_name) orelse return errors.CodegenError.TypeMismatch;
-                            const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
+                            const field_index = field_map.get(qual_id.field) orelse {
+                                cg.reportErrorFmt("Unknown field '{s}' on struct '{s}'", .{ qual_id.field, inner_type_name }, "Field must be declared in the struct");
+                                return errors.CodegenError.UndefinedVariable;
+                            };
                             const loaded_ptr = c.LLVMBuildLoad2(cg.builder, result_type, result_value, "loaded_ptr");
                             const field_ptr = try cg.getStructFieldPointer(@ptrCast(struct_type), @ptrCast(loaded_ptr), field_index);
                             const field_type = try structs.getFieldType(cg, struct_type, field_index);
@@ -739,7 +745,10 @@ pub fn generateExpression(cg: *llvm.CodeGenerator, expr: *ast.Node) errors.Codeg
                         const struct_name = std.mem.span(name_ptr);
                         const struct_type = cg.struct_types.get(struct_name) orelse return errors.CodegenError.TypeMismatch;
                         const field_map = cg.struct_fields.get(struct_name) orelse return errors.CodegenError.TypeMismatch;
-                        const field_index = field_map.get(qual_id.field) orelse return errors.CodegenError.UndefinedVariable;
+                        const field_index = field_map.get(qual_id.field) orelse {
+                            cg.reportErrorFmt("Unknown field '{s}' on struct '{s}'", .{ qual_id.field, struct_name }, "Field must be declared in the struct");
+                            return errors.CodegenError.UndefinedVariable;
+                        };
                         const field_ptr = try cg.getStructFieldPointer(struct_type, result_value, field_index);
                         const field_type = try structs.getFieldType(cg, struct_type, field_index);
                         const field_type_kind = c.LLVMGetTypeKind(field_type);

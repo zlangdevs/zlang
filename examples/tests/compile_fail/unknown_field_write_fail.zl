@@ -1,0 +1,10 @@
+struct Point {
+    x i32,
+    y i32
+}
+
+fun main() >> i32 {
+    Point p;
+    p.zzz = 7;
+    return 0;
+}

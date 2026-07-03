@@ -1,0 +1,2 @@
+# Indexing a scalar struct field must be rejected, not crash the compiler
+Cannot index into non-array value of type 'i32'

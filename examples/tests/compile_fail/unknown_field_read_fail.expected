@@ -1,0 +1,2 @@
+# Reading an undeclared struct field is a field error, not "undefined variable"
+Unknown field 'zzz' on struct 'Point'
