@@ -9,6 +9,7 @@ const simd = @import("simd.zig");
 const enums = @import("enums.zig");
 const functions = @import("functions.zig");
 const array = @import("array.zig");
+const error_flow = @import("error_flow.zig");
 const llvm = @import("llvm.zig");
 
 const c_bindings = @import("c_bindings.zig");
@@ -369,7 +370,7 @@ const c = c_bindings.c;
                 return try llvm.CodeGenerator.generateFunctionCall(cg, call, expected_type);
             },
             .handled_call_stmt => |handled| {
-                return try cg.generateHandledCall(handled, expected_type);
+                return try error_flow.generateHandledCall(cg, handled, expected_type);
             },
             .expression_block => |block| {
                 return try cg.generateExpressionBlock(block);
@@ -562,7 +563,7 @@ const c = c_bindings.c;
                 return try cg.generateExpressionBlock(block);
             },
             .handled_call_stmt => |handled| {
-                return try cg.generateHandledCall(handled, null);
+                return try error_flow.generateHandledCall(cg, handled, null);
             },
             .identifier => |ident| {
                 if (std.mem.eql(u8, ident.name, "true")) {
