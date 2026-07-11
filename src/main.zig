@@ -2420,7 +2420,6 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
                     i += 1;
                     if (i >= args.len) return errors.CLIError.InvalidArgument;
                     const combined = try std.fmt.allocPrint(allocator, "{s}{s}", .{ flag, args[i] });
-                    defer allocator.free(combined);
                     try context.extra_args.append(allocator, combined);
                 } else if (std.mem.startsWith(u8, flag, "-Wl,")) {
                     try context.extra_args.append(allocator, flag);
