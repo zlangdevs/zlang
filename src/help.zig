@@ -118,7 +118,7 @@ pub fn printHelp() void {
         \\  zlang -o myapp main.zl -lSDL2
         \\  zlang main.zl -DLOGMODE=true -o myapp
         \\
-        \\{s}For more information, visit:{s} {s}https://github.com/zlang-dev/zlang{s}
+        \\{s}For more information, visit:{s} {s}https://github.com/zlangdevs/zlang{s}
         \\
     , .{
         bold, reset,
