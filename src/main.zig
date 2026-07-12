@@ -2342,6 +2342,8 @@ fn parseArgs(args: [][:0]u8) anyerror!Context {
             continue;
         }
 
+        if (args[i].len == 0) return errors.CLIError.InvalidArgument;
+
         switch (args[i][0]) {
             '-' => {
                 const flag = args[i];
