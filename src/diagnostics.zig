@@ -17,6 +17,10 @@ pub const Diagnostic = struct {
     token_text: ?[]const u8 = null,
 };
 
+fn stdoutIsTty() bool {
+    return std.c.isatty(std.posix.STDOUT_FILENO) != 0;
+}
+
 fn getLineContent(allocator: std.mem.Allocator, file_path: []const u8, line_num: usize) !?[]const u8 {
     var threaded: std.Io.Threaded = .init(allocator, .{});
     defer threaded.deinit();
@@ -36,11 +40,12 @@ fn getLineContent(allocator: std.mem.Allocator, file_path: []const u8, line_num:
 }
 
 pub fn printDiagnostic(allocator: std.mem.Allocator, diag: Diagnostic) void {
-    const red = "\x1b[31m";
-    const blue = "\x1b[34m";
-    const yellow = "\x1b[33m";
-    const bold = "\x1b[1m";
-    const reset = "\x1b[0m";
+    const use_color = stdoutIsTty();
+    const red = if (use_color) "\x1b[31m" else "";
+    const blue = if (use_color) "\x1b[34m" else "";
+    const yellow = if (use_color) "\x1b[33m" else "";
+    const bold = if (use_color) "\x1b[1m" else "";
+    const reset = if (use_color) "\x1b[0m" else "";
 
     const color = switch (diag.severity) {
         .Error => red,
