@@ -1263,6 +1263,7 @@ pub const CodeGenerator = struct {
                             const is_float = current_type_kind == c.LLVMFloatTypeKind or
                                 current_type_kind == c.LLVMDoubleTypeKind or
                                 current_type_kind == c.LLVMHalfTypeKind;
+                            const is_unsigned = !is_float and isUnsignedType(self.getTypeNameFromLLVMType(elem_type));
 
                             const new_value = switch (cas.op) {
                                 '+' => if (is_float)
@@ -1279,6 +1280,8 @@ pub const CodeGenerator = struct {
                                     c.LLVMBuildMul(self.builder, current_value, rhs_value, "mul_compound"),
                                 '/' => if (is_float)
                                     c.LLVMBuildFDiv(self.builder, current_value, rhs_value, "fdiv_compound")
+                                else if (is_unsigned)
+                                    c.LLVMBuildUDiv(self.builder, current_value, rhs_value, "udiv_compound")
                                 else
                                     c.LLVMBuildSDiv(self.builder, current_value, rhs_value, "sdiv_compound"),
                                 else => return errors.CodegenError.UnsupportedOperation,
@@ -1306,6 +1309,7 @@ pub const CodeGenerator = struct {
                         const is_float = current_type_kind == c.LLVMFloatTypeKind or
                             current_type_kind == c.LLVMDoubleTypeKind or
                             current_type_kind == c.LLVMHalfTypeKind;
+                        const is_unsigned = !is_float and isUnsignedType(var_info.type_name);
                         const rhs_value = try self.generateExpressionWithContext(cas.value, var_info.type_name);
                         const rhs_type = c.LLVMTypeOf(rhs_value);
                         const rhs_kind = c.LLVMGetTypeKind(rhs_type);
@@ -1329,6 +1333,8 @@ pub const CodeGenerator = struct {
                                 c.LLVMBuildMul(self.builder, current_value, rhs_casted, "mul_compound"),
                             '/' => if (is_float)
                                 c.LLVMBuildFDiv(self.builder, current_value, rhs_casted, "fdiv_compound")
+                            else if (is_unsigned)
+                                c.LLVMBuildUDiv(self.builder, current_value, rhs_casted, "udiv_compound")
                             else
                                 c.LLVMBuildSDiv(self.builder, current_value, rhs_casted, "sdiv_compound"),
                             '%' => if (is_float) blk: {
@@ -1360,6 +1366,7 @@ pub const CodeGenerator = struct {
                         const is_float = std.mem.eql(u8, expected_ty_name, "f16") or
                             std.mem.eql(u8, expected_ty_name, "f32") or
                             std.mem.eql(u8, expected_ty_name, "f64");
+                        const is_unsigned = !is_float and isUnsignedType(expected_ty_name);
 
                         const new_value = switch (cas.op) {
                             '+' => if (is_float)
@@ -1376,6 +1383,8 @@ pub const CodeGenerator = struct {
                                 c.LLVMBuildMul(self.builder, current_val, rhs_val, "mul_array_compound"),
                             '/' => if (is_float)
                                 c.LLVMBuildFDiv(self.builder, current_val, rhs_val, "fdiv_array_compound")
+                            else if (is_unsigned)
+                                c.LLVMBuildUDiv(self.builder, current_val, rhs_val, "udiv_array_compound")
                             else
                                 c.LLVMBuildSDiv(self.builder, current_val, rhs_val, "sdiv_array_compound"),
                             '%' => if (is_float) blk: {
@@ -1414,6 +1423,7 @@ pub const CodeGenerator = struct {
                         const is_float = field_type_kind == c.LLVMFloatTypeKind or
                             field_type_kind == c.LLVMDoubleTypeKind or
                             field_type_kind == c.LLVMHalfTypeKind;
+                        const is_unsigned = !is_float and isUnsignedType(field_type_name);
                         const rhs_value = try self.generateExpressionWithContext(cas.value, field_type_name);
                         const rhs_type = c.LLVMTypeOf(rhs_value);
                         const rhs_kind = c.LLVMGetTypeKind(rhs_type);
@@ -1437,6 +1447,8 @@ pub const CodeGenerator = struct {
                                 c.LLVMBuildMul(self.builder, current_value, rhs_casted, "mul_field_compound"),
                             '/' => if (is_float)
                                 c.LLVMBuildFDiv(self.builder, current_value, rhs_casted, "fdiv_field_compound")
+                            else if (is_unsigned)
+                                c.LLVMBuildUDiv(self.builder, current_value, rhs_casted, "udiv_field_compound")
                             else
                                 c.LLVMBuildSDiv(self.builder, current_value, rhs_casted, "sdiv_field_compound"),
                             '%' => if (is_float) blk: {
