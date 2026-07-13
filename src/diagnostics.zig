@@ -15,10 +15,21 @@ pub const Diagnostic = struct {
     hint: ?[]const u8 = null,
     severity: Severity = .Error,
     token_text: ?[]const u8 = null,
+    source_text: ?[]const u8 = null,
 };
 
 fn stdoutIsTty() bool {
     return std.c.isatty(std.posix.STDOUT_FILENO) != 0;
+}
+
+fn getLineFromSource(source: []const u8, line_num: usize) ?[]const u8 {
+    var it = std.mem.splitScalar(u8, source, '\n');
+    var current: usize = 1;
+    while (it.next()) |line| {
+        if (current == line_num) return line;
+        current += 1;
+    }
+    return null;
 }
 
 fn getLineContent(allocator: std.mem.Allocator, file_path: []const u8, line_num: usize) !?[]const u8 {
@@ -63,7 +74,15 @@ pub fn printDiagnostic(allocator: std.mem.Allocator, diag: Diagnostic) void {
 
     std.debug.print("{s}-->{s} {s}:{d}:{d}\n", .{ blue, reset, diag.file_path, diag.line, diag.column });
 
-    if (getLineContent(allocator, diag.file_path, diag.line) catch null) |line_content| {
+    const line_content_owned = blk: {
+        if (diag.source_text) |src| {
+            if (getLineFromSource(src, diag.line)) |line| {
+                break :blk utils.dupe(u8, allocator, line);
+            }
+        }
+        break :blk getLineContent(allocator, diag.file_path, diag.line) catch null;
+    };
+    if (line_content_owned) |line_content| {
         defer allocator.free(line_content);
         const trimmed_line = std.mem.trimEnd(u8, line_content, "\r");
 
