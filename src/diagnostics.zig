@@ -90,12 +90,11 @@ pub fn printDiagnostic(allocator: std.mem.Allocator, diag: Diagnostic) void {
 
         std.debug.print("{s}{d:3} |{s} {s}\n", .{ blue, diag.line, reset, trimmed_line });
 
-        var col = diag.column;
+        const col = diag.column;
         var len: usize = 1;
 
         if (diag.token_text) |token| {
-            if (std.mem.indexOf(u8, trimmed_line, token)) |idx| {
-                col = idx + 1;
+            if (col <= trimmed_line.len and std.mem.indexOfPos(u8, trimmed_line, col -| 1, token) != null) {
                 len = token.len;
             }
         }
