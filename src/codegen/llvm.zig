@@ -1351,7 +1351,10 @@ pub const CodeGenerator = struct {
                             '$', '|' => c.LLVMBuildOr(self.builder, current_value, rhs_casted, "or_compound"),
                             '^' => c.LLVMBuildXor(self.builder, current_value, rhs_casted, "xor_compound"),
                             '<' => c.LLVMBuildShl(self.builder, current_value, rhs_casted, "shl_compound"),
-                            '>' => c.LLVMBuildAShr(self.builder, current_value, rhs_casted, "ashr_compound"),
+                            '>' => if (is_unsigned)
+                                c.LLVMBuildLShr(self.builder, current_value, rhs_casted, "lshr_compound")
+                            else
+                                c.LLVMBuildAShr(self.builder, current_value, rhs_casted, "ashr_compound"),
                             else => return errors.CodegenError.UnsupportedOperation,
                         };
                         _ = c.LLVMBuildStore(self.builder, new_value, var_info.value);
@@ -1401,7 +1404,10 @@ pub const CodeGenerator = struct {
                             '$', '|' => c.LLVMBuildOr(self.builder, current_val, rhs_val, "or_array_compound"),
                             '^' => c.LLVMBuildXor(self.builder, current_val, rhs_val, "xor_array_compound"),
                             '<' => c.LLVMBuildShl(self.builder, current_val, rhs_val, "shl_array_compound"),
-                            '>' => c.LLVMBuildAShr(self.builder, current_val, rhs_val, "ashr_array_compound"),
+                            '>' => if (is_unsigned)
+                                c.LLVMBuildLShr(self.builder, current_val, rhs_val, "lshr_array_compound")
+                            else
+                                c.LLVMBuildAShr(self.builder, current_val, rhs_val, "ashr_array_compound"),
                             else => return errors.CodegenError.UnsupportedOperation,
                         };
                         _ = c.LLVMBuildStore(self.builder, new_value, access.ptr);
@@ -1465,7 +1471,10 @@ pub const CodeGenerator = struct {
                             '$', '|' => c.LLVMBuildOr(self.builder, current_value, rhs_casted, "or_field_compound"),
                             '^' => c.LLVMBuildXor(self.builder, current_value, rhs_casted, "xor_field_compound"),
                             '<' => c.LLVMBuildShl(self.builder, current_value, rhs_casted, "shl_field_compound"),
-                            '>' => c.LLVMBuildAShr(self.builder, current_value, rhs_casted, "ashr_field_compound"),
+                            '>' => if (is_unsigned)
+                                c.LLVMBuildLShr(self.builder, current_value, rhs_casted, "lshr_field_compound")
+                            else
+                                c.LLVMBuildAShr(self.builder, current_value, rhs_casted, "ashr_field_compound"),
                             else => return errors.CodegenError.UnsupportedOperation,
                         };
                         _ = c.LLVMBuildStore(self.builder, new_value, field_ptr);
