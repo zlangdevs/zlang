@@ -73,7 +73,7 @@ pub fn generateExpressionWithContext(cg: *llvm.CodeGenerator, expr: *ast.Node, e
             }
         },
         .float_literal => |float| {
-            const float_val = numeric.parseFloatLiteral(float.value) catch 0.0;
+            const float_val = numeric.parseFloatLiteral(float.value) catch return errors.CodegenError.TypeMismatch;
 
             if (expected_type) |type_name| {
                 if (std.mem.eql(u8, type_name, "f16")) {
@@ -89,7 +89,7 @@ pub fn generateExpressionWithContext(cg: *llvm.CodeGenerator, expr: *ast.Node, e
         },
         .number_literal => |num| {
             if (std.mem.indexOf(u8, num.value, ".") != null) {
-                const float_val = numeric.parseFloatLiteral(num.value) catch 0.0;
+                const float_val = numeric.parseFloatLiteral(num.value) catch return errors.CodegenError.TypeMismatch;
 
                 if (expected_type) |type_name| {
                     if (std.mem.eql(u8, type_name, "f16")) {
@@ -107,7 +107,7 @@ pub fn generateExpressionWithContext(cg: *llvm.CodeGenerator, expr: *ast.Node, e
                     const llvm_type = try cg.getLLVMType(type_name);
                     const expected_kind = c.LLVMGetTypeKind(llvm_type);
                     if (expected_kind != c.LLVMIntegerTypeKind) {
-                        const value = numeric.parseNumericLiteral(num.value) catch 0;
+                        const value = numeric.parseNumericLiteral(num.value) catch return errors.CodegenError.TypeMismatch;
                         return c.LLVMConstInt(c.LLVMInt64TypeInContext(cg.context), @as(c_ulonglong, @intCast(value)), 0);
                     }
                     if (std.mem.startsWith(u8, type_name, "u")) {
@@ -765,15 +765,15 @@ pub fn generateExpression(cg: *llvm.CodeGenerator, expr: *ast.Node) errors.Codeg
             return errors.CodegenError.TypeMismatch;
         },
         .float_literal => |float| {
-            const float_val = numeric.parseFloatLiteral(float.value) catch 0.0;
+            const float_val = numeric.parseFloatLiteral(float.value) catch return errors.CodegenError.TypeMismatch;
             return c.LLVMConstReal(c.LLVMDoubleTypeInContext(cg.context), float_val);
         },
         .number_literal => |num| {
             if (std.mem.indexOf(u8, num.value, ".") != null) {
-                const float_val = numeric.parseFloatLiteral(num.value) catch 0.0;
+                const float_val = numeric.parseFloatLiteral(num.value) catch return errors.CodegenError.TypeMismatch;
                 return c.LLVMConstReal(c.LLVMDoubleTypeInContext(cg.context), float_val);
             } else {
-                const value = numeric.parseNumericLiteral(num.value) catch 0;
+                const value = numeric.parseNumericLiteral(num.value) catch return errors.CodegenError.TypeMismatch;
                 return c.LLVMConstInt(c.LLVMInt64TypeInContext(cg.context), @as(c_ulonglong, @intCast(value)), 0);
             }
         },
