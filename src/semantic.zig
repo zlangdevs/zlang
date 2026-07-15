@@ -816,7 +816,15 @@ pub const Analyzer = struct {
 
     fn analyzeFunctionCall(self: *Analyzer, node: *ast.Node, call: ast.FunctionCall, suppress_unhandled_warning: bool) errors.SemanticError!void {
         if (!call.is_libc and !self.functions.contains(call.name) and self.lookupVariable(call.name) == null) {
-            self.reportNodeErrorFmt(node, "Undefined function '{s}'", .{call.name}, "Declare it or import its module with use (maybe you forgot to import it?)");
+            const names = self.gatherKnownNames(self.allocator, true) catch &.{};
+            defer self.allocator.free(names);
+            if (Analyzer.suggestClosest(call.name, names)) |suggestion| {
+                const hint = std.fmt.allocPrint(self.allocator, "Did you mean '{s}'? Declare it or import its module with use", .{suggestion}) catch "Declare it or import its module with use (maybe you forgot to import it?)";
+                defer self.allocator.free(hint);
+                self.reportNodeErrorFmt(node, "Undefined function '{s}'", .{call.name}, hint);
+            } else {
+                self.reportNodeErrorFmt(node, "Undefined function '{s}'", .{call.name}, "Declare it or import its module with use (maybe you forgot to import it?)");
+            }
         }
 
         if (!suppress_unhandled_warning) {
@@ -849,7 +857,15 @@ pub const Analyzer = struct {
                     }
                 }
 
-                self.reportNodeErrorFmt(expr, "Undefined variable '{s}'", .{ident.name}, "Variable is not declared in this scope");
+                const names = self.gatherKnownNames(self.allocator, true) catch &.{};
+                defer self.allocator.free(names);
+                if (Analyzer.suggestClosest(ident.name, names)) |suggestion| {
+                    const hint = std.fmt.allocPrint(self.allocator, "Did you mean '{s}'? Variable is not declared in this scope", .{suggestion}) catch "Variable is not declared in this scope";
+                    defer self.allocator.free(hint);
+                    self.reportNodeErrorFmt(expr, "Undefined variable '{s}'", .{ident.name}, hint);
+                } else {
+                    self.reportNodeErrorFmt(expr, "Undefined variable '{s}'", .{ident.name}, "Variable is not declared in this scope");
+                }
             },
             .qualified_identifier => |qual| {
                 if (qual.base.data == .identifier and self.enum_types.contains(qual.base.data.identifier.name)) {
@@ -987,6 +1003,62 @@ pub const Analyzer = struct {
         };
         defer self.allocator.free(msg);
         self.reportNodeError(node, msg, hint);
+    }
+
+    fn levenshtein(a: []const u8, b: []const u8) usize {
+        if (a.len == 0) return b.len;
+        if (b.len == 0) return a.len;
+        if (b.len >= 256) return b.len;
+        var prev: [256]usize = undefined;
+        var curr: [256]usize = undefined;
+        for (0..b.len + 1) |j| prev[j] = j;
+        var i: usize = 1;
+        while (i <= a.len) : (i += 1) {
+            curr[0] = i;
+            var j: usize = 1;
+            while (j <= b.len) : (j += 1) {
+                const cost: usize = if (a[i - 1] == b[j - 1]) 0 else 1;
+                const del = prev[j] + 1;
+                const ins = curr[j - 1] + 1;
+                const sub = prev[j - 1] + cost;
+                curr[j] = @min(del, @min(ins, sub));
+            }
+            for (0..b.len + 1) |k| prev[k] = curr[k];
+        }
+        return prev[b.len];
+    }
+
+    fn suggestClosest(name: []const u8, candidates: []const []const u8) ?[]const u8 {
+        if (name.len == 0) return null;
+        const max_dist = @max(2, name.len / 3);
+        var best: ?[]const u8 = null;
+        var best_dist: usize = max_dist + 1;
+        for (candidates) |cand| {
+            if (std.mem.eql(u8, cand, name)) return null;
+            const d = levenshtein(name, cand);
+            if (d < best_dist) {
+                best_dist = d;
+                best = cand;
+            }
+        }
+        return if (best_dist <= max_dist) best else null;
+    }
+
+    fn gatherKnownNames(self: *Analyzer, alloc: std.mem.Allocator, include_functions: bool) ![]const []const u8 {
+        var list: std.ArrayList([]const u8) = .empty;
+        for (self.scopes.items) |scope| {
+            var it = scope.iterator();
+            while (it.next()) |entry| try list.append(alloc, entry.key_ptr.*);
+        }
+        var g_it = self.globals.iterator();
+        while (g_it.next()) |entry| try list.append(alloc, entry.key_ptr.*);
+        if (include_functions) {
+            var f_it = self.functions.iterator();
+            while (f_it.next()) |entry| try list.append(alloc, entry.key_ptr.*);
+        }
+        var e_it = self.enum_values.iterator();
+        while (e_it.next()) |entry| try list.append(alloc, entry.key_ptr.*);
+        return list.items;
     }
 
     fn reportNodeWarning(self: *Analyzer, node: *ast.Node, message: []const u8, hint: ?[]const u8) void {
