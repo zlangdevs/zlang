@@ -89,7 +89,7 @@ fn evalConstIntExpr(node: *ast.Node) ?i64 {
             const inner = evalConstIntExpr(u.operand) orelse break :blk null;
             break :blk switch (u.op) {
                 '+' => inner,
-                '-' => -inner,
+                '-' => if (inner == std.math.minInt(i64)) null else -inner,
                 '~' => ~inner,
                 else => null,
             };
@@ -98,11 +98,11 @@ fn evalConstIntExpr(node: *ast.Node) ?i64 {
             const lhs = evalConstIntExpr(b.lhs) orelse break :blk null;
             const rhs = evalConstIntExpr(b.rhs) orelse break :blk null;
             break :blk switch (b.op) {
-                '+' => lhs + rhs,
-                '-' => lhs - rhs,
-                '*' => lhs * rhs,
-                '/' => if (rhs == 0) null else @divTrunc(lhs, rhs),
-                '%' => if (rhs == 0) null else @rem(lhs, rhs),
+                '+' => std.math.add(i64, lhs, rhs) catch null,
+                '-' => std.math.sub(i64, lhs, rhs) catch null,
+                '*' => std.math.mul(i64, lhs, rhs) catch null,
+                '/' => if (rhs == 0 or (lhs == std.math.minInt(i64) and rhs == -1)) null else @divTrunc(lhs, rhs),
+                '%' => if (rhs == 0 or (lhs == std.math.minInt(i64) and rhs == -1)) null else @rem(lhs, rhs),
                 '<' => if (rhs < 0 or rhs > 62) null else lhs << @intCast(rhs),
                 '>' => if (rhs < 0 or rhs > 62) null else lhs >> @intCast(rhs),
                 '&' => lhs & rhs,
