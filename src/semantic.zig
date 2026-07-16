@@ -40,6 +40,7 @@ pub const Analyzer = struct {
     function_defs: std.StringHashMap(ast.Function),
     globals: std.StringHashMap(VarInfo),
     scopes: std.ArrayList(std.StringHashMap(VarInfo)),
+    used_names: std.StringHashMap(void),
     loop_depth: usize,
     current_function_name: ?[]const u8,
     current_global_name: ?[]const u8,
@@ -60,6 +61,7 @@ pub const Analyzer = struct {
             .function_flows = std.StringHashMap(FunctionFlowInfo).init(allocator),
             .function_defs = std.StringHashMap(ast.Function).init(allocator),
             .globals = std.StringHashMap(VarInfo).init(allocator),
+            .used_names = std.StringHashMap(void).init(allocator),
             .scopes = .empty,
             .loop_depth = 0,
             .current_function_name = null,
@@ -86,6 +88,7 @@ pub const Analyzer = struct {
         self.function_flows.deinit();
         self.function_defs.deinit();
         self.globals.deinit();
+        self.used_names.deinit();
         for (self.scopes.items) |*scope| {
             scope.deinit();
         }
@@ -302,6 +305,17 @@ pub const Analyzer = struct {
             }
 
             try self.analyzeStatementList(func.body.items, &labels);
+
+            if (self.scopes.items.len > 0) {
+                const func_scope = self.scopes.items[self.scopes.items.len - 1];
+                var it = func_scope.iterator();
+                while (it.next()) |entry| {
+                    const name = entry.key_ptr.*;
+                    if (!self.used_names.contains(name)) {
+                        self.reportNodeWarningFmt(node, "Unused local '{s}'", .{name}, "Prefix with _ to silence, or remove it");
+                    }
+                }
+            }
         }
     }
 
@@ -847,6 +861,7 @@ pub const Analyzer = struct {
         switch (expr.data) {
             .identifier => |ident| {
                 if (self.isBuiltinIdentifier(ident.name)) return;
+                self.markUsed(ident.name);
                 if (self.enum_values.contains(ident.name)) return;
                 if (self.error_codes.contains(ident.name)) return;
                 if (self.lookupVariable(ident.name) != null) return;
@@ -1042,6 +1057,10 @@ pub const Analyzer = struct {
             }
         }
         return if (best_dist <= max_dist) best else null;
+    }
+
+    fn markUsed(self: *Analyzer, name: []const u8) void {
+        self.used_names.put(name, {}) catch {};
     }
 
     fn gatherKnownNames(self: *Analyzer, alloc: std.mem.Allocator, include_functions: bool) ![]const []const u8 {
