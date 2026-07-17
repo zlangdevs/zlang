@@ -119,7 +119,26 @@ pub const Analyzer = struct {
             switch (node.data) {
                 .function => |func| {
                     try self.functions.put(func.name, {});
-                    if (!self.function_defs.contains(func.name)) {
+                    if (self.function_defs.getPtr(func.name)) |existing_ptr| {
+                        if (std.mem.eql(u8, existing_ptr.return_type, func.return_type) and
+                            existing_ptr.parameters.items.len == func.parameters.items.len)
+                        {
+                            var same_params = true;
+                            for (existing_ptr.parameters.items, func.parameters.items) |a, b| {
+                                if (!std.mem.eql(u8, a.type_name, b.type_name)) {
+                                    same_params = false;
+                                    break;
+                                }
+                            }
+                            if (same_params) {
+                                self.reportNodeErrorFmt(node, "Redeclared function '{s}'", .{func.name}, "Function names with identical parameter signatures must be unique");
+                            } else {
+                                existing_ptr.* = func;
+                            }
+                        } else {
+                            existing_ptr.* = func;
+                        }
+                    } else {
                         try self.function_defs.put(func.name, func);
                     }
                 },
