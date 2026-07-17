@@ -3989,6 +3989,20 @@ pub fn main(init: std.process.Init) !u8 {
                 }
                 break :blk "Type mismatch in code generation.";
             },
+            error.MissingReturn => blk: {
+                if (code_generator.current_line > 0) {
+                    const file_path = code_generator.module_manager.getCurrentModulePath();
+                    diagnostics.printDiagnostic(allocator, .{
+                        .file_path = file_path,
+                        .line = code_generator.current_line,
+                        .column = 1,
+                        .message = "Not all code paths return a value",
+                        .severity = .Error,
+                        .hint = "Add a return statement on every control-flow path, or change the return type to void",
+                    });
+                }
+                break :blk "Not all code paths return a value.";
+            },
             error.NullNotAllowedInNonPointerType => "Null can only be assigned to pointer types. Cannot assign null to non-pointer type.",
             error.UndefinedFunction => "Undefined function called.",
             error.UndefinedVariable => blk: {

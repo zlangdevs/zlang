@@ -58,6 +58,7 @@ pub const CodegenError = error{
     RedeclaredVariable,
     ConstReassignment,
     UnknownType,
+    MissingReturn,
 };
 
 pub const CLIError = error{ NoInputPath, NoOutputPath, NoArch, InvalidArgument, NoHelp };

@@ -422,7 +422,7 @@ pub fn generateFunctionBody(cg: *llvm.CodeGenerator, func: ast.Function) errors.
     }
     if (!valid_control_flow and !std.mem.eql(u8, func.return_type, "void")) {
         if (func.body.items.len == 0 or !utils.isReturnStatement(func.body.items[func.body.items.len - 1])) {
-            return errors.CodegenError.TypeMismatch;
+            return errors.CodegenError.MissingReturn;
         }
     }
     if (valid_control_flow) {
