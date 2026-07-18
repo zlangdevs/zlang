@@ -858,6 +858,16 @@ pub const Analyzer = struct {
             } else {
                 self.reportNodeErrorFmt(node, "Undefined function '{s}'", .{call.name}, "Declare it or import its module with use (maybe you forgot to import it?)");
             }
+        } else if (self.function_defs.get(call.name)) |func_def| {
+            if (call.args.items.len != func_def.parameters.items.len) {
+                const hint = std.fmt.allocPrint(
+                    self.allocator,
+                    "Function '{s}' expects {d} argument(s), got {d}",
+                    .{ call.name, func_def.parameters.items.len, call.args.items.len },
+                ) catch "Argument count does not match function definition";
+                defer self.allocator.free(hint);
+                self.reportNodeErrorFmt(node, "Wrong number of arguments to '{s}'", .{call.name}, hint);
+            }
         }
 
         if (!suppress_unhandled_warning) {
