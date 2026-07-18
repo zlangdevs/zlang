@@ -14,6 +14,10 @@ wrap @strftime(s: ptr<u8>, maxsize: u64, format: ptr<u8>, tm: ptr<u8>) >> u64;
 wrap @asctime(tm: ptr<u8>) >> ptr<u8>;
 wrap @ctime(timer: ptr<i64>) >> ptr<u8>;
 
+?? High-resolution wall clock (POSIX clock_gettime)
+fun @clock_gettime(clk_id: i32, tp: ptr<u8>) >> i32;
+i32 CLOCK_REALTIME = 0;
+
 ?? Sleep functions (platform specific)
 wrap @usleep(usec: u32) >> i32;
 wrap @sleep(seconds: u32) >> u32;
@@ -23,10 +27,17 @@ fun now() >> i64 {
     return time(null);
 }
 
-?? Get current timestamp in milliseconds (approximation using clock)
+?? Get current timestamp in milliseconds via clock_gettime
 fun nowMillis() >> i64 {
-    ?? clock() returns processor time, not wall time, so use time() * 1000
-    return now() * 1000;
+    arr<u8, 16> ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts[0]) != 0) {
+        return now() * 1000;
+    }
+    ptr<i64> secs_ptr = (&ts[0]) as ptr<i64>;
+    i64 secs = *secs_ptr;
+    ptr<i64> nsec_ptr = (&ts[8]) as ptr<i64>;
+    i64 nsec = *nsec_ptr;
+    return secs * 1000 + nsec / 1000000;
 }
 
 ?? Sleep for specified number of seconds
