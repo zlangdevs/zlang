@@ -18,7 +18,7 @@ fun randRange(min: i32, max: i32) >> i32 {
 }
 
 fun randFloat() >> f64 {
-    return (rand() as f64) / 2147483647.0;
+    return (rand() as f64) / 2147483648.0;
 }
 
 fun randBool() >> bool {
