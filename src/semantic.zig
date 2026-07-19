@@ -5,6 +5,7 @@ const diagnostics = @import("diagnostics.zig");
 
 const VarInfo = struct {
     is_const: bool,
+    initialized: bool = false,
 };
 
 const FunctionFlowInfo = struct {
@@ -316,7 +317,7 @@ pub const Analyzer = struct {
             defer self.popScope();
 
             for (func.parameters.items) |param| {
-                try self.declareVariable(node, param.name, false);
+                try self.declareVariable(node, param.name, false, true);
             }
 
             if (func.guard) |guard| {
@@ -506,7 +507,7 @@ pub const Analyzer = struct {
         scope.deinit();
     }
 
-    fn declareVariable(self: *Analyzer, node: *ast.Node, name: []const u8, is_const: bool) errors.SemanticError!void {
+    fn declareVariable(self: *Analyzer, node: *ast.Node, name: []const u8, is_const: bool, with_initializer: bool) errors.SemanticError!void {
         if (self.scopes.items.len == 0) {
             self.reportNodeError(node, "Internal semantic scope error", null);
             return;
@@ -518,7 +519,21 @@ pub const Analyzer = struct {
             return;
         }
 
-        try scope.put(name, .{ .is_const = is_const });
+        try scope.put(name, .{ .is_const = is_const, .initialized = with_initializer });
+    }
+
+    fn markInitialized(self: *Analyzer, name: []const u8) void {
+        var i: usize = self.scopes.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.scopes.items[i].getPtr(name)) |info| {
+                info.initialized = true;
+                return;
+            }
+        }
+        if (self.globals.getPtr(name)) |info| {
+            info.initialized = true;
+        }
     }
 
     fn lookupVariable(self: *Analyzer, name: []const u8) ?VarInfo {
@@ -546,14 +561,18 @@ pub const Analyzer = struct {
     fn analyzeStatement(self: *Analyzer, stmt: *ast.Node, labels: *const std.StringHashMap(void)) errors.SemanticError!void {
         switch (stmt.data) {
             .var_decl => |decl| {
+                const has_init = decl.initializer != null;
                 if (decl.initializer) |initializer_node| {
                     try self.analyzeExpression(initializer_node);
                 }
-                try self.declareVariable(stmt, decl.name, decl.is_const);
+                try self.declareVariable(stmt, decl.name, decl.is_const, has_init);
             },
             .assignment => |as| {
                 try self.analyzeAssignmentTarget(as.target, true);
                 try self.analyzeExpression(as.value);
+                if (as.target.data == .identifier) {
+                    self.markInitialized(as.target.data.identifier.name);
+                }
             },
             .compound_assignment => |as| {
                 try self.analyzeAssignmentTarget(as.target, true);
@@ -893,7 +912,12 @@ pub const Analyzer = struct {
                 self.markUsed(ident.name);
                 if (self.enum_values.contains(ident.name)) return;
                 if (self.error_codes.contains(ident.name)) return;
-                if (self.lookupVariable(ident.name) != null) return;
+                if (self.lookupVariable(ident.name)) |info| {
+                    if (!info.initialized) {
+                        self.reportNodeErrorFmt(expr, "Use of uninitialized variable '{s}'", .{ident.name}, "Assign a value before reading, or initialize at declaration");
+                    }
+                    return;
+                }
                 if (self.functions.contains(ident.name)) return;
                 if (self.allow_unknown_identifiers) {
                     if (self.solicit_allowed_identifiers) |allowed| {
