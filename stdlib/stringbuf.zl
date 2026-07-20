@@ -1,0 +1,134 @@
+module std.stringbuf;
+
+use std.mem
+use std.string
+
+struct builder {
+    data ptr<u8>,
+    len i64,
+    cap i64
+}
+
+fun new() >> builder {
+    builder b;
+    b.cap = 16;
+    b.len = 0;
+    b.data = allocBytes(b.cap as u64) as ptr<u8>;
+    b.data[0] = 0;
+    return b;
+}
+
+fun reserve(b: ptr<builder>, new_cap: i64) >> void {
+    if new_cap <= b.cap {
+        return;
+    }
+    i64 cap2 = b.cap;
+    for (cap2 < new_cap) {
+        cap2 = cap2 * 2;
+    }
+    b.data = resize(b.data as ptr<void>, cap2 as u64) as ptr<u8>;
+    b.cap = cap2;
+}
+
+fun append_str(b: ptr<builder>, s: ptr<u8>) >> void {
+    i64 slen = strlen(s);
+    if slen == 0 {
+        return;
+    }
+    reserve(b, b.len + slen + 1);
+    i64 i = 0;
+    for (i < slen) {
+        b.data[b.len] = s[i];
+        b.len = b.len + 1;
+        i = i + 1;
+    }
+    b.data[b.len] = 0;
+}
+
+fun append_byte(b: ptr<builder>, c: u8) >> void {
+    reserve(b, b.len + 2);
+    b.data[b.len] = c;
+    b.len = b.len + 1;
+    b.data[b.len] = 0;
+}
+
+fun append_i64(b: ptr<builder>, v: i64) >> void {
+    if v < 0 {
+        append_byte(b, '-' as u8);
+        v = -v;
+    }
+    if v == 0 {
+        append_byte(b, '0' as u8);
+        return;
+    }
+    arr<u8, 32> buf;
+    i64 i = 0;
+    for (v > 0) {
+        buf[i] = ('0' as i32 + (v % 10) as i32) as u8;
+        i = i + 1;
+        v = v / 10;
+    }
+    i = i - 1;
+    for (i >= 0) {
+        append_byte(b, buf[i]);
+        i = i - 1;
+    }
+}
+
+fun append_u64(b: ptr<builder>, v: u64) >> void {
+    if v == 0 {
+        append_byte(b, '0' as u8);
+        return;
+    }
+    arr<u8, 32> buf;
+    i64 i = 0;
+    for (v > 0) {
+        buf[i] = ('0' as i32 + (v % 10) as i32) as u8;
+        i = i + 1;
+        v = v / 10;
+    }
+    i = i - 1;
+    for (i >= 0) {
+        append_byte(b, buf[i]);
+        i = i - 1;
+    }
+}
+
+fun append_f64(b: ptr<builder>, v: f64) >> void {
+    if v < 0.0 {
+        append_byte(b, '-' as u8);
+        v = -v;
+    }
+    i64 whole = v as i64;
+    append_i64(b, whole);
+    append_byte(b, '.' as u8);
+    f64 frac = v - (whole as f64);
+    i32 i = 0;
+    for (i < 6) {
+        frac = frac * 10.0;
+        i32 d = frac as i32;
+        append_byte(b, ('0' as i32 + d) as u8);
+        frac = frac - (d as f64);
+        i = i + 1;
+    }
+}
+
+fun clear(b: ptr<builder>) >> void {
+    b.len = 0;
+    if b.cap > 0 {
+        b.data[0] = 0;
+    }
+}
+
+fun finalize(b: ptr<builder>) >> ptr<u8> {
+    return b.data;
+}
+
+fun free_buf(b: ptr<builder>) >> void {
+    if b.data != null {
+        freeMem(b.data as ptr<void>);
+        b.data = null;
+        b.len = 0;
+        b.cap = 0;
+    }
+}
