@@ -572,7 +572,7 @@ pub const Analyzer = struct {
                         std.mem.startsWith(u8, tn, "ptr<") or
                         std.mem.eql(u8, tn, "void") or
                         !utils.isIntPrimitive(tn) and !utils.isFloatType(tn) and
-                        !std.mem.eql(u8, tn, "bool");
+                            !std.mem.eql(u8, tn, "bool");
                     try self.declareVariable(stmt, decl.name, decl.is_const, tn_is_aggregate);
                 }
             },
