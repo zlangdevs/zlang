@@ -1340,13 +1340,10 @@ pub const CodeGenerator = struct {
                             '%' => if (is_float) blk: {
                                 self.uses_float_modulo = true;
                                 break :blk c.LLVMBuildFRem(self.builder, current_value, rhs_casted, "frem_compound");
-                            } else blk: {
-                                const is_unsigned = isUnsignedType(var_info.type_name);
-                                break :blk if (is_unsigned)
-                                    c.LLVMBuildURem(self.builder, current_value, rhs_casted, "urem_compound")
-                                else
-                                    c.LLVMBuildSRem(self.builder, current_value, rhs_casted, "srem_compound");
-                            },
+                            } else if (is_unsigned)
+                                c.LLVMBuildURem(self.builder, current_value, rhs_casted, "urem_compound")
+                            else
+                                c.LLVMBuildSRem(self.builder, current_value, rhs_casted, "srem_compound"),
                             'A', '&' => c.LLVMBuildAnd(self.builder, current_value, rhs_casted, "and_compound"),
                             '$', '|' => c.LLVMBuildOr(self.builder, current_value, rhs_casted, "or_compound"),
                             '^' => c.LLVMBuildXor(self.builder, current_value, rhs_casted, "xor_compound"),
@@ -1393,13 +1390,10 @@ pub const CodeGenerator = struct {
                             '%' => if (is_float) blk: {
                                 self.uses_float_modulo = true;
                                 break :blk c.LLVMBuildFRem(self.builder, current_val, rhs_val, "frem_array_compound");
-                            } else blk: {
-                                const is_unsigned = isUnsignedType(expected_ty_name);
-                                break :blk if (is_unsigned)
-                                    c.LLVMBuildURem(self.builder, current_val, rhs_val, "urem_array_compound")
-                                else
-                                    c.LLVMBuildSRem(self.builder, current_val, rhs_val, "srem_array_compound");
-                            },
+                            } else if (is_unsigned)
+                                c.LLVMBuildURem(self.builder, current_val, rhs_val, "urem_array_compound")
+                            else
+                                c.LLVMBuildSRem(self.builder, current_val, rhs_val, "srem_array_compound"),
                             'A', '&' => c.LLVMBuildAnd(self.builder, current_val, rhs_val, "and_array_compound"),
                             '$', '|' => c.LLVMBuildOr(self.builder, current_val, rhs_val, "or_array_compound"),
                             '^' => c.LLVMBuildXor(self.builder, current_val, rhs_val, "xor_array_compound"),
@@ -1460,13 +1454,10 @@ pub const CodeGenerator = struct {
                             '%' => if (is_float) blk: {
                                 self.uses_float_modulo = true;
                                 break :blk c.LLVMBuildFRem(self.builder, current_value, rhs_casted, "frem_field_compound");
-                            } else blk: {
-                                const is_unsigned = isUnsignedType(field_type_name);
-                                break :blk if (is_unsigned)
-                                    c.LLVMBuildURem(self.builder, current_value, rhs_casted, "urem_field_compound")
-                                else
-                                    c.LLVMBuildSRem(self.builder, current_value, rhs_casted, "srem_field_compound");
-                            },
+                            } else if (is_unsigned)
+                                c.LLVMBuildURem(self.builder, current_value, rhs_casted, "urem_field_compound")
+                            else
+                                c.LLVMBuildSRem(self.builder, current_value, rhs_casted, "srem_field_compound"),
                             'A', '&' => c.LLVMBuildAnd(self.builder, current_value, rhs_casted, "and_field_compound"),
                             '$', '|' => c.LLVMBuildOr(self.builder, current_value, rhs_casted, "or_field_compound"),
                             '^' => c.LLVMBuildXor(self.builder, current_value, rhs_casted, "xor_field_compound"),
