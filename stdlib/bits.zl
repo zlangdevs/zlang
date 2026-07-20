@@ -1,0 +1,58 @@
+module std.bits;
+
+wrap @__builtin_popcount(x: i32) >> i32;
+wrap @__builtin_clz(x: i32) >> i32;
+wrap @__builtin_ctz(x: i32) >> i32;
+
+fun popcount_u32(x: u32) >> i32 {
+    return __builtin_popcount(x as i32);
+}
+
+fun clz_u32(x: u32) >> i32 {
+    if x == 0 {
+        return 32;
+    }
+    return __builtin_clz(x as i32);
+}
+
+fun ctz_u32(x: u32) >> i32 {
+    if x == 0 {
+        return 32;
+    }
+    return __builtin_ctz(x as i32);
+}
+
+fun bswap_u16(x: u16) >> u16 {
+    u32 v = ((x as u32) << 8) | ((x as u32) >> 8);
+    return (v & 0xFFFF) as u16;
+}
+
+fun bswap_u32(x: u32) >> u32 {
+    return ((x & 0x000000FF) << 24) |
+           ((x & 0x0000FF00) << 8) |
+           ((x & 0x00FF0000) >> 8) |
+           ((x & 0xFF000000) >> 24);
+}
+
+fun rotl_u32(x: u32, n: i32) >> u32 {
+    i32 shift = n & 31;
+    if shift == 0 {
+        return x;
+    }
+    return (x << (shift as u32)) | (x >> ((32 - shift) as u32));
+}
+
+fun rotr_u32(x: u32, n: i32) >> u32 {
+    i32 shift = n & 31;
+    if shift == 0 {
+        return x;
+    }
+    return (x >> (shift as u32)) | (x << ((32 - shift) as u32));
+}
+
+fun align_up_u64(x: u64, align: u64) >> u64 {
+    if align == 0 {
+        return x;
+    }
+    return (x + align - 1) & ~(align - 1);
+}
