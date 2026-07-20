@@ -1,2 +1,2 @@
 # Expected diagnostic fragments
-cannot convert ptr to i32
+requires numeric operands
