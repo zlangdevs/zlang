@@ -7,10 +7,10 @@ fun main() >> i32 {
     i32 pl = println("io_line");
     @printf("(expected 8):%d\n", pl);
 
-    i32 pi = printInt(42);
+    i32 pi = print_int(42);
     @printf("\n(expected 2):%d\n", pi);
 
-    i32 pf = printFloat(2.5);
+    i32 pf = print_float(2.5);
     @printf("\n(expected 8):%d\n", pf);
 
     i32 ep = eprint("err");
@@ -20,7 +20,7 @@ fun main() >> i32 {
     @printf("(expected 6):%d\n", epl);
 
     arr<u8, 4> tiny;
-    i32 read_len = readLine(&tiny[0], 1);
+    i32 read_len = read_line(&tiny[0], 1);
     @printf("(expected 0):%d\n", read_len);
     @printf("(expected 0):%d\n", tiny[0]);
 

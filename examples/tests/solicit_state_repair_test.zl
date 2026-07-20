@@ -1,14 +1,14 @@
 error NeedSeed = _;
 
 fun next_value() >> i32 {
-    i32 seed = 0;
+    i32 seed_rng = 0;
     solicit NeedSeed;
-    return seed + 41;
+    return seed_rng + 41;
 }
 
 fun main() >> i32 {
     i32 out = next_value() on solicit NeedSeed {
-        seed = 1;
+        seed_rng = 1;
     };
 
     @printf("(expected 42):%d\n", out);

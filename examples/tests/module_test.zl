@@ -3,12 +3,12 @@ use std
 
 fun main() >> i32 {
     i32 str_ok = 0;
-    if (strEq("abc", "abc")) {
+    if (str_eq("abc", "abc")) {
         str_ok = 1;
     }
     @printf("expected 1):%d\n", str_ok);
 
-    i32 dice = randRange(1, 6);
+    i32 dice = rand_range(1, 6);
     i32 range_ok = 0;
     if (dice >= 1 && dice <= 6) {
         range_ok = 1;

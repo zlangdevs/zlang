@@ -12,18 +12,18 @@ fun main() >> i32 {
     @printf("(expected 1):%d\n", set_ok);
 
     ptr<u8> value = get(key);
-    bool value_ok = value != null && strEq(value, "zlang");
+    bool value_ok = value != null && str_eq(value, "zlang");
     @printf("(expected 1):%d\n", value_ok);
 
-    bool set_if_missing_ok = setIfMissing(key, "override");
+    bool set_if_missing_ok = set_if_missing(key, "override");
     @printf("(expected 1):%d\n", set_if_missing_ok);
 
     ptr<u8> value_after = get(key);
-    bool unchanged = value_after != null && strEq(value_after, "zlang");
+    bool unchanged = value_after != null && str_eq(value_after, "zlang");
     @printf("(expected 1):%d\n", unchanged);
 
-    ptr<u8> fallback = getOr("ZLANG_STDLIB_ENV_TEST_MISSING", "fallback");
-    bool fallback_ok = strEq(fallback, "fallback");
+    ptr<u8> fallback = get_or("ZLANG_STDLIB_ENV_TEST_MISSING", "fallback");
+    bool fallback_ok = str_eq(fallback, "fallback");
     @printf("(expected 1):%d\n", fallback_ok);
 
     bool unset_ok = unset(key);

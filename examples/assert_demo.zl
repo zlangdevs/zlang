@@ -20,59 +20,59 @@ fun isEven(n: i32) >> bool {
 fun main() >> i32 {
     @printf("=== Assert Module Demo ===\n\n");
     
-    testStart();
+    test_start();
     
     @printf("Testing mathematical functions:\n\n");
     
     ?? Test addition function
     i32 sum = add(5, 3);
-    assertEqual(sum, 8, "add(5, 3) should equal 8");
-    testPass("add function test");
+    assert_equal(sum, 8, "add(5, 3) should equal 8");
+    test_pass("add function test");
     
     ?? Test multiplication function
     i32 product = multiply(4, 6);
-    assertEqual(product, 24, "multiply(4, 6) should equal 24");
-    testPass("multiply function test");
+    assert_equal(product, 24, "multiply(4, 6) should equal 24");
+    test_pass("multiply function test");
     
     ?? Test division function with float precision
     f64 quotient = divide(10.0, 3.0);
-    assertEqualFloat(quotient, 3.333333, 0.000001, "divide(10.0, 3.0) should be ~3.333333");
-    testPass("divide function test");
+    assert_equal_float(quotient, 3.333333, 0.000001, "divide(10.0, 3.0) should be ~3.333333");
+    test_pass("divide function test");
     
     ?? Test boolean function
     bool even_result = isEven(4);
-    assertTrue(even_result, "isEven(4) should return true");
-    testPass("isEven(4) test");
+    assert_true(even_result, "isEven(4) should return true");
+    test_pass("isEven(4) test");
     
     bool odd_result = isEven(7);
-    assertFalse(odd_result, "isEven(7) should return false");
-    testPass("isEven(7) test");
+    assert_false(odd_result, "isEven(7) should return false");
+    test_pass("isEven(7) test");
     
     ?? Test range validation
     i32 score = 85;
-    assertInRange(score, 0, 100, "Score should be in valid range [0,100]");
-    testPass("score range validation");
+    assert_in_range(score, 0, 100, "Score should be in valid range [0,100]");
+    test_pass("score range validation");
     
     ?? Test comparison assertions
     i32 max_val = 100;
     i32 current_val = 75;
-    assertLess(current_val, max_val, "Current value should be less than maximum");
-    testPass("comparison test");
+    assert_less(current_val, max_val, "Current value should be less than maximum");
+    test_pass("comparison test");
     
     ?? Test pointer validation
     i32 data = 42;
     ptr<i32> data_ptr = &data;
-    assertNotNull(data_ptr as ptr<void>, "Data pointer should not be null");
-    testPass("pointer validation");
+    assert_not_null(data_ptr as ptr<void>, "Data pointer should not be null");
+    test_pass("pointer validation");
     
     ?? Test inequality
     i32 val1 = 10;
     i32 val2 = 20;
-    assertNotEqual(val1, val2, "Values should be different");
-    testPass("inequality test");
+    assert_not_equal(val1, val2, "Values should be different");
+    test_pass("inequality test");
     
     @printf("\n");
-    i32 test_result = testSummary();
+    i32 test_result = test_summary();
     
     if (test_result == 0) {
         @printf("\n🎉 Demo completed successfully - all assertions passed!\n");

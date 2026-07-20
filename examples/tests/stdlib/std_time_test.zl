@@ -1,10 +1,10 @@
 use std.time
 
 struct TimerHolder {
-    timer Timer,
+    timer timer,
 }
 
-fun getHolderTimer(h: TimerHolder) >> Timer {
+fun get_holder_timer(h: TimerHolder) >> timer {
     return h.timer;
 }
 
@@ -16,7 +16,7 @@ fun main() >> i32 {
     i64 current_time = now();
     @printf("Current timestamp: %ld\n", current_time);
 
-    i64 millis = nowMillis();
+    i64 millis = now_millis();
     @printf("Current time in millis (approx): %ld\n", millis);
 
     if (current_time <= 0) {
@@ -27,88 +27,88 @@ fun main() >> i32 {
     i64 lower_bound = current_time * 1000;
     i64 upper_bound = lower_bound + 2000;
     if (millis < lower_bound || millis > upper_bound) {
-        @printf("ERROR: nowMillis() out of expected range!\n");
+        @printf("ERROR: now_millis() out of expected range!\n");
         return 1;
     }
 
     ?? Test time string
-    ptr<u8> time_str = timeString();
+    ptr<u8> time_str = time_string();
     @printf("Current time string: %s", time_str);
 
     if (time_str == null) {
-        @printf("ERROR: timeString() returned null!\n");
+        @printf("ERROR: time_string() returned null!\n");
         return 1;
     }
 
     ?? Test timer functionality
-    @printf("\n2. Testing Timer functionality:\n");
-    Timer timer = timerStart();
-    @printf("Timer started and checked immediately...\n");
+    @printf("\n2. Testing timer functionality:\n");
+    timer timer = timer_start();
+    @printf("timer started and checked immediately...\n");
 
     TimerHolder holder;
     holder.timer = timer;
-    Timer holder_timer = getHolderTimer(holder);
+    timer holder_timer = get_holder_timer(holder);
     i32 holder_ok = 0;
-    if (timerElapsed(holder_timer) >= 0.0) {
+    if (timer_elapsed(holder_timer) >= 0.0) {
         holder_ok = 1;
     }
     @printf("(expected 1):%d\n", holder_ok);
 
-    f64 elapsed = timerElapsed(timer);
+    f64 elapsed = timer_elapsed(timer);
     @printf("Elapsed time: %.2f seconds\n", elapsed);
 
     if (elapsed < 0.0 || elapsed > 2.0) {
-        @printf("ERROR: Timer elapsed time out of range!\n");
+        @printf("ERROR: timer elapsed time out of range!\n");
         return 1;
     }
 
     ?? Test timer stop
-    timer = timerStop(timer);
-    @printf("Timer stopped.\n");
+    timer = timer_stop(timer);
+    @printf("timer stopped.\n");
 
     ?? Test timer reset
     @printf("\n3. Testing timer reset:\n");
-    Timer reset_timer = timerReset(timer);
-    f64 reset_elapsed = timerElapsed(reset_timer);
+    timer reset_timer = timer_reset(timer);
+    f64 reset_elapsed = timer_elapsed(reset_timer);
     @printf("Time after reset: %.2f seconds\n", reset_elapsed);
 
     if (reset_elapsed < 0.0 || reset_elapsed > 2.0) {
-        @printf("ERROR: Timer reset didn't work properly!\n");
+        @printf("ERROR: timer reset didn't work properly!\n");
         return 1;
     }
 
     ?? Test timer expiration
     @printf("\n4. Testing timer expiration:\n");
-    Timer exp_timer = timerStart();
-    bool expired_now = timerExpired(exp_timer, 0.0);
-    bool expired_before = timerExpired(exp_timer, 2.0);
-    @printf("Timer expired at 0.0s threshold: ");
+    timer exp_timer = timer_start();
+    bool expired_now = timer_expired(exp_timer, 0.0);
+    bool expired_before = timer_expired(exp_timer, 2.0);
+    @printf("timer expired at 0.0s threshold: ");
     if (expired_now) {@printf("true\n");} else {@printf("false\n");}
-    @printf("Timer expired before wait: ");
+    @printf("timer expired before wait: ");
     if (expired_before) {@printf("true\n");} else {@printf("false\n");}
 
     if (!expired_now) {
-        @printf("ERROR: Timer should be expired at 0.0 threshold!\n");
+        @printf("ERROR: timer should be expired at 0.0 threshold!\n");
         return 1;
     }
 
     if (expired_before) {
-        @printf("ERROR: Timer should not be expired immediately!\n");
+        @printf("ERROR: timer should not be expired immediately!\n");
         return 1;
     }
 
     ?? Test fast sleeps (no long waits)
     @printf("\n5. Testing fast sleeps:\n");
-    sleepMicros(1000);
-    sleepMillis(1);
-    sleepSeconds(0);
+    sleep_micros(1000);
+    sleep_millis(1);
+    sleep_seconds(0);
     @printf("Short sleep calls completed.\n");
 
     ?? Test time difference without waiting
     @printf("\n6. Testing time difference:\n");
     i64 time1 = now();
     i64 time2 = now();
-    f64 diff = timeDiff(time2, time1);
+    f64 diff = time_diff(time2, time1);
     @printf("Time difference: %.2f seconds\n", diff);
 
     if (diff < 0.0) {

@@ -17,62 +17,62 @@ fun pythagorean(a: f64, b: f64) >> f64 {
 fun main() >> i32 {
     @printf("=== Math + Assert Demo: Geometry Library ===\n\n");
     
-    testStart();
+    test_start();
     
     ?? Test circle area calculation
     f64 circle_area = circleArea(5.0);
-    assertEqualFloat(circle_area, 78.539816, 0.000001, "Circle area with radius 5");
-    testPass("Circle area calculation");
+    assert_equal_float(circle_area, 78.539816, 0.000001, "Circle area with radius 5");
+    test_pass("Circle area calculation");
     
     ?? Test triangle area calculation
     f64 triangle_area = triangleArea(10.0, 6.0);
-    assertEqualFloat(triangle_area, 30.0, 0.000001, "Triangle area with base=10, height=6");
-    testPass("Triangle area calculation");
+    assert_equal_float(triangle_area, 30.0, 0.000001, "Triangle area with base=10, height=6");
+    test_pass("Triangle area calculation");
     
     ?? Test Pythagorean theorem (3-4-5 triangle)
     f64 hypotenuse = pythagorean(3.0, 4.0);
-    assertEqualFloat(hypotenuse, 5.0, 0.000001, "Pythagorean theorem: 3-4-5 triangle");
-    testPass("Pythagorean theorem");
+    assert_equal_float(hypotenuse, 5.0, 0.000001, "Pythagorean theorem: 3-4-5 triangle");
+    test_pass("Pythagorean theorem");
     
     ?? Test distance function from math module
     f64 dist = distance(0.0, 0.0, 6.0, 8.0);
-    assertEqualFloat(dist, 10.0, 0.000001, "Distance from origin to (6,8)");
-    testPass("Distance calculation");
+    assert_equal_float(dist, 10.0, 0.000001, "Distance from origin to (6,8)");
+    test_pass("Distance calculation");
     
     ?? Test trigonometry with known values
-    f64 angle_30 = toRadians(30.0);
+    f64 angle_30 = to_radians(30.0);
     f64 sin_30 = sin(angle_30);
-    assertEqualFloat(sin_30, 0.5, 0.000001, "sin(30°) should be 0.5");
-    testPass("Trigonometry: sin(30°)");
+    assert_equal_float(sin_30, 0.5, 0.000001, "sin(30°) should be 0.5");
+    test_pass("Trigonometry: sin(30°)");
     
-    f64 angle_60 = toRadians(60.0);
+    f64 angle_60 = to_radians(60.0);
     f64 cos_60 = cos(angle_60);
-    assertEqualFloat(cos_60, 0.5, 0.000001, "cos(60°) should be 0.5");
-    testPass("Trigonometry: cos(60°)");
+    assert_equal_float(cos_60, 0.5, 0.000001, "cos(60°) should be 0.5");
+    test_pass("Trigonometry: cos(60°)");
     
     ?? Test mathematical properties
     f64 x = 7.0;
     f64 x_squared = square(x);
     f64 x_cubed = cube(x);
     
-    assertTrue(x_squared > x, "x² should be greater than x for x > 1");
-    testPass("Mathematical property: x² > x");
+    assert_true(x_squared > x, "x² should be greater than x for x > 1");
+    test_pass("Mathematical property: x² > x");
     
-    assertTrue(x_cubed > x_squared, "x³ should be greater than x² for x > 1");
-    testPass("Mathematical property: x³ > x²");
+    assert_true(x_cubed > x_squared, "x³ should be greater than x² for x > 1");
+    test_pass("Mathematical property: x³ > x²");
     
     ?? Test absolute value properties
     f64 negative = -15.5;
     f64 positive = fabs(negative);
     
-    assertTrue(positive > 0.0, "Absolute value should be positive");
-    testPass("Absolute value property");
+    assert_true(positive > 0.0, "Absolute value should be positive");
+    test_pass("Absolute value property");
     
-    assertEqualFloat(positive, 15.5, 0.000001, "fabs(-15.5) should equal 15.5");
-    testPass("Absolute value calculation");
+    assert_equal_float(positive, 15.5, 0.000001, "fabs(-15.5) should equal 15.5");
+    test_pass("Absolute value calculation");
     
     @printf("\n");
-    i32 result = testSummary();
+    i32 result = test_summary();
     
     if (result == 0) {
         @printf("\n🎉 All geometry tests passed!\n");

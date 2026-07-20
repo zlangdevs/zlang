@@ -4,22 +4,22 @@ use std.random as rand
 use std.time as _
 
 fun main() >> i32 {
-    rand.XorShift rng = rand.xorShiftInit(123);
-    u32 n = rand.xorShiftNext(&rng);
+    rand.xor_shift rng = rand.xor_shift_init(123);
+    u32 n = rand.xor_shift_next(&rng);
     i32 alias_type_ok = 0;
     if (n >= 0) {
         alias_type_ok = 1;
     }
     @printf("expected 1):%d\n", alias_type_ok);
 
-    std.time.Timer timer = std.time.timerStart();
+    std.time.timer timer = std.time.timer_start();
     i32 ns_type_ok = 0;
-    if (!std.time.timerExpired(timer, 1000.0)) {
+    if (!std.time.timer_expired(timer, 1000.0)) {
         ns_type_ok = 1;
     }
     @printf("expected 1):%d\n", ns_type_ok);
 
-    rand.XorShift from_init = rand.xorShiftInit(5);
+    rand.xor_shift from_init = rand.xor_shift_init(5);
     i32 init_ok = 0;
     if (from_init.state == 5) {
         init_ok = 1;

@@ -1,21 +1,21 @@
 use std.assert
 
 fun main() >> i32 {
-    testStart();
+    test_start();
 
-    assertTrue(2 + 2 == 4, "basic arithmetic");
-    testPass("assertTrue");
+    assert_true(2 + 2 == 4, "basic arithmetic");
+    test_pass("assert_true");
 
-    assertFalse(2 + 2 == 5, "false branch");
-    testPass("assertFalse");
+    assert_false(2 + 2 == 5, "false branch");
+    test_pass("assert_false");
 
-    assertEqual(42, 42, "equal ints");
-    testPass("assertEqual");
+    assert_equal(42, 42, "equal ints");
+    test_pass("assert_equal");
 
-    assertEqualFloat(3.14159, 3.14159, 0.000001, "equal floats");
-    testPass("assertEqualFloat");
+    assert_equal_float(3.14159, 3.14159, 0.000001, "equal floats");
+    test_pass("assert_equal_float");
 
-    i32 result = testSummary();
+    i32 result = test_summary();
     @printf("(expected 0):%d\n", result);
     return result;
 }

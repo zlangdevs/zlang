@@ -492,7 +492,7 @@ fun main(argc: i32, argv: ptr<ptr<u8>>) >> i32 {
         if draw_ptr[0] {
             draw_display(display);
             draw_ptr[0] = false;
-            sleepMillis(16);  ?? ~60 FPS
+            sleep_millis(16);  ?? ~60 FPS
         }
 
         cycle_count = cycle_count + 1;

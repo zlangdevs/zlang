@@ -65,8 +65,8 @@ reading the per-module reference in §23-§33.
   free-form helpers `square`, `cube`, and integer clamp helpers).
 - [`math_with_assert_demo.zl`](math_with_assert_demo.zl) — combining
   `std.math` with `std.assert` for self-checking numeric code.
-- [`random_demo.zl`](random_demo.zl) — `use std.random` (`seed`, `randRange`,
-  `randFloat`, `randBool`, the `XorShift` struct from `xorShiftInit`).
+- [`random_demo.zl`](random_demo.zl) — `use std.random` (`seed_rng`, `rand_range`,
+  `rand_float`, `rand_bool`, the `xor_shift` struct from `xor_shift_init`).
 - [`create_file.zl`](create_file.zl) — `use std.fs` (write a file, read it
   back, exercise `pathExists`).
 - [`struct_init_syntax.zl`](struct_init_syntax.zl) — designated initializers

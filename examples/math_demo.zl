@@ -19,7 +19,7 @@ fun main() >> i32 {
     @printf("cube(4) = %.0f\n", cb);
     
     ?? Trigonometry
-    f64 angle = toRadians(45.0);
+    f64 angle = to_radians(45.0);
     f64 sine = sin(angle);
     f64 cosine = cos(angle);
     @printf("sin(45°) = %.6f\n", sine);

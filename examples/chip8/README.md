@@ -137,7 +137,7 @@ Due to ZLang compiler issues discovered during development:
 
 - Target: ~540 Hz CPU speed (540 instructions per second)
 - Display refresh: ~60 FPS
-- Timer update: 60 Hz
+- timer update: 60 Hz
 
 ## Example Output
 

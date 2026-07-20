@@ -3,6 +3,6 @@ use std
 use std.random as rand
 
 fun main() >> i32 {
-    XorShift rng = rand.xorShiftInit(1);
+    xor_shift rng = rand.xor_shift_init(1);
     return rng.state as i32;
 }
