@@ -73,6 +73,7 @@ pub const CodeGenerator = struct {
     deferred_actions: std.ArrayList(DeferredAction),
     defer_scope_markers: std.ArrayList(usize),
     pending_global_inits: std.ArrayList(PendingGlobalInit),
+    va_list_family: utils.VaListFamily,
 
     const DeferredAction = struct {
         expression: *ast.Node,
@@ -173,7 +174,15 @@ pub const CodeGenerator = struct {
             .deferred_actions = .empty,
             .defer_scope_markers = defer_scope_markers,
             .pending_global_inits = .empty,
+            .va_list_family = utils.classifyVaListFamily(""),
         };
+    }
+
+    // Called once the CLI's `-arch` (if any) is known, before codegen runs,
+    // so `va_list` and calls that pass it are lowered for the right target
+    // instead of assuming the host the compiler itself was built for.
+    pub fn setTargetArch(self: *CodeGenerator, arch: []const u8) void {
+        self.va_list_family = utils.classifyVaListFamily(arch);
     }
 
     pub fn deinit(self: *CodeGenerator) void {

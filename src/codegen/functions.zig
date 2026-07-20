@@ -1150,6 +1150,18 @@ pub fn generateFunctionCall(cg: *llvm.CodeGenerator, call: ast.FunctionCall, exp
             var processed_byval = false;
 
             if (param_type_name) |tn| {
+                if (std.mem.eql(u8, tn, "ptr<va_list>") and cg.va_list_family == .generic_ptr) {
+                    // On targets where the real va_list is already a bare
+                    // pointer (e.g. RISC-V), the value C code passes is what
+                    // @va_start wrote *into* our storage slot, not the
+                    // address of the slot itself.
+                    const i8_ptr_ty = c.LLVMPointerType(c.LLVMInt8TypeInContext(cg.context), 0);
+                    final_arg = c.LLVMBuildLoad2(cg.builder, i8_ptr_ty, val, "va_list_ptr_load");
+                    try final_args.append(cg.allocator, final_arg);
+                    param_idx += 1;
+                    arg_idx += 1;
+                    continue;
+                }
                 if (utils.getVarArgType(tn)) |et| {
                     const elem_ty = try cg.getLLVMType(et);
                     const bundle_count = arg_values.items.len - arg_idx;

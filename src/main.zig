@@ -3947,6 +3947,7 @@ pub fn main(init: std.process.Init) !u8 {
     };
 
     code_generator.optimize_enabled = ctx.optimize;
+    code_generator.setTargetArch(ctx.arch);
     defer code_generator.deinit();
 
     for (ctx.module_registrations.items) |entry| {

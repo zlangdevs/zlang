@@ -327,12 +327,21 @@ pub const Analyzer = struct {
 
             try self.analyzeStatementList(func.body.items, &labels);
 
+            // Collect vararg parameter names so we don't warn about them
+            var vararg_names = std.StringHashMap(void).init(self.allocator);
+            defer vararg_names.deinit();
+            for (func.parameters.items) |param| {
+                if (std.mem.startsWith(u8, param.type_name, "vararg")) {
+                    vararg_names.put(param.name, {}) catch {};
+                }
+            }
+
             if (self.scopes.items.len > 0) {
                 const func_scope = self.scopes.items[self.scopes.items.len - 1];
                 var it = func_scope.iterator();
                 while (it.next()) |entry| {
                     const name = entry.key_ptr.*;
-                    if (name[0] != '_' and !self.used_names.contains(name)) {
+                    if (name[0] != '_' and !self.used_names.contains(name) and !vararg_names.contains(name)) {
                         self.reportNodeWarningFmt(node, "Unused local '{s}'", .{name}, "Prefix with _ to silence, or remove it");
                     }
                 }
@@ -890,21 +899,23 @@ pub const Analyzer = struct {
             } else {
                 self.reportNodeErrorFmt(node, "Undefined function '{s}'", .{call.name}, "Declare it or import its module with use (maybe you forgot to import it?)");
             }
-        } else if (self.function_defs.get(call.name)) |func_def| {
-            const is_variadic = blk: {
-                for (func_def.parameters.items) |p| {
-                    if (std.mem.startsWith(u8, p.type_name, "vararg")) break :blk true;
+        } else if (!call.is_libc) {
+            if (self.function_defs.get(call.name)) |func_def| {
+                const is_variadic = blk: {
+                    for (func_def.parameters.items) |p| {
+                        if (std.mem.startsWith(u8, p.type_name, "vararg")) break :blk true;
+                    }
+                    break :blk false;
+                };
+                if (!is_variadic and call.args.items.len != func_def.parameters.items.len) {
+                    const hint = std.fmt.allocPrint(
+                        self.allocator,
+                        "Function '{s}' expects {d} argument(s), got {d}",
+                        .{ call.name, func_def.parameters.items.len, call.args.items.len },
+                    ) catch "Argument count does not match function definition";
+                    defer self.allocator.free(hint);
+                    self.reportNodeErrorFmt(node, "Wrong number of arguments to '{s}'", .{call.name}, hint);
                 }
-                break :blk false;
-            };
-            if (!is_variadic and call.args.items.len != func_def.parameters.items.len) {
-                const hint = std.fmt.allocPrint(
-                    self.allocator,
-                    "Function '{s}' expects {d} argument(s), got {d}",
-                    .{ call.name, func_def.parameters.items.len, call.args.items.len },
-                ) catch "Argument count does not match function definition";
-                defer self.allocator.free(hint);
-                self.reportNodeErrorFmt(node, "Wrong number of arguments to '{s}'", .{call.name}, hint);
             }
         }
 

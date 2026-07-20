@@ -5,16 +5,9 @@ use std.string
 wrap @write(fd: i32, buf: ptr<u8>, count: u64) >> i64;
 wrap @read(fd: i32, buf: ptr<u8>, count: u64) >> i64;
 
-struct va_list {
-    gp_offset u32,
-    fp_offset u32,
-    overflow_arg_area ptr<void>,
-    reg_save_area ptr<void>
-}
-
 wrap @vprintf(format: ptr<u8>, ap: ptr<va_list>) >> i32;
 
-fun printf(format: ptr<u8>, _args: vararg<_>) >> i32 {
+fun printf(format: ptr<u8>, args: vararg<_>) >> i32 {
     va_list vl;
     @va_start(&vl);
     i32 result = vprintf(format, &vl);
@@ -22,20 +15,24 @@ fun printf(format: ptr<u8>, _args: vararg<_>) >> i32 {
     return result;
 }
 
+fun printf_int(format: ptr<u8>, value: i32) >> i32 {
+    return @printf(format, value);
+}
+
 fun print(text: ptr<u8>) >> i32 {
-    return printf("%s", text);
+    return @printf("%s", text);
 }
 
 fun println(text: ptr<u8>) >> i32 {
-    return printf("%s\n", text);
+    return @printf("%s\n", text);
 }
 
 fun print_int(value: i32) >> i32 {
-    return printf("%d", value);
+    return @printf("%d", value);
 }
 
 fun print_float(value: f64) >> i32 {
-    return printf("%f", value);
+    return @printf("%f", value);
 }
 
 fun eprint(text: ptr<u8>) >> i32 {

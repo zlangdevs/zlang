@@ -1,11 +1,105 @@
 const codegen = @import("llvm.zig");
 const std = @import("std");
+const builtin = @import("builtin");
 const ast = @import("../parser/ast.zig");
 const errors = @import("../errors.zig");
 const c_abi = @import("../c_abi.zig");
 
 const c_bindings = @import("c_bindings.zig");
 const c = c_bindings.c;
+
+// The C ABI's `va_list` is not one universal type: on some targets it is a
+// small struct that must be passed *by address*, on others it is already a
+// bare pointer that must be passed *by value*. We group targets into the
+// families below so the compiler can lower `@va_start`/`va_list` argument
+// passing correctly no matter what machine is compiling the program.
+pub const VaListFamily = enum {
+    // System V x86-64: va_list is `struct { u32, u32, void*, void* }[1]`,
+    // an array type, so C callers always pass the address of the struct.
+    x86_64,
+    // AAPCS64 (aarch64 Linux): va_list is a 5-field struct; large aggregates
+    // are passed indirectly under this ABI, so callers likewise pass the
+    // address of the struct.
+    aarch64,
+    // Every other target we support (RISC-V, and the sane default for
+    // anything unrecognized): va_list is simply `void*` — a pointer to the
+    // next argument. That pointer itself is the value passed by callers,
+    // not the address of wherever we happened to store it.
+    generic_ptr,
+};
+
+pub fn classifyVaListFamily(arch: []const u8) VaListFamily {
+    if (arch.len == 0) {
+        return switch (builtin.cpu.arch) {
+            .x86_64 => .x86_64,
+            .aarch64, .aarch64_be => .aarch64,
+            else => .generic_ptr,
+        };
+    }
+    if (std.mem.indexOf(u8, arch, "x86_64") != null) return .x86_64;
+    if (std.mem.indexOf(u8, arch, "aarch64") != null or std.mem.indexOf(u8, arch, "arm64") != null) return .aarch64;
+    return .generic_ptr;
+}
+
+const VaListFieldSpec = struct { name: []const u8, type_name: []const u8 };
+
+fn registerBuiltinVaListDecl(self: *codegen.CodeGenerator, field_specs: []const VaListFieldSpec) void {
+    var fields: std.ArrayList(ast.StructField) = .empty;
+    for (field_specs) |spec| {
+        fields.append(self.allocator, ast.StructField{
+            .name = spec.name,
+            .type_name = spec.type_name,
+            .default_value = null,
+        }) catch return;
+    }
+    self.struct_declarations.put("va_list", ast.StructDecl{
+        .name = "va_list",
+        .fields = fields,
+        .is_union = false,
+    }) catch {};
+}
+
+// `va_list` is a compiler builtin, not a user struct: its layout must match
+// whatever the real C library on the *target* expects (see VaListFamily),
+// which a hand-written `.zl` struct declaration can't express since the
+// language has no way to branch stdlib source on target architecture.
+fn getBuiltinVaListType(self: *codegen.CodeGenerator) c.LLVMTypeRef {
+    if (self.struct_types.get("va_list")) |cached| return @ptrCast(cached);
+
+    const i8_ptr_ty = c.LLVMPointerType(c.LLVMInt8TypeInContext(self.context), 0);
+    const ty: c.LLVMTypeRef = switch (self.va_list_family) {
+        .x86_64 => blk: {
+            const i32_ty = c.LLVMInt32TypeInContext(self.context);
+            const named = c.LLVMStructCreateNamed(self.context, "va_list");
+            var elems = [_]c.LLVMTypeRef{ i32_ty, i32_ty, i8_ptr_ty, i8_ptr_ty };
+            c.LLVMStructSetBody(named, &elems, 4, 0);
+            registerBuiltinVaListDecl(self, &[_]VaListFieldSpec{
+                .{ .name = "gp_offset", .type_name = "u32" },
+                .{ .name = "fp_offset", .type_name = "u32" },
+                .{ .name = "overflow_arg_area", .type_name = "ptr<void>" },
+                .{ .name = "reg_save_area", .type_name = "ptr<void>" },
+            });
+            break :blk named;
+        },
+        .aarch64 => blk: {
+            const i32_ty = c.LLVMInt32TypeInContext(self.context);
+            const named = c.LLVMStructCreateNamed(self.context, "va_list");
+            var elems = [_]c.LLVMTypeRef{ i8_ptr_ty, i8_ptr_ty, i8_ptr_ty, i32_ty, i32_ty };
+            c.LLVMStructSetBody(named, &elems, 5, 0);
+            registerBuiltinVaListDecl(self, &[_]VaListFieldSpec{
+                .{ .name = "stack", .type_name = "ptr<void>" },
+                .{ .name = "gr_top", .type_name = "ptr<void>" },
+                .{ .name = "vr_top", .type_name = "ptr<void>" },
+                .{ .name = "gr_offs", .type_name = "i32" },
+                .{ .name = "vr_offs", .type_name = "i32" },
+            });
+            break :blk named;
+        },
+        .generic_ptr => i8_ptr_ty,
+    };
+    self.struct_types.put("va_list", @ptrCast(ty)) catch {};
+    return ty;
+}
 
 fn fatalOom() noreturn {
     std.debug.print("error: zlang compiler ran out of memory\n", .{});
@@ -411,6 +505,8 @@ fn getLLVMTypeInternal(self: *codegen.CodeGenerator, type_name: []const u8, verb
         return c.LLVMInt1TypeInContext(@ptrCast(self.context));
     } else if (std.mem.eql(u8, type_name, "error")) {
         return c.LLVMInt32TypeInContext(@ptrCast(self.context));
+    } else if (std.mem.eql(u8, type_name, "va_list")) {
+        return getBuiltinVaListType(self);
     } else {
         if (self.struct_types.get(type_name)) |struct_type| {
             return @ptrCast(struct_type);
