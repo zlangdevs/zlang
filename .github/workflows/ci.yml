@@ -10,6 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
@@ -23,10 +26,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      - name: Cache LLVM 22
+        id: cache-llvm
+        uses: actions/cache@v4
         with:
-          version: 0.16.0
+          path: |
+            /usr/lib/llvm-22
+            /usr/include/llvm-c
+            /usr/bin/clang-22
+            /usr/bin/ld.lld
+            /usr/bin/llc-22
+            /usr/bin/opt-22
+            /usr/bin/lld-22
+            /usr/lib/libLLVM-22.so
+          key: llvm-22-ubuntu-${{ runner.os }}
       - name: Install dependencies
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y flex bison wget gnupg lsb-release
@@ -43,9 +58,28 @@ jobs:
           done
           so=$(find /usr/lib -name 'libLLVM-22.so*' -o -name 'libLLVM.so.22*' 2>/dev/null | sort | tail -1)
           [ -n "$so" ] && sudo ln -sf "$so" /usr/lib/libLLVM-22.so || true
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
       - name: Build
         run: zig build -Doptimize=ReleaseFast
+      - name: Smoke-test stdlib modules compile
+        run: |
+          set -e
+          for mod in bits sort stringbuf conv; do
+            ./zig-out/bin/zlang -c stdlib/${mod}.zl || true
+          done
       - name: Run integration suite
         run: ./run_tests.sh
         env:
           ZSTDPATH: ${{ github.workspace }}/stdlib
+
+  fmt-check:
+    name: stdlib snake_case lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for camelCase identifiers in stdlib
+        run: |
+          ! grep -rE '\b(randFloat|randRange|randBool|readLine|writeLineFd|readAll|printInt|printFloat|xorShift[A-Z][a-z]+|strEq|isPowerOfTwo|toRadians|toDegrees|approxEqual|signNum|setIfMissing|assertEqual[A-Za-z]*|assertWithCode|assertInRange|assertGreater|assertLess|assertTrue|assertFalse|assertNull|assertNotNull|getOr\b|createFile|fileExists|deleteFile|moveFile|move_file|writeString|readLineFd|makeDir|removeDir|openDir|openFile|openFor[A-Z][a-z]+|readAll|FileFlags|FilePerms|DirEntry|nowMillis|testStart|testPass|testFail|testSummary|timerStart|timerStop|timerElapsed|timerReset|timerExpired|timeString|distance3D|XorShift)\b' stdlib/ && echo "ERROR: found legacy camelCase in stdlib" && exit 1 || echo "stdlib is snake_case clean"
+
