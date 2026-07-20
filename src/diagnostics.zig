@@ -7,6 +7,14 @@ pub const Severity = enum {
     Note,
 };
 
+pub const RelatedInfo = struct {
+    file_path: []const u8,
+    line: usize,
+    column: usize,
+    message: []const u8,
+    severity: Severity = .Note,
+};
+
 pub const Diagnostic = struct {
     file_path: []const u8,
     line: usize,
@@ -16,6 +24,7 @@ pub const Diagnostic = struct {
     severity: Severity = .Error,
     token_text: ?[]const u8 = null,
     source_text: ?[]const u8 = null,
+    related: []const RelatedInfo = &.{},
 };
 
 fn stdoutIsTty() bool {
@@ -116,6 +125,31 @@ pub fn printDiagnostic(allocator: std.mem.Allocator, diag: Diagnostic) void {
             std.debug.print(" {s}", .{hint});
         }
         std.debug.print("{s}\n", .{reset});
+    }
+
+    for (diag.related) |note| {
+        const note_color = switch (note.severity) {
+            .Error => red,
+            .Warning => yellow,
+            .Note => blue,
+        };
+        const note_label = switch (note.severity) {
+            .Error => "error",
+            .Warning => "warning",
+            .Note => "note",
+        };
+        std.debug.print("{s}{s}:{s} {s}\n", .{ bold, note_label, reset, note.message });
+        std.debug.print("{s}-->{s} {s}:{d}:{d}\n", .{ blue, reset, note.file_path, note.line, note.column });
+        if (getLineContent(allocator, note.file_path, note.line) catch null) |line_content| {
+            defer allocator.free(line_content);
+            const trimmed = std.mem.trimEnd(u8, line_content, "\r");
+            std.debug.print("{s}    |{s}\n", .{ blue, reset });
+            std.debug.print("{s}{d:3} |{s} {s}\n", .{ blue, note.line, reset, trimmed });
+            std.debug.print("{s}    |{s} ", .{ blue, reset });
+            var j: usize = 1;
+            while (j < note.column) : (j += 1) std.debug.print(" ", .{});
+            std.debug.print("{s}{s}^{s}\n", .{ bold, note_color, reset });
+        }
     }
 
     std.debug.print("\n", .{});
