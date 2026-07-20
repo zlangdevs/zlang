@@ -1,5 +1,5 @@
 fun main() >> i32 {
-    u8 inp;
+    u8 inp = 0;
     arr<u8, 200000> mem;
     arr<u8, 100000> code;
     arr<i32, 100000> jump_table;  ?? Pre-computed jump table for brackets
