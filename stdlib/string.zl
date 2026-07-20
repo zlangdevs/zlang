@@ -4,56 +4,70 @@ wrap @strlen(s: ptr<u8>) >> u64;
 wrap @strcpy(dest: ptr<u8>, src: ptr<u8>) >> ptr<u8>;
 wrap @strcat(dest: ptr<u8>, src: ptr<u8>) >> ptr<u8>;
 wrap @strcmp(s1: ptr<u8>, s2: ptr<u8>) >> i32;
+wrap @strncmp(s1: ptr<u8>, s2: ptr<u8>, n: u64) >> i32;
 wrap @strdup(s: ptr<u8>) >> ptr<u8>;
 wrap @strchr(s: ptr<u8>, c: i32) >> ptr<u8>;
 wrap @strstr(haystack: ptr<u8>, needle: ptr<u8>) >> ptr<u8>;
+wrap @strrchr(s: ptr<u8>, c: i32) >> ptr<u8>;
+wrap @strncat(dest: ptr<u8>, src: ptr<u8>, n: u64) >> ptr<u8>;
 wrap @atoi(s: ptr<u8>) >> i32;
 
-arr<u8, 16> _itoa_buf = {0};
-
-fun strEq(s1: ptr<u8>, s2: ptr<u8>) >> bool {
+fun str_eq(s1: ptr<u8>, s2: ptr<u8>) >> bool {
     i32 result = strcmp(s1, s2);
     return result == 0;
 }
 
-fun itoa(value: i32) >> ptr<u8> {
-    ptr<u8> out = &_itoa_buf[0];
+fun str_neq(s1: ptr<u8>, s2: ptr<u8>) >> bool {
+    i32 result = strcmp(s1, s2);
+    return result != 0;
+}
 
-    i64 n = value as i64;
-    bool negative = n < 0;
-    if negative {
-        n = -n;
+fun starts_with(s: ptr<u8>, prefix: ptr<u8>) >> bool {
+    for ((*prefix) != 0) {
+        if (*s) == 0 { return false; }
+        if (*s) != (*prefix) { return false; }
+        s = s + 1;
+        prefix = prefix + 1;
     }
+    return true;
+}
 
-    i32 i = 0;
-    if n == 0 {
-        out[i] = '0';
-        i++;
-    } else {
-        for (n > 0) {
-            i32 digit = (n % 10) as i32;
-            out[i] = ('0' as i32 + digit) as u8;
-            i++;
-            n /= 10;
-        }
+fun ends_with(s: ptr<u8>, suffix: ptr<u8>) >> bool {
+    u64 slen = strlen(s);
+    u64 suflen = strlen(suffix);
+    if suflen > slen { return false; }
+    ptr<u8> p = s + (slen - suflen);
+    return str_eq(p, suffix) != false;
+}
+
+fun index_of_char(s: ptr<u8>, c: i32) >> i64 {
+    i64 i = 0;
+    for ((s[i]) != 0) {
+        if (s[i]) == (c as u8) { return i; }
+        i = i + 1;
     }
+    return -1;
+}
 
-    if negative {
-        out[i] = '-';
-        i++;
+fun last_index_of_char(s: ptr<u8>, c: i32) >> i64 {
+    u64 n = strlen(s);
+    if n == 0 { return -1; }
+    i64 i = n as i64 - 1;
+    for (i >= 0) {
+        if (s[i]) == (c as u8) { return i; }
+        i = i - 1;
     }
+    return -1;
+}
 
-    out[i] = 0;
-
-    i32 left = 0;
-    i32 right = i - 1;
-    for (left < right) {
-        u8 t = out[left];
-        out[left] = out[right];
-        out[right] = t;
-        left++;
-        right--;
+fun duplicate(s: ptr<u8>) >> ptr<u8> {
+    u64 n = strlen(s);
+    ptr<u8> out = @malloc(n + 1) as ptr<u8>;
+    i64 i = 0;
+    for (i < n as i64) {
+        out[i] = s[i];
+        i = i + 1;
     }
-
+    out[n] = 0;
     return out;
 }

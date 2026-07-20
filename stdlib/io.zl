@@ -30,11 +30,11 @@ fun println(text: ptr<u8>) >> i32 {
     return printf("%s\n", text);
 }
 
-fun printInt(value: i32) >> i32 {
+fun print_int(value: i32) >> i32 {
     return printf("%d", value);
 }
 
-fun printFloat(value: f64) >> i32 {
+fun print_float(value: f64) >> i32 {
     return printf("%f", value);
 }
 
@@ -50,7 +50,7 @@ fun eprintln(text: ptr<u8>) >> i32 {
     return first + (second as i32);
 }
 
-fun readLine(buffer: ptr<u8>, max_len: i32) >> i32 {
+fun read_line(buffer: ptr<u8>, max_len: i32) >> i32 {
     if (max_len <= 1) {
         if (max_len == 1) {
             buffer[0] = 0;
