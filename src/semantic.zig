@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("parser/ast.zig");
 const errors = @import("errors.zig");
 const diagnostics = @import("diagnostics.zig");
+const utils = @import("codegen/utils.zig");
 
 const VarInfo = struct {
     is_const: bool,
@@ -171,7 +172,7 @@ pub const Analyzer = struct {
                 if (self.globals.contains(decl.name)) {
                     self.reportNodeErrorFmt(node, "Redeclared global variable '{s}'", .{decl.name}, "Global names must be unique");
                 } else {
-                    try self.globals.put(decl.name, .{ .is_const = decl.is_const });
+                    try self.globals.put(decl.name, .{ .is_const = decl.is_const, .initialized = true });
                 }
             }
         }
@@ -561,11 +562,19 @@ pub const Analyzer = struct {
     fn analyzeStatement(self: *Analyzer, stmt: *ast.Node, labels: *const std.StringHashMap(void)) errors.SemanticError!void {
         switch (stmt.data) {
             .var_decl => |decl| {
-                const has_init = decl.initializer != null;
                 if (decl.initializer) |initializer_node| {
                     try self.analyzeExpression(initializer_node);
+                    try self.declareVariable(stmt, decl.name, decl.is_const, true);
+                } else {
+                    const tn = decl.type_name;
+                    const tn_is_aggregate = std.mem.startsWith(u8, tn, "arr<") or
+                        std.mem.startsWith(u8, tn, "simd<") or
+                        std.mem.startsWith(u8, tn, "ptr<") or
+                        std.mem.eql(u8, tn, "void") or
+                        !utils.isIntPrimitive(tn) and !utils.isFloatType(tn) and
+                        !std.mem.eql(u8, tn, "bool");
+                    try self.declareVariable(stmt, decl.name, decl.is_const, tn_is_aggregate);
                 }
-                try self.declareVariable(stmt, decl.name, decl.is_const, has_init);
             },
             .assignment => |as| {
                 try self.analyzeAssignmentTarget(as.target, true);
@@ -731,8 +740,12 @@ pub const Analyzer = struct {
                         self.reportNodeError(target, "Cannot assign to enum value", "Enum values are immutable");
                         return;
                     }
+                    if (self.lookupVariable(base_name) == null) {
+                        self.reportNodeErrorFmt(target, "Undefined variable '{s}'", .{base_name}, "Variable is not declared in this scope");
+                    }
+                } else {
+                    try self.analyzeExpression(qual.base);
                 }
-                try self.analyzeExpression(qual.base);
             },
             .array_index => |arr_idx| {
                 try self.analyzeExpression(arr_idx.array);
@@ -939,7 +952,11 @@ pub const Analyzer = struct {
                 if (qual.base.data == .identifier and self.enum_types.contains(qual.base.data.identifier.name)) {
                     return;
                 }
-                try self.analyzeExpression(qual.base);
+                if (qual.base.data == .identifier) {
+                    self.markUsed(qual.base.data.identifier.name);
+                } else {
+                    try self.analyzeExpression(qual.base);
+                }
             },
             .function_call => |call| {
                 try self.analyzeFunctionCall(expr, call, false);
