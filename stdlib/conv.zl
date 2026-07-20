@@ -1,0 +1,83 @@
+module std.conv;
+
+use std.mem
+use std.string
+
+wrap @strtol(s: ptr<u8>, endptr: ptr<ptr<u8>>, base: i32) >> i64;
+wrap @strtoll(s: ptr<u8>, endptr: ptr<ptr<u8>>, base: i32) >> i64;
+wrap @strtod(s: ptr<u8>, endptr: ptr<ptr<u8>>) >> f64;
+
+fun itoa_alloc(value: i64) >> ptr<u8> {
+    i64 n = value;
+    bool negative = n < 0;
+    if negative {
+        n = -n;
+    }
+
+    arr<u8, 32> buf;
+    i32 i = 0;
+    if n == 0 {
+        buf[i] = '0' as u8;
+        i = i + 1;
+    } else {
+        for (n > 0) {
+            buf[i] = ('0' as i32 + (n % 10) as i32) as u8;
+            i = i + 1;
+            n = n / 10;
+        }
+    }
+    if negative {
+        buf[i] = '-' as u8;
+        i = i + 1;
+    }
+
+    ptr<u8> out = allocZeroedBytes((i + 1) as u64) as ptr<u8>;
+    i32 j = 0;
+    i = i - 1;
+    for (i >= 0) {
+        out[j] = buf[i];
+        j = j + 1;
+        i = i - 1;
+    }
+    out[j] = 0;
+    return out;
+}
+
+fun utoa_alloc(value: u64) >> ptr<u8> {
+    u64 n = value;
+    arr<u8, 32> buf;
+    i32 i = 0;
+    if n == 0 {
+        buf[i] = '0' as u8;
+        i = i + 1;
+    } else {
+        for (n > 0) {
+            buf[i] = ('0' as i32 + (n % 10) as i32) as u8;
+            i = i + 1;
+            n = n / 10;
+        }
+    }
+
+    ptr<u8> out = allocZeroedBytes((i + 1) as u64) as ptr<u8>;
+    i32 j = 0;
+    i = i - 1;
+    for (i >= 0) {
+        out[j] = buf[i];
+        j = j + 1;
+        i = i - 1;
+    }
+    out[j] = 0;
+    return out;
+}
+
+fun str_to_long(s: ptr<u8>, base: i32) >> i64 {
+    return strtol(s, null, base);
+}
+
+fun str_to_ulong(s: ptr<u8>, base: i32) >> i64 {
+    return strtoll(s, null, base);
+}
+
+fun str_to_double(s: ptr<u8>) >> f64 {
+    return strtod(s, null);
+}
