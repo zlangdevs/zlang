@@ -135,7 +135,7 @@ fun testAllTypes() >> i32 {
     ptr<u32> pu32 = &u32v;
     @printf("u32 pointer: %p\n", pu32);
 
-    i64 i64v = (-9223372036854775808 as _);
+    i64 i64v = -9223372036854775807 - 1;
     ptr<i64> pi64 = &i64v;
     @printf("i64 pointer: %p\n", pi64);
 

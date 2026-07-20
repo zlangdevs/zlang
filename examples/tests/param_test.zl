@@ -30,8 +30,8 @@ fun main() >> i32 {
     u16 one = 1;
     ?? for some reason if use just 1 as literal autocast doesn't work
     @printf("(expected 1):%d\n", none(none(none(none(none(none(none(none(none(none(none(none(none(one))))))))))))));
-    @printf("(expected 20):%d\n", 
-        lot_of_args(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+    @printf("(expected 20):%d\n",
+        lot_of_args(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
     );
     return 0;
 }
