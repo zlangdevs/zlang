@@ -1,5 +1,5 @@
 pub const NAME: []const u8 = "zlang";
-pub const VERSION: []const u8 = "0.1.1";
+pub const VERSION: []const u8 = "0.1.2";
 
 pub const DEFAULT_OUTPUT_NAME: []const u8 = "output";
 
