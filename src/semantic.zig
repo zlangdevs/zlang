@@ -961,6 +961,13 @@ pub const Analyzer = struct {
             .binary_op => |bin_op| {
                 try self.analyzeExpression(bin_op.lhs);
                 try self.analyzeExpression(bin_op.rhs);
+                if (isArithmeticOp(bin_op.op) or isBitwiseOp(bin_op.op)) {
+                    if (self.exprLooksNumeric(bin_op.lhs) and !self.exprLooksNumeric(bin_op.rhs)) {
+                        self.reportNodeErrorFmt(expr, "Operator '{c}' requires numeric operands", .{bin_op.op}, "Right-hand side is not a number");
+                    } else if (!self.exprLooksNumeric(bin_op.lhs) and self.exprLooksNumeric(bin_op.rhs)) {
+                        self.reportNodeErrorFmt(expr, "Operator '{c}' requires numeric operands", .{bin_op.op}, "Left-hand side is not a number");
+                    }
+                }
             },
             .comparison => |comparison| {
                 try self.analyzeExpression(comparison.lhs);
@@ -1114,6 +1121,23 @@ pub const Analyzer = struct {
 
     fn markUsed(self: *Analyzer, name: []const u8) void {
         self.used_names.put(name, {}) catch {};
+    }
+
+    fn isArithmeticOp(op: u8) bool {
+        return op == '+' or op == '-' or op == '*' or op == '/' or op == '%';
+    }
+
+    fn isBitwiseOp(op: u8) bool {
+        return op == '&' or op == '|' or op == '^' or op == '<' or op == '>';
+    }
+
+    fn exprLooksNumeric(self: *Analyzer, expr: *ast.Node) bool {
+        _ = self;
+        return switch (expr.data) {
+            .number_literal, .char_literal, .bool_literal => true,
+            .string_literal, .null_literal => false,
+            else => true,
+        };
     }
 
     fn gatherKnownNames(self: *Analyzer, alloc: std.mem.Allocator, include_functions: bool) ![]const []const u8 {
