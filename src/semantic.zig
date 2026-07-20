@@ -891,7 +891,13 @@ pub const Analyzer = struct {
                 self.reportNodeErrorFmt(node, "Undefined function '{s}'", .{call.name}, "Declare it or import its module with use (maybe you forgot to import it?)");
             }
         } else if (self.function_defs.get(call.name)) |func_def| {
-            if (call.args.items.len != func_def.parameters.items.len) {
+            const is_variadic = blk: {
+                for (func_def.parameters.items) |p| {
+                    if (std.mem.startsWith(u8, p.type_name, "vararg")) break :blk true;
+                }
+                break :blk false;
+            };
+            if (!is_variadic and call.args.items.len != func_def.parameters.items.len) {
                 const hint = std.fmt.allocPrint(
                     self.allocator,
                     "Function '{s}' expects {d} argument(s), got {d}",

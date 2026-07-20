@@ -1,7 +1,8 @@
 use std.string
+use std.conv
 
 fun helper(n: i32) >> ptr<u8> {
-    return itoa(n);
+    return itoa_alloc(n);
 }
 
 fun main() >> i32 {
