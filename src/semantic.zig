@@ -332,7 +332,7 @@ pub const Analyzer = struct {
                 var it = func_scope.iterator();
                 while (it.next()) |entry| {
                     const name = entry.key_ptr.*;
-                    if (!self.used_names.contains(name)) {
+                    if (name[0] != '_' and !self.used_names.contains(name)) {
                         self.reportNodeWarningFmt(node, "Unused local '{s}'", .{name}, "Prefix with _ to silence, or remove it");
                     }
                 }

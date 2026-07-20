@@ -14,7 +14,7 @@ struct va_list {
 
 wrap @vprintf(format: ptr<u8>, ap: ptr<va_list>) >> i32;
 
-fun printf(format: ptr<u8>, args: vararg<_>) >> i32 {
+fun printf(format: ptr<u8>, _args: vararg<_>) >> i32 {
     va_list vl;
     @va_start(&vl);
     i32 result = vprintf(format, &vl);
