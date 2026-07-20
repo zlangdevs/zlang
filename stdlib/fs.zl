@@ -1,10 +1,6 @@
 module std.fs;
 
-?? Filesystem module for zlang standard library
-?? Provides file I/O operations and filesystem utilities
-
-?? File operation flags (for open)
-enum FileFlags {
+enum file_flags {
     O_RDONLY = 0,
     O_WRONLY = 1,
     O_RDWR = 2,
@@ -13,8 +9,7 @@ enum FileFlags {
     O_APPEND = 1024
 }
 
-?? File permissions (for open with O_CREAT)
-enum FilePerms {
+enum file_perms {
     S_IRUSR = 256,
     S_IWUSR = 128,
     S_IRGRP = 32,
@@ -23,7 +18,6 @@ enum FilePerms {
     S_IWOTH = 2
 }
 
-?? Standard file operations (POSIX)
 wrap @open(pathname: ptr<u8>, flags: i32, mode: i32) >> i32;
 wrap @close(fd: i32) >> i32;
 wrap @read(fd: i32, buf: ptr<void>, count: u64) >> i64;
@@ -32,7 +26,6 @@ wrap @unlink(pathname: ptr<u8>) >> i32;
 wrap @rename(oldpath: ptr<u8>, newpath: ptr<u8>) >> i32;
 wrap @access(pathname: ptr<u8>, mode: i32) >> i32;
 
-?? Standard C file I/O
 wrap @fopen(filename: ptr<u8>, mode: ptr<u8>) >> ptr<void>;
 wrap @fclose(stream: ptr<void>) >> i32;
 wrap @fprintf(fmt: ptr<u8>, args: vararg<_>) >> i32;
@@ -47,12 +40,11 @@ wrap @fseek(stream: ptr<void>, offset: i64, whence: i32) >> i32;
 wrap @ftell(stream: ptr<void>) >> i64;
 wrap @rewind(stream: ptr<void>) >> void;
 
-?? Directory operations
 wrap @mkdir(pathname: ptr<u8>, mode: i32) >> i32;
 wrap @rmdir(pathname: ptr<u8>) >> i32;
 wrap @opendir(name: ptr<u8>) >> ptr<void>;
 
-struct DirEntry {
+struct dir_entry {
     d_ino u64,
     d_off i64,
     d_reclen u16,
@@ -60,62 +52,52 @@ struct DirEntry {
     d_name arr<u8, 256>,
 }
 
-wrap @readdir(dirp: ptr<void>) >> ptr<DirEntry>;
+wrap @readdir(dirp: ptr<void>) >> ptr<dir_entry>;
 wrap @closedir(dirp: ptr<void>) >> i32;
 
-?? Utility functions
 wrap @remove(pathname: ptr<u8>) >> i32;
 wrap @tmpfile() >> ptr<void>;
 
-?? Open file with default read-write-create permissions
-fun openFile(path: ptr<u8>, flags: i32) >> i32 {
+fun open_file(path: ptr<u8>, flags: i32) >> i32 {
     i32 mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
     return open(path, flags, mode);
 }
 
-?? Create a new file (truncate if exists)
-fun createFile(path: ptr<u8>) >> i32 {
+fun create_file(path: ptr<u8>) >> i32 {
     i32 flags = O_WRONLY | O_CREAT | O_TRUNC;
-    return openFile(path, flags);
+    return open_file(path, flags);
 }
 
-?? Open file for reading
-fun openForRead(path: ptr<u8>) >> i32 {
+fun open_for_read(path: ptr<u8>) >> i32 {
     return open(path, O_RDONLY, 0);
 }
 
-?? Open file for writing (create if doesn't exist)
-fun openForWrite(path: ptr<u8>) >> i32 {
+fun open_for_write(path: ptr<u8>) >> i32 {
     i32 flags = O_WRONLY | O_CREAT | O_TRUNC;
-    return openFile(path, flags);
+    return open_file(path, flags);
 }
 
-?? Open file for appending
-fun openForAppend(path: ptr<u8>) >> i32 {
+fun open_for_append(path: ptr<u8>) >> i32 {
     i32 flags = O_WRONLY | O_CREAT | O_APPEND;
-    return openFile(path, flags);
+    return open_file(path, flags);
 }
 
-?? Check if file exists
-fun fileExists(path: ptr<u8>) >> bool {
+fun file_exists(path: ptr<u8>) >> bool {
     i32 result = access(path, 0);
     return result == 0;
 }
 
-?? Delete a file
-fun deleteFile(path: ptr<u8>) >> bool {
+fun delete_file(path: ptr<u8>) >> bool {
     i32 result = unlink(path);
     return result == 0;
 }
 
-?? Rename or move a file
-fun moveFile(oldpath: ptr<u8>, newpath: ptr<u8>) >> bool {
+fun move_file(oldpath: ptr<u8>, newpath: ptr<u8>) >> bool {
     i32 result = rename(oldpath, newpath);
     return result == 0;
 }
 
-?? Write string to file (using file descriptor)
-fun writeString(fd: i32, str: ptr<u8>) >> i64 {
+fun write_string(fd: i32, str: ptr<u8>) >> i64 {
     u64 len = 0;
     ptr<u8> p = str;
     u8 c = *p;
@@ -127,14 +109,11 @@ fun writeString(fd: i32, str: ptr<u8>) >> i64 {
     return write(fd, str as ptr<void>, len);
 }
 
-?? Read entire file into buffer (returns bytes read, -1 on error)
-fun readAll(fd: i32, buffer: ptr<u8>, max_size: u64) >> i64 {
+fun read_all(fd: i32, buffer: ptr<u8>, max_size: u64) >> i64 {
     return read(fd, buffer as ptr<void>, max_size);
 }
 
-?? Read a chunk of text from file descriptor into buffer.
-?? Returns bytes read (>0), 0 on EOF, -1 on error.
-fun readLineFd(fd: i32, buffer: ptr<u8>, max_len: i32) >> i32 {
+fun read_line_fd(fd: i32, buffer: ptr<u8>, max_len: i32) >> i32 {
     if (max_len <= 1) {
         return -1;
     }
@@ -146,48 +125,43 @@ fun readLineFd(fd: i32, buffer: ptr<u8>, max_len: i32) >> i32 {
     return count as i32;
 }
 
-?? Write a text line to file descriptor (appends '\n').
-?? Returns written bytes, or -1 on error.
-fun writeLineFd(fd: i32, str: ptr<u8>) >> i64 {
-    i64 first = writeString(fd, str);
+fun write_line_fd(fd: i32, str: ptr<u8>) >> i64 {
+    i64 first = write_string(fd, str);
     if (first < 0) {
         return -1;
     }
-    i64 second = writeString(fd, "\n");
+    i64 second = write_string(fd, "\n");
     if (second < 0) {
         return -1;
     }
     return first + second;
 }
 
-?? Write string to FILE* stream
-fun fprintString(stream: ptr<void>, str: ptr<u8>) >> bool {
+fun fprint_string(stream: ptr<void>, str: ptr<u8>) >> bool {
     i32 result = fputs(str, stream);
     return result >= 0;
 }
 
-?? Create directory with default permissions
-fun makeDir(path: ptr<u8>) >> bool {
+fun make_dir(path: ptr<u8>) >> bool {
     i32 mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
     i32 result = mkdir(path, mode);
     return result == 0;
 }
 
-?? Remove directory (must be empty)
-fun removeDir(path: ptr<u8>) >> bool {
+fun remove_dir(path: ptr<u8>) >> bool {
     i32 result = rmdir(path);
     return result == 0;
 }
 
-fun openDir(path: ptr<u8>) >> ptr<void> {
+fun open_dir(path: ptr<u8>) >> ptr<void> {
     return opendir(path);
 }
 
-fun readDirEntry(dir: ptr<void>) >> ptr<DirEntry> {
+fun read_dir_entry(dir: ptr<void>) >> ptr<dir_entry> {
     return readdir(dir);
 }
 
-fun closeDir(dir: ptr<void>) >> bool {
+fun close_dir(dir: ptr<void>) >> bool {
     if dir == (0 as ptr<void>) {return false;}
     return closedir(dir) == 0;
 }

@@ -1,9 +1,5 @@
 module std.time;
 
-?? Time module for zlang standard library
-?? Provides time-related functions and utilities
-
-?? C library time functions
 wrap @time(t: ptr<i64>) >> i64;
 wrap @clock() >> i64;
 wrap @difftime(time1: i64, time0: i64) >> f64;
@@ -14,21 +10,17 @@ wrap @strftime(s: ptr<u8>, maxsize: u64, format: ptr<u8>, tm: ptr<u8>) >> u64;
 wrap @asctime(tm: ptr<u8>) >> ptr<u8>;
 wrap @ctime(timer: ptr<i64>) >> ptr<u8>;
 
-?? High-resolution wall clock (POSIX clock_gettime)
-fun @clock_gettime(clk_id: i32, tp: ptr<u8>) >> i32;
+wrap @clock_gettime(clk_id: i32, tp: ptr<u8>) >> i32;
 i32 CLOCK_REALTIME = 0;
 
-?? Sleep functions (platform specific)
 wrap @usleep(usec: u32) >> i32;
 wrap @sleep(seconds: u32) >> u32;
 
-?? Get current timestamp in seconds since Unix epoch
 fun now() >> i64 {
     return time(null);
 }
 
-?? Get current timestamp in milliseconds via clock_gettime
-fun nowMillis() >> i64 {
+fun now_millis() >> i64 {
     arr<u8, 16> ts;
     if (clock_gettime(CLOCK_REALTIME, &ts[0]) != 0) {
         return now() * 1000;
@@ -40,67 +32,67 @@ fun nowMillis() >> i64 {
     return secs * 1000 + nsec / 1000000;
 }
 
-?? Sleep for specified number of seconds
-fun sleepSeconds(seconds: u32) >> void {
+fun now_nanos() >> i64 {
+    arr<u8, 16> ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts[0]) != 0) {
+        return now() * 1000000000;
+    }
+    ptr<i64> secs_ptr = (&ts[0]) as ptr<i64>;
+    i64 secs = *secs_ptr;
+    ptr<i64> nsec_ptr = (&ts[8]) as ptr<i64>;
+    i64 nsec = *nsec_ptr;
+    return secs * 1000000000 + nsec;
+}
+
+fun sleep_seconds(seconds: u32) >> void {
     sleep(seconds);
 }
 
-?? Sleep for specified number of milliseconds
-fun sleepMillis(millis: u32) >> void {
+fun sleep_millis(millis: u32) >> void {
     usleep(millis * 1000);
 }
 
-?? Sleep for specified number of microseconds
-fun sleepMicros(micros: u32) >> void {
+fun sleep_micros(micros: u32) >> void {
     usleep(micros);
 }
 
-?? Calculate difference between two timestamps in seconds
-fun timeDiff(time1: i64, time0: i64) >> f64 {
+fun time_diff(time1: i64, time0: i64) >> f64 {
     return difftime(time1, time0);
 }
 
-?? Simple timer structure for measuring elapsed time
-struct Timer {
+struct timer {
     start_time i64,
     end_time i64
 }
 
-?? Start a timer
-fun timerStart() >> Timer {
-    Timer timer;
-    timer.start_time = now();
-    timer.end_time = 0;
-    return timer;
+fun timer_start() >> timer {
+    timer t;
+    t.start_time = now();
+    t.end_time = 0;
+    return t;
 }
 
-?? Stop a timer and return elapsed seconds
-fun timerStop(timer: Timer) >> Timer {
-    timer.end_time = now();
-    return timer;
+fun timer_stop(t: timer) >> timer {
+    t.end_time = now();
+    return t;
 }
 
-?? Get elapsed time without stopping the timer
-fun timerElapsed(timer: Timer) >> f64 {
+fun timer_elapsed(t: timer) >> f64 {
     i64 current_time = now();
-    return timeDiff(current_time, timer.start_time);
+    return time_diff(current_time, t.start_time);
 }
 
-?? Reset a timer
-fun timerReset(timer: Timer) >> Timer {
-    timer.start_time = now();
-    timer.end_time = 0;
-    return timer;
+fun timer_reset(t: timer) >> timer {
+    t.start_time = now();
+    t.end_time = 0;
+    return t;
 }
 
-?? Format current time as string (simplified)
-?? Returns a pointer to static buffer from ctime
-fun timeString() >> ptr<u8> {
+fun time_string() >> ptr<u8> {
     i64 current_time = now();
     return ctime(&current_time);
 }
 
-?? Check if a timer has been running for more than specified seconds
-fun timerExpired(timer: Timer, seconds: f64) >> bool {
-    return timerElapsed(timer) >= seconds;
+fun timer_expired(t: timer, seconds: f64) >> bool {
+    return timer_elapsed(t) >= seconds;
 }
