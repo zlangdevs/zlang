@@ -1,0 +1,125 @@
+module std.sort;
+
+wrap @qsort(base: ptr<u8>, nmemb: u64, size: u64, compar: ptr<u8>) >> void;
+
+fun sort_bytes(base: ptr<u8>, nmemb: u64, elem_size: u64, cmp: ptr<u8>) >> void {
+    qsort(base, nmemb, elem_size, cmp);
+}
+
+fun less_i32(a: i32, b: i32) >> bool { return a < b; }
+fun less_u32(a: u32, b: u32) >> bool { return a < b; }
+fun less_i64(a: i64, b: i64) >> bool { return a < b; }
+fun less_f64(a: f64, b: f64) >> bool { return a < b; }
+fun less_u8(a: u8, b: u8) >> bool { return a < b; }
+
+fun swap_i32(a: ptr<i32>, b: ptr<i32>) >> void {
+    i32 t = *a;
+    *a = *b;
+    *b = t;
+}
+
+fun swap_u32(a: ptr<u32>, b: ptr<u32>) >> void {
+    u32 t = *a;
+    *a = *b;
+    *b = t;
+}
+
+fun swap_i64(a: ptr<i64>, b: ptr<i64>) >> void {
+    i64 t = *a;
+    *a = *b;
+    *b = t;
+}
+
+fun swap_f64(a: ptr<f64>, b: ptr<f64>) >> void {
+    f64 t = *a;
+    *a = *b;
+    *b = t;
+}
+
+fun swap_u8(a: ptr<u8>, b: ptr<u8>) >> void {
+    u8 t = *a;
+    *a = *b;
+    *b = t;
+}
+
+fun sort_i32(base: ptr<i32>, n: u64) >> void {
+    u64 i = 1;
+    for (i < n) {
+        u64 j = i;
+        for (j > 0) {
+            i32 cur = base[j];
+            i32 prev = base[j - 1];
+            if cur < prev {
+                swap_i32(&base[j], &base[j - 1]);
+                j = j - 1;
+            } else {
+                j = 0;
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fun sort_u32(base: ptr<u32>, n: u64) >> void {
+    u64 i = 1;
+    for (i < n) {
+        u64 j = i;
+        for (j > 0) {
+            if base[j] < base[j - 1] {
+                swap_u32(&base[j], &base[j - 1]);
+                j = j - 1;
+            } else {
+                j = 0;
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fun sort_i64(base: ptr<i64>, n: u64) >> void {
+    u64 i = 1;
+    for (i < n) {
+        u64 j = i;
+        for (j > 0) {
+            if base[j] < base[j - 1] {
+                swap_i64(&base[j], &base[j - 1]);
+                j = j - 1;
+            } else {
+                j = 0;
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fun sort_f64(base: ptr<f64>, n: u64) >> void {
+    u64 i = 1;
+    for (i < n) {
+        u64 j = i;
+        for (j > 0) {
+            if base[j] < base[j - 1] {
+                swap_f64(&base[j], &base[j - 1]);
+                j = j - 1;
+            } else {
+                j = 0;
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fun sort_u8(base: ptr<u8>, n: u64) >> void {
+    u64 i = 1;
+    for (i < n) {
+        u64 j = i;
+        for (j > 0) {
+            if base[j] < base[j - 1] {
+                swap_u8(&base[j], &base[j - 1]);
+                j = j - 1;
+            } else {
+                j = 0;
+            }
+        }
+        i = i + 1;
+    }
+}
