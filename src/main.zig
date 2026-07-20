@@ -510,77 +510,77 @@ fn defaultMaxThreads() usize {
     return std.Thread.getCpuCount() catch 1;
 }
 
-fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8)) void {
+fn collectUseStatements(node: *ast.Node, dependencies: *std.ArrayList([]const u8)) anyerror!void {
     switch (node.data) {
         .program => |prog| {
             for (prog.functions.items) |func| {
-                collectUseStatements(func, dependencies);
+                try collectUseStatements(func, dependencies);
             }
             for (prog.globals.items) |glob| {
-                collectUseStatements(glob, dependencies);
+                try collectUseStatements(glob, dependencies);
             }
         },
         .function => |func| {
             if (func.guard) |guard| {
-                collectUseStatements(guard, dependencies);
+                try collectUseStatements(guard, dependencies);
             }
             for (func.body.items) |stmt| {
-                collectUseStatements(stmt, dependencies);
+                try collectUseStatements(stmt, dependencies);
             }
         },
         .use_stmt => |use_stmt| {
-            dependencies.append(allocator, use_stmt.module_path) catch {};
+            try dependencies.append(allocator, use_stmt.module_path);
         },
         else => {
             switch (node.data) {
-                .assignment => |as| collectUseStatements(as.value, dependencies),
-                .var_decl => |decl| if (decl.initializer) |init| collectUseStatements(init, dependencies),
-                .function_call => |call| for (call.args.items) |arg| collectUseStatements(arg, dependencies),
+                .assignment => |as| try collectUseStatements(as.value, dependencies),
+                .var_decl => |decl| if (decl.initializer) |init| try collectUseStatements(init, dependencies),
+                .function_call => |call| for (call.args.items) |arg| try collectUseStatements(arg, dependencies),
                 .method_call => |method| {
-                    collectUseStatements(method.object, dependencies);
-                    for (method.args.items) |arg| collectUseStatements(arg, dependencies);
+                    try collectUseStatements(method.object, dependencies);
+                    for (method.args.items) |arg| try collectUseStatements(arg, dependencies);
                 },
-                .return_stmt => |ret| if (ret.expression) |expr| collectUseStatements(expr, dependencies),
+                .return_stmt => |ret| if (ret.expression) |expr| try collectUseStatements(expr, dependencies),
                 .if_stmt => |if_stmt| {
-                    collectUseStatements(if_stmt.condition, dependencies);
-                    for (if_stmt.then_body.items) |stmt| collectUseStatements(stmt, dependencies);
+                    try collectUseStatements(if_stmt.condition, dependencies);
+                    for (if_stmt.then_body.items) |stmt| try collectUseStatements(stmt, dependencies);
                     if (if_stmt.else_body) |else_body| {
-                        for (else_body.items) |stmt| collectUseStatements(stmt, dependencies);
+                        for (else_body.items) |stmt| try collectUseStatements(stmt, dependencies);
                     }
                 },
                 .for_stmt => |for_stmt| {
-                    if (for_stmt.condition) |cond| collectUseStatements(cond, dependencies);
-                    for (for_stmt.body.items) |stmt| collectUseStatements(stmt, dependencies);
+                    if (for_stmt.condition) |cond| try collectUseStatements(cond, dependencies);
+                    for (for_stmt.body.items) |stmt| try collectUseStatements(stmt, dependencies);
                 },
                 .c_for_stmt => |c_for| {
-                    if (c_for.init) |init| collectUseStatements(init, dependencies);
-                    if (c_for.condition) |cond| collectUseStatements(cond, dependencies);
-                    if (c_for.increment) |inc| collectUseStatements(inc, dependencies);
-                    for (c_for.body.items) |stmt| collectUseStatements(stmt, dependencies);
+                    if (c_for.init) |init| try collectUseStatements(init, dependencies);
+                    if (c_for.condition) |cond| try collectUseStatements(cond, dependencies);
+                    if (c_for.increment) |inc| try collectUseStatements(inc, dependencies);
+                    for (c_for.body.items) |stmt| try collectUseStatements(stmt, dependencies);
                 },
-                .array_initializer => |arr_init| for (arr_init.elements.items) |elem| collectUseStatements(elem, dependencies),
-                .array_index => |arr_idx| collectUseStatements(arr_idx.index, dependencies),
+                .array_initializer => |arr_init| for (arr_init.elements.items) |elem| try collectUseStatements(elem, dependencies),
+                .array_index => |arr_idx| try collectUseStatements(arr_idx.index, dependencies),
                 .array_assignment => |arr_ass| {
-                    collectUseStatements(arr_ass.index, dependencies);
-                    collectUseStatements(arr_ass.value, dependencies);
+                    try collectUseStatements(arr_ass.index, dependencies);
+                    try collectUseStatements(arr_ass.value, dependencies);
                 },
                 .comparison => |comp| {
-                    collectUseStatements(comp.lhs, dependencies);
-                    collectUseStatements(comp.rhs, dependencies);
+                    try collectUseStatements(comp.lhs, dependencies);
+                    try collectUseStatements(comp.rhs, dependencies);
                 },
                 .binary_op => |bop| {
-                    collectUseStatements(bop.lhs, dependencies);
-                    collectUseStatements(bop.rhs, dependencies);
+                    try collectUseStatements(bop.lhs, dependencies);
+                    try collectUseStatements(bop.rhs, dependencies);
                 },
-                .unary_op => |un| collectUseStatements(un.operand, dependencies),
+                .unary_op => |un| try collectUseStatements(un.operand, dependencies),
                 .expression_block => |block| {
-                    for (block.statements.items) |stmt| collectUseStatements(stmt, dependencies);
-                    collectUseStatements(block.result, dependencies);
+                    for (block.statements.items) |stmt| try collectUseStatements(stmt, dependencies);
+                    try collectUseStatements(block.result, dependencies);
                 },
                 .handled_call_stmt => |handled| {
-                    collectUseStatements(handled.call, dependencies);
+                    try collectUseStatements(handled.call, dependencies);
                     for (handled.handlers.items) |handler| {
-                        for (handler.body.items) |stmt| collectUseStatements(stmt, dependencies);
+                        for (handler.body.items) |stmt| try collectUseStatements(stmt, dependencies);
                     }
                 },
                 else => {},
@@ -960,7 +960,7 @@ fn parseModuleFromPrepared(file_path: []const u8, arena: std.mem.Allocator, back
     };
     if (ast_root) |root| {
         var module = ModuleInfo.init(backing_alloc, prep.module_name, file_path, prep.line_count, root);
-        collectUseStatements(root, &module.dependencies);
+        try collectUseStatements(root, &module.dependencies);
         for (prep.flags.items) |flag| {
             try module.linker_flags.append(backing_alloc, utils.dupe(u8, backing_alloc, flag));
         }
