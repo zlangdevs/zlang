@@ -259,6 +259,9 @@ pub fn generateExpressionWithContext(cg: *llvm.CodeGenerator, expr: *ast.Node, e
         },
         .unary_op => |un| {
             switch (un.op) {
+                '&' => {
+                    return try cg.generateExpression(expr);
+                },
                 '-' => {
                     const operand_val = try cg.generateExpressionWithContext(un.operand, expected_type);
                     const operand_type = c.LLVMTypeOf(operand_val);
@@ -529,6 +532,11 @@ pub fn inferType(cg: *llvm.CodeGenerator, node: *ast.Node) errors.CodegenError![
                     .identifier => |ident| blk: {
                         if (llvm.CodeGenerator.getVariable(cg, ident.name)) |var_info| {
                             break :blk var_info.type_name;
+                        }
+                        if (cg.function_overloads.get(ident.name) != null or
+                            cg.external_c_functions.get(ident.name) != null)
+                        {
+                            break :blk "void";
                         }
                         break :blk try cg.inferType(un.operand);
                     },
@@ -833,6 +841,30 @@ pub fn generateExpression(cg: *llvm.CodeGenerator, expr: *ast.Node) errors.Codeg
                         const ident = un.operand.data.identifier;
                         if (llvm.CodeGenerator.getVariable(cg, ident.name)) |var_info| {
                             return var_info.value;
+                        }
+                        if (cg.function_overloads.get(ident.name)) |overloads| {
+                            if (overloads.items.len > 0) {
+                                const func = overloads.items[0].func_node;
+                                var type_names: std.ArrayList([]const u8) = .empty;
+                                defer type_names.deinit(cg.allocator);
+                                for (func.parameters.items) |p| {
+                                    if (utils.isVarArgType(p.type_name)) continue;
+                                    try type_names.append(cg.allocator, p.type_name);
+                                }
+                                const mangled = try functions.getMangledName(cg.allocator, func.name, type_names.items, cg);
+                                defer cg.allocator.free(mangled);
+                                const name_z = try cg.allocator.dupeZ(u8, mangled);
+                                defer cg.allocator.free(name_z);
+                                if (c.LLVMGetNamedFunction(cg.module, name_z.ptr)) |func_val| {
+                                    return func_val;
+                                }
+                            }
+                        } else if (cg.external_c_functions.get(ident.name) != null) {
+                            const name_z = try cg.allocator.dupeZ(u8, ident.name);
+                            defer cg.allocator.free(name_z);
+                            if (c.LLVMGetNamedFunction(cg.module, name_z.ptr)) |func_val| {
+                                return func_val;
+                            }
                         }
                     } else if (un.operand.data == .qualified_identifier) {
                         const pair = try cg.getQualifiedFieldPtrAndType(un.operand);
