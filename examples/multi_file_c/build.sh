@@ -7,10 +7,10 @@
 CCOMPILER_PATH="gcc"  # Path to C compiler (gcc, clang, etc.)
 
 # Auto-detect zlang compiler path
-if [ -f "../../../zig-out/bin/zlang" ]; then
+if [ -f "../../zig-out/bin/zlang" ]; then
+    ZLANG_PATH="$(cd ../../zig-out/bin && pwd)/zlang"
+elif [ -f "../../../zig-out/bin/zlang" ]; then
     ZLANG_PATH="$(cd ../../../zig-out/bin && pwd)/zlang"
-elif [ -f "/home/hedgegod/zig/zlang/zig-out/bin/zlang" ]; then
-    ZLANG_PATH="/home/hedgegod/zig/zlang/zig-out/bin/zlang"  # Fallback for current setup
 else
     echo -e "${RED}Error: Could not find zlang compiler${NC}"
     echo -e "${YELLOW}Please set ZLANG_PATH manually in this script${NC}"
